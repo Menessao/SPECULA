@@ -207,8 +207,7 @@ Create a YAML configuration file, for example ``params_scao_pyr_basic.yml``:
    # The full list of parameters can be found in the init method of the PyrSlopec class.
    slopec:
      class:             'PyrSlopec'  
-     pupdata_object:    'scao_pup'            # tag of the pyramid WFS pupils
-     sn_object:         'scao_sn'             # tag of the slope reference vector
+     pupdata_object:    'scao_pupdata'            # tag of the pyramid WFS pupils
      inputs:
        in_pixels:        'detector.out_pixels'
 
@@ -219,6 +218,7 @@ Create a YAML configuration file, for example ``params_scao_pyr_basic.yml``:
      recmat_object:      'scao_recmat'         # reconstruction matrix tag
      inputs:
        in_slopes:        'slopec.out_slopes'
+    outputs:  ['out_modes', 'out_pseudo_ol_modes'] 
 
    # The control block computes the control commands based on the differential modal coefficients.
    # The modal coefficients are differential because it operates in closed loop.
@@ -259,6 +259,7 @@ Create a YAML configuration file, for example ``params_scao_pyr_basic.yml``:
      start_time:        0.05                # PSF integration start time
      inputs:
          in_ef:  'prop.out_on_axis_source_ef'
+    outputs:  ['out_psf', 'out_sr']
 
    # Data store for saving the simulation results.
    # The data will be stored in a directory named with a timestamp (TN) located in 'output'.
@@ -350,7 +351,7 @@ Create a YAML file, for example ``params_scao_pyr_test_rec.yml``:
    # to command the DM and compute the interaction matrix
    pushpull:
      class:     'PushPullGenerator'
-     amplitude: [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
+     vect_amplitude: [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
                  50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
                  50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
                  50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
@@ -364,21 +365,22 @@ Create a YAML file, for example ``params_scao_pyr_test_rec.yml``:
    im_calibrator:
      class:     'ImCalibrator'
      nmodes:    54
-     im_tag:    'scao_im'
+     im_tag:    'scao_pyr_im'
      data_dir:  './calib/im'
-     overwrite: true
+     overwrite: True
      inputs:
        in_slopes:   'slopec.out_slopes'
        in_commands: 'pushpull.output'
+    outputs: ['out_intmat']
 
    # This block computes the reconstruction matrix from the interaction matrix
    # doing a pseudo-inverse operation
    rec_calibrator:
      class:     'RecCalibrator'
      nmodes:    54
-     rec_tag:   'scao_recmat'
+     rec_tag:   'scao_pyr_rec'
      data_dir:  './calib/rec'
-     overwrite: true
+     overwrite: True
      inputs:
        in_intmat:   'im_calibrator.out_intmat'
 
@@ -402,11 +404,11 @@ Create a YAML file, for example ``params_scao_pyr_test_rec.yml``:
 
    # Override the detector parameters to disable photon and readout noise
    detector_override:
-     photon_noise:   false
-     readout_noise:  false
+     photon_noise:   False
+     readout_noise:  False
 
    # Remove unnecessary components to avoid issues and speed up the calibration
-   remove: ['atmo', 'psf', 'data_store']
+  remove: ['atmo', 'rec','control']
 
 Run this calibration step with:
 
