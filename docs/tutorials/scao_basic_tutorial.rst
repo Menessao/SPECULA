@@ -310,6 +310,7 @@ Create a YAML file, for example ``params_scao_pyr_test_pupdata.yml``:
      class: 'PyrPupdataCalibrator'
      thr1: 0.1
      thr2: 0.25
+     display_debug: True
      output_tag:        'scao_pupdata'
      inputs:
        in_i: 'pyramid.out_i'
