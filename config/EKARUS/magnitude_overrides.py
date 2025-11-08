@@ -3,7 +3,7 @@ import numpy as np
 
 magnitudes = np.arange(0, 13)
 output_dir = "magnitude_overrides"
-base_config = "config/params_scao_pyr.yml"
+base_config = "config/main_params.yaml"
 
 for mag in magnitudes:
     overrides = ("{"

@@ -4,11 +4,11 @@ import numpy as np
 # Range of gains to test
 gains = np.linspace(0.1, 1.0, 10)
 output_dir = "gain_overrides"
-base_config = "config/pyr_ekarus.yml"
+base_config = "config/main_params.yaml"
 
 for gain in gains:
     overrides = ("{"
-                f"control.int_gain: [{gain:.2f}], "
+                f"integrator.int_gain: [{gain:.2f}], "
                 f"data_store.store_dir: ./output/gain_opt/gain_{gain:.2f}, "
                 f"main.total_time: 1.0"
                 "}")

@@ -60,7 +60,6 @@ if "sr" in data:
     plt.title("Strehl Ratio (sr.fits)")
     plt.xlabel("Frame")
     plt.ylabel("SR")
-    plt.yscale('log')
     plt.grid(True)
 else:
     print("sr.fits file not found in the directory.")
@@ -69,7 +68,7 @@ else:
 if "modes" in data and "dm_commands" in data:
     res = data["modes"]
     comm = data["dm_commands"]
-    init = 50 # leave 50 iterations for bootstrapping
+    init = 50
     turb = res[init:-1, :].copy()
     turb[:, :comm.shape[1]] += comm[init+1:, :]
     x = xp.arange(turb.shape[1])+1
@@ -77,8 +76,8 @@ if "modes" in data and "dm_commands" in data:
     # Plot RMS of residuals, commands and turbulence
     plt.figure(figsize=(12, 6))
     plt.plot(x,xp.sqrt(xp.mean(turb**2, axis=0)), label='Turbulence RMS', marker='o')
-    plt.plot(x,xp.sqrt(xp.mean(res**2, axis=0)), label='Residuals RMS', marker='o')
-    plt.plot(x[:comm.shape[1]],xp.sqrt(xp.mean(comm**2, axis=0)), label='Commands RMS', marker='o')
+    plt.plot(x,xp.sqrt(xp.mean(res[init:-1, :]**2, axis=0)), label='Residuals RMS', marker='o')
+    plt.plot(x[:comm.shape[1]],xp.sqrt(xp.mean(comm[init:-1, :]**2, axis=0)), label='Commands RMS', marker='o')
     plt.title("RMS of Turbulence, Residuals and Commands")
     plt.xlabel("Mode number")
     plt.ylabel("RMS")
@@ -86,6 +85,19 @@ if "modes" in data and "dm_commands" in data:
     plt.yscale('log')
     plt.legend()
     plt.grid(True)
+
+    if "rec_modes" in data:
+        rec = data["rec_modes"]
+        plt.figure(figsize=(12, 6))
+        plt.plot(x,xp.sqrt(xp.mean(res[init:-1, :]**2, axis=0)), label='Residuals RMS', marker='o')
+        plt.plot(x[:comm.shape[1]],xp.sqrt(xp.mean(rec[init:-1, :]**2, axis=0)), label='Reconstructed residuals RMS', marker='o')
+        plt.title("True vs reconstructed residuals")
+        plt.xlabel("Mode number")
+        plt.ylabel("RMS")
+        plt.xscale('log')
+        plt.yscale('log')
+        plt.legend()
+        plt.grid(True)
 
 
 if "res_ef" in data:
