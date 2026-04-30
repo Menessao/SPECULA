@@ -107,7 +107,7 @@ pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_48x48'           
   slopes_from_intensity:  true
-  # sn_object:            'pyr3.0_48x48_sn'
+  sn_object:            'pyr3.0_48x48_sn'
   inputs:
     in_pixels:        'cred1.out_pixels'
   outputs:           ['out_slopes']
@@ -150,16 +150,16 @@ cred10:
 
 pyr0_slopes:
   class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata'           
+  pupdata_object:         'pyr_pupdata_48x48'           
   slopes_from_intensity:  true
-  # sn_object:            'pyr0.0_slope_null' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
+  sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
   inputs:
     in_pixels:        'cred10.out_pixels'
   outputs:           ['out_slopes']
 
 pyr0_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr0.0_1300modes_rec'        
+  recmat_object:     'pyr0.0_48x48_1300modes_rec'        
   inputs:
     in_slopes:       'pyr0_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -257,7 +257,7 @@ filter:
   g_track:                  0.9           # gain
   inputs:
     in_ys: 'pyr_modalrec.out_modes'
-    in_yf: 'zwfs_modalrec.out_modes'  #'pyr0_modalrec.out_modes' #
+    in_yf: 'pyr0_modalrec.out_modes' #'zwfs_modalrec.out_modes'  #
     gain_mod:                 'gain_ramp.output'
   outputs:  ['out_comm']
 
@@ -298,7 +298,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
-  verbose: false
+  # verbose: false
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
@@ -345,7 +345,7 @@ data_store:
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',
                   'pyr_modes-pyr_modalrec.out_modes',
-                  'zwfs_modes-zwfs_modalrec.out_modes',
+                  # 'zwfs_modes-zwfs_modalrec.out_modes',
                   # 'ccd1-cred1.out_pixels',
                   # 'ccd2-ocam2.out_pixels'
                   ]

@@ -22,11 +22,66 @@ def radial_order(i_mode, xp=np):
     noll = i_mode + 2
     return (xp.ceil(-3.0/2.0+xp.sqrt(1+8*noll)/2.0)).astype(int)
 
-# def von_karman_power(n,r0,L0,D):
-#     k = n / D
-#     C = 0.02289558710855519
-#     B = k**2 + (D/L0)**2
-#     return xp.sqrt(C) * (r0/D)**(-5.0/6.0) * B**(-11.0/12.0)
+def compute_modal_variance_von_karman(r0, L0, D, modes, mask):
+    """
+    Computes the turbulent power projected on a given modal basis 
+    assuming a Von Karman phase power spectrum.
+    
+    Parameters:
+    - r0: float, Fried parameter [m]
+    - L0: float, Outer scale [m]
+    - D: float, Telescope diameter [m]
+    - modes: 3D numpy array of shape (N_modes, N_valid_pixels) containing the modal basis
+    - mask: 2D numpy array of shape (N_pixels, N_pixels) representing the telescope pupil
+    
+    Returns:
+    - modal_variances: 1D numpy array of length N_modes containing the variance 
+                       (turbulent power) of each mode [rad^2]
+        WARNING: Must be divided by telescope_area**2 to obtain the correct units !
+    """
+    n_modes = modes.shape[0] 
+    nx, ny = mask.shape
+    
+    # Assuming the grid spans the telescope diameter exactly
+    # Pixel scale in the pupil plane [m/pixel]
+    dx = D / nx  
+    dy = D / ny
+    
+    # Generate spatial frequency grids [1/m]
+    fx = np.fft.fftfreq(nx, d=dx)
+    fy = np.fft.fftfreq(ny, d=dy)
+    FX, FY = np.meshgrid(fx, fy)
+    
+    # Squared spatial frequency magnitude
+    F2 = FX**2 + FY**2
+    
+    # Von Karman phase power spectrum (Phi(f) in [rad^2 * m^2])
+    # Formula: Phi_VK(f) = 0.0229 * r0^(-5/3) * (f^2 + (1/L0)^2)^(-11/6)
+    phi_vk = 0.0229 * (r0 ** (-5/3)) * (F2 + (1.0 / L0)**2) ** (-11/6)
+    
+    # Frequency grid step sizes for integration [1/m]
+    dfx = 1.0 / (nx * dx)
+    dfy = 1.0 / (ny * dy)
+    
+    modal_variances = np.zeros(n_modes)
+    mode_masked = np.zeros_like(mask,dtype=float)
+    
+    for i in range(n_modes):
+        # Apply the telescope pupil mask to the mode
+        mode_masked[~mask] = modes[i,:]/np.std(modes[i,:])
+        
+        # Continuous Fourier Transform approximation of the mode
+        # Mode is in spatial domain, multiplied by pixel area (dx*dy) to scale the FFT appropriately
+        mode_fft = np.fft.fft2(mode_masked) * (dx * dy)
+        
+        # Power Spectral Density of the mode |M(f)|^2
+        mode_psd = np.abs(mode_fft) ** 2
+        
+        # Integrate the multiplication of the mode PSD and the Von Karman PSD 
+        # over the spatial frequency space: integral(|M(f)|^2 * Phi(f) dfx dfy)
+        modal_variances[i] = np.sum(mode_psd * phi_vk) * (dfx * dfy)
+        
+    return modal_variances
 
 def von_karman_power(k,r0,L0,D):
     C = 0.02289558710855519
