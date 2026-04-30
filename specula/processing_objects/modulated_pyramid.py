@@ -2,7 +2,7 @@ from specula import fuse
 from specula.lib.extrapolation_2d import EFInterpolator
 from specula.lib.interp2d import Interp2D
 
-from specula.base_processing_obj import BaseProcessingObj
+from specula.base_processing_obj import BaseProcessingObj, InputDesc, OutputDesc
 from specula.base_value import BaseValue
 from specula.connections import InputValue
 from specula.data_objects.electric_field import ElectricField
@@ -96,23 +96,6 @@ class ModulatedPyramid(BaseProcessingObj):
     precision : int, optional
         Numerical precision: 32 (1) or 64 (0) bits (default: None, uses system default)
     
-    Inputs
-    ------
-    in_ef : ElectricField
-        Input electric field from the telescope pupil. Contains complex amplitude
-        and phase information that will be modulated and propagated through the pyramid.   
-    
-    Outputs
-    -------
-    out_i : Intensity
-        Output intensity on detector CCD (shape: final_ccd_side × final_ccd_side)
-    out_psf_tot : BaseValue
-        Total PSF after focal plane mask application (shape: fft_totsize × fft_totsize)
-    out_psf_bfm : BaseValue
-        PSF before focal plane mask (shape: fft_totsize × fft_totsize)
-    out_transmission : BaseValue
-        Scalar value representing total flux transmission through the system
-
     Notes
     -----
     The modulation types have different characteristics:
@@ -306,6 +289,20 @@ class ModulatedPyramid(BaseProcessingObj):
         # Derived classes can disable streams
         self.stream_enable = True
 
+    @classmethod
+    def input_names(cls):
+        return {'in_ef': InputDesc(ElectricField, 'Input electric field from the telescope pupil.'
+                                                  'Contains complex amplitude and phase information '
+                                                  'that will be modulated and propagated through the pyramid.')}
+    
+    @classmethod
+    def output_names(cls):
+        return {'out_i': OutputDesc(Intensity, 'Output intensity on detector CCD (shape: final_ccd_side × final_ccd_side)'),
+                'out_psf_tot': OutputDesc(BaseValue, 'Total PSF after focal plane mask application (shape: fft_totsize × fft_totsize)'),
+                'out_psf_bfm': OutputDesc(BaseValue, 'PSF before focal plane mask (shape: fft_totsize × fft_totsize)'),
+                'out_transmission': OutputDesc(BaseValue, 'Scalar value representing total flux transmission through the system'),
+                'out_flux_frac_inside_detector': OutputDesc(BaseValue, 'Fraction of total flux that falls inside the CCD area')}
+
     def calc_pyr_geometry(self,
         DpupPix,                # number of pixels of input phase array
         pixel_pitch,            # pixel sampling [m] of DpupPix
@@ -407,23 +404,23 @@ class ModulatedPyramid(BaseProcessingObj):
         dx = self.xp.sqrt(xx ** 2)
         dy = self.xp.sqrt(yy ** 2)
         idx_edge = self.xp.where((dx <= self.pyr_edge_def_ld * self.fft_res / 2) | 
-                            (dy <= self.pyr_edge_def_ld * self.fft_res / 2))[0]
-        if len(idx_edge) > 0:
+                                 (dy <= self.pyr_edge_def_ld * self.fft_res / 2))
+        if len(idx_edge[0]) > 0:
             pyr_tlt[idx_edge] = self.xp.max(pyr_tlt) * self.xp.random.rand(len(idx_edge[0]))
-            print(f'get_pyr_tlt: {len(idx_edge[0])} pixels set to 0 to consider pyramid imperfect edges')
+            self.logger.info(f'get_pyr_tlt: {len(idx_edge[0])} pixels set to 0 to consider pyramid imperfect edges')
 
         # distance from tip
         d = self.xp.sqrt(xx ** 2 + yy ** 2)
-        idx_tip = self.xp.where(d <= self.pyr_tip_def_ld * self.fft_res / 2)[0]
-        if len(idx_tip) > 0:
+        idx_tip = self.xp.where(d <= self.pyr_tip_def_ld * self.fft_res / 2)
+        if len(idx_tip[0]) > 0:
             pyr_tlt[idx_tip] = self.xp.max(pyr_tlt) * self.xp.random.rand(len(idx_tip[0]))
-            print(f'get_pyr_tlt: {len(idx_tip[0])} pixels set to 0 to consider pyramid imperfect tip')
+            self.logger.info(f'get_pyr_tlt: {len(idx_tip[0])} pixels set to 0 to consider pyramid imperfect tip')
 
         # distance from tip
-        idx_tip_m = self.xp.where(d <= self.pyr_tip_maya_ld * self.fft_res / 2)[0]
-        if len(idx_tip_m) > 0:
+        idx_tip_m = self.xp.where(d <= self.pyr_tip_maya_ld * self.fft_res / 2)
+        if len(idx_tip_m[0]) > 0:
             pyr_tlt[idx_tip_m] = self.xp.min(pyr_tlt[idx_tip_m])
-            print(f'get_pyr_tlt: {len(idx_tip_m[0])} pixels set to 0 to consider pyramid imperfect tip')
+            self.logger.info(f'get_pyr_tlt: {len(idx_tip_m[0])} pixels set to 0 to consider pyramid imperfect tip')
 
         return pyr_tlt / self.tilt_scale
 
@@ -532,10 +529,10 @@ class ModulatedPyramid(BaseProcessingObj):
                     self.flux_factor_vector[tt] = 1.0 / self.xp.cos(normalized_angle)
 
         if self.mod_amp > 0.0:
-            print(f'Cached circular modulation with {self.mod_steps} steps, '
+            self.logger.info(f'Cached circular modulation with {self.mod_steps} steps, '
                 f'amplitude: {self.mod_amp:.2f}')
         else:
-            print('Running unmodulated pyramid')
+            self.logger.info('Running unmodulated pyramid')
 
         # Common setup for both modes
         self.ffv = self.flux_factor_vector[:, self.xp.newaxis, self.xp.newaxis]
@@ -602,7 +599,7 @@ class ModulatedPyramid(BaseProcessingObj):
 
         self.pup_pyr_tot *= (phot / self.xp.sum(self.pup_pyr_tot)) * self.transmission.value
 #        if phot == 0: slows down?
-#            print('WARNING: total intensity at PYR entrance is zero')
+#            self.logger.warning('total intensity at PYR entrance is zero')
 
         # Apply pupil shifts using the dedicated interpolator
         # Note: this is a static shift, not a time-varying one as in PASSATA
