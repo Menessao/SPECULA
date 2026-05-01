@@ -7,7 +7,7 @@ from specula import process_comm, process_rank
 
 
 class LoopControl(BaseTimeObj):
-    def __init__(self, stepping=False):
+    def __init__(self, stepping=False, verbose=False):
         super().__init__(target_device_idx=-1, precision=1)
         self.logger.set_instance_name(None)
         self.trigger_lists = defaultdict(list)
@@ -21,6 +21,7 @@ class LoopControl(BaseTimeObj):
         self.max_global_order = -1
         self.iter_counter = 0
         self.stepping = stepping
+        self.verbose = verbose
 
     def add(self, obj, idx):
         """
@@ -154,7 +155,7 @@ class LoopControl(BaseTimeObj):
                     self.logger.error(f'Exception in {element.name}')
                     raise
 
-        if self.speed_report:
+        if self.speed_report:# and self.verbose:
             if self.iter_counter == self.last_reported_counter + self.report_interval:
                 cur_time = time.time()
                 elapsed_time = cur_time - self.last_reported_time

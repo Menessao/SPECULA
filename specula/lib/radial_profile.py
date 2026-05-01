@@ -104,7 +104,7 @@ def compute_fwhm_from_profile(profile, radial_distance=None, xp=np, dtype=np.flo
     else:
         # Linear interpolation to find the radius at half maximum
         half_radius = r1 + (half_maximum - p1) * (r2 - r1) / (p2 - p1)
-    return dtype(2.0) * dtype(half_radius)
+    return 2*half_radius #dtype(2.0) * dtype(half_radius)
 
 
 def compute_encircled_energy(profile, n_px_in_radial_bin=None, radial_distance=None,

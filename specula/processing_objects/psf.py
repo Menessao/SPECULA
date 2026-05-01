@@ -63,8 +63,10 @@ class PSF(BaseProcessingObj):
                  ee_radius_in_lambda_d=None,
                  target_device_idx: int = None,
                  precision: int = None,
+                 verbose: bool = False,
                 ):
         super().__init__(target_device_idx=target_device_idx, precision=precision)
+        self.verbose = verbose
 
         if wavelengthInNm <= 0:
             raise ValueError('PSF wavelength must be >0')
@@ -187,7 +189,8 @@ class PSF(BaseProcessingObj):
         self.sr.value = self.psf.value[self.out_size[0] // 2, \
                                        self.out_size[1] // 2] / self.ref.i[self.out_size[0] // 2, \
                                        self.out_size[1] // 2]
-        self.logger.info(f'SR at {int(self.wavelengthInNm)}nm : {self.sr.value}')
+        if self.verbose:
+            self.logger.info(f'SR at {int(self.wavelengthInNm)}nm : {self.sr.value}')
 
     def _compute_radial_profile_data(self, psf):
         if psf is None:
@@ -245,7 +248,7 @@ class PSF(BaseProcessingObj):
 
         profile, radial_dist, fwhm, ee, ee_at_radius = metrics
         profile_output.value = self.xp.vstack([radial_dist, profile])
-        fwhm_output.value = self.dtype(fwhm)
+        fwhm_output.value = fwhm #self.dtype(fwhm)
         ee_output.value = self.xp.vstack([radial_dist, ee])
         ee_at_radius_output.value = ee_at_radius
 
