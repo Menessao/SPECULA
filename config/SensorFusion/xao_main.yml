@@ -299,6 +299,7 @@ psf:
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
   # verbose: false
+  compute_profile_metrics: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']

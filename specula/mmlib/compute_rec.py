@@ -13,6 +13,7 @@ def compute_and_save_rec(root_dir:str, im_tag:str, rec_tag:str, Nmodes:int,
     print(rec_tag,im_tag)
     rec = compute_rec(root_dir, im_tag, Nmodes, ml=ml, slope_null=slope_null, RON=RON, mmse=mmse, diam=diam, r0=r0, L0=L0)
     save_rec(root_dir, rec, rec_tag, overwrite=overwrite)
+    return rec
 
 
 def compute_rec(root_dir:str, im_tag:str, Nmodes:int, 
@@ -28,9 +29,9 @@ def compute_rec(root_dir:str, im_tag:str, Nmodes:int,
             turb_cov = np.diag(np.sqrt(von_karman_power(k,r0=r0,L0=L0,D=diam))*(2*np.pi*500))**2
         else:
             turb_cov = np.zeros([Nmodes, Nmodes])
+            # DtCn = D.T @ np.diag(1/(slope_null + RON))
+            # rec = np.linalg.pinv(DtCn @ D) @ DtCn
         rec = compute_mmse_reconstructor(interaction_matrix=D, c_atm=turb_cov, c_noise=noise_cov, verbose=True, xp=np, dtype=np.float64)
-        # DtCn = D.T @ np.diag(1/(slope_null + RON))
-        # rec = np.linalg.pinv(DtCn @ D) @ DtCn
     else:
         U,S,Vt = np.linalg.svd(D,full_matrices=False)
         rec = (Vt.T * 1/S) @ U.T
@@ -81,13 +82,13 @@ if __name__ == "__main__":
     root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
     im_tag = 'pyr3.0_40x40_im'
     rec_tag = f'pyr3.0_40x40_{Nmodes}modes'
-    compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
     Nmodes = 400
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
     im_tag = 'pyr5.0_40x40_im'
     rec_tag = 'pyr5.0_40x40_400modes'
-    compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
 
 #     Nmodes = 1300
