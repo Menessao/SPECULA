@@ -152,7 +152,7 @@ pyr0_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_48x48'           
   slopes_from_intensity:  true
-  sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
+  # sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
   inputs:
     in_pixels:        'cred10.out_pixels'
   outputs:           ['out_slopes']
@@ -298,7 +298,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
-  # verbose: false
+  verbose: true
   compute_profile_metrics: true
   inputs:
     in_ef:           'ef_prop.out_ef'
@@ -309,7 +309,7 @@ coro_psf:
   simul_params_ref:  'main'
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
-  start_time:        0.2                  # Start PSF integration after 500ms
+  start_time:        1.0                  # Start PSF integration after 500ms
   use_average_field: false
   compute_profile_metrics: true
   inputs:

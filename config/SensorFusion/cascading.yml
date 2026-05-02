@@ -312,17 +312,18 @@ psf1:
     in_ef:           'first_stage_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
-# coro_psf1:
-#   class:             'PsfCoronagraph'
-#   simul_params_ref:  'main'
-#   wavelengthInNm:    750                 # [nm] visible
-#   nd:                4                   # 4x padding for PSF
-#   start_time:        1.0                 # Start PSF integration after 500ms
-#   verbose: false
-#   use_average_field: false
-#   inputs:
-#     in_ef:           'first_stage_prop.out_ef' 
-#   outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf']
+coro_psf1:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                   # 4x padding for PSF
+  start_time:        1.0                 # Start PSF integration after 500ms
+  verbose: false
+  # use_average_field: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'first_stage_prop.out_ef' 
+  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf']
 
 psf2:
   class:             'PSF'
@@ -335,17 +336,18 @@ psf2:
     in_ef:           'second_stage_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
-# coro_psf2:
-#   class:             'PsfCoronagraph'
-#   simul_params_ref:  'main'
-#   wavelengthInNm:    750                 # [nm] visible
-#   nd:                4                   # 4x padding for PSF
-#   start_time:        1.0                 # Start PSF integration after 500ms
-#   verbose: false
-#   use_average_field: false
-#   inputs:
-#     in_ef:           'second_stage_prop.out_ef' 
-#   outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf']
+coro_psf2:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                   # 4x padding for PSF
+  start_time:        1.0                 # Start PSF integration after 500ms
+  verbose: false
+  # use_average_field: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'second_stage_prop.out_ef' 
+  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf']
 
 dm2_mode_res:
   class:            'ModalAnalysis'

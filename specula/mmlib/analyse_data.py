@@ -7,7 +7,7 @@ specula.init(0)  # Default target device
 from specula import cpuArray
 
 from .utils import show_psf, get_control_data, get_psd, get_reference_psf
-from specula.lib.radial_profile import computeRadialProfile
+from specula.lib.radial_profile import compute_radial_profile
 
 from astropy.io import fits
 import numpy as np
@@ -386,14 +386,14 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
     ################# PSF profiles #######################
     oversampling = 4
     psf_dl = get_reference_psf(root_dir=calib_dir,pupil_tag=pupil_tag,nd=oversampling)
-    rad_psf_dl, dist = computeRadialProfile(psf_dl)
+    rad_psf_dl, dist = compute_radial_profile(psf_dl)
     try:
         psf = data["psf"]
         psf = np.sqrt(np.mean(psf[init+1:]**2,axis=0))
         coro_psf = data["coro_psf"]
         coro_psf = np.sqrt(np.mean(coro_psf[init+1:]**2,axis=0))
-        rad_psf, dist = computeRadialProfile(psf)
-        rad_cpsf, dist = computeRadialProfile(coro_psf)
+        rad_psf, dist = compute_radial_profile(psf)
+        rad_cpsf, dist = compute_radial_profile(coro_psf)
         plt.figure(figsize=(12,5))
         plt.subplot(1,2,1)
         plt.plot(dist/oversampling, rad_psf/np.max(psf_dl), label=r'AO corrected', c='blue')
@@ -419,14 +419,14 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             psf1 = np.sqrt(np.mean(psf1[init1:]**2,axis=0))
             coro_psf1 = data["coro_psf1"]
             coro_psf1 = np.sqrt(np.mean(coro_psf1[init1:]**2,axis=0))
-            rad_psf1, dist = computeRadialProfile(psf1)
-            rad_cpsf1, dist = computeRadialProfile(coro_psf1)
+            rad_psf1, dist = compute_radial_profile(psf1)
+            rad_cpsf1, dist = compute_radial_profile(coro_psf1)
             psf2 = data["psf2"]
             psf2 = np.sqrt(np.mean(psf2[init2:]**2,axis=0))
             coro_psf2 = data["coro_psf2"]
             coro_psf2 = np.sqrt(np.mean(coro_psf2[init2:]**2,axis=0))
-            rad_psf2, dist = computeRadialProfile(psf2)
-            rad_cpsf2, dist = computeRadialProfile(coro_psf2)
+            rad_psf2, dist = compute_radial_profile(psf2)
+            rad_cpsf2, dist = compute_radial_profile(coro_psf2)
             plt.figure(figsize=(12,5))
             plt.subplot(1,2,1)
             plt.plot(dist/oversampling, rad_psf1/np.max(psf_dl), label=r'$1^{st}$ stage')
@@ -450,6 +450,15 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             plt.xlabel(r'$\lambda/D$')
         except KeyError:
             print(f"coro_psf.fits file not found in {data_dir}.")
+
+    try:
+        rad_dist,coro_psf_profile = data['coro_psf_profile'][0]
+        plt.figure(figsize=(8,5))
+        plt.semilogy(rad_dist,coro_psf_profile)
+        plt.xlim([0,30])
+        plt.grid(which='both',alpha=0.7)
+    except KeyError:
+        print(f"coro_psf_profile.fits file not found in {data_dir}.")
 
 
 if __name__ == "__main__":
