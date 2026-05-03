@@ -218,6 +218,7 @@ class PsfCoronagraph(PSF):
             self._set_radial_profile_output(
                 self.coronagraph_psf.value,
                 self.coronagraph_psf_profile,
+                self.psf.value.max()
             )
 
     def finalize(self):

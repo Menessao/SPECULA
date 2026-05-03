@@ -186,17 +186,19 @@ class PSF(BaseProcessingObj):
                                                   in_ef.A, imwidth=self.out_size[0], normalize=True,
                                                   xp=self.xp, complex_dtype=self.complex_dtype,
                                                   return_total=True)
+        
         self.sr.value = self.psf.value[self.out_size[0] // 2, \
                                        self.out_size[1] // 2] / self.ref.i[self.out_size[0] // 2, \
                                        self.out_size[1] // 2]
         if self.verbose:
             self.logger.info(f'SR at {int(self.wavelengthInNm)}nm : {self.sr.value}')
 
-    def _compute_radial_profile_data(self, psf):
+    def _compute_radial_profile_data(self, psf, peak:float=None):
         if psf is None:
             return None
 
-        peak = self.xp.max(psf)
+        if peak is None:
+            peak = self.xp.max(psf)
         if float(peak) <= 0.0:
             norm_psf = self.xp.zeros_like(psf)
         else:
@@ -231,8 +233,8 @@ class PSF(BaseProcessingObj):
             )
         return profile, radial_dist, fwhm, ee, ee_at_radius
 
-    def _set_radial_profile_output(self, psf, profile_output):
-        radial_profile_data = self._compute_radial_profile_data(psf)
+    def _set_radial_profile_output(self, psf, profile_output, norm_peak:float=None):
+        radial_profile_data = self._compute_radial_profile_data(psf, norm_peak)
         if radial_profile_data is None:
             return
 

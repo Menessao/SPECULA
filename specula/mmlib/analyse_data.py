@@ -13,12 +13,9 @@ from astropy.io import fits
 import numpy as np
 import matplotlib.pyplot as plt
 # from matplotlib.lines import Line2D
-
 from specula.base_value import BaseValue
 
-
-def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
-
+def get_sim_data(root_dir:str,tn:str=None,return_dir:bool=False):
     if tn is None:
         # Find all directories in ./output starting with '20'
         dirs = [d for d in glob.glob(os.path.join(root_dir,"20*")) if os.path.isdir(d)]
@@ -29,8 +26,8 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
     else:
         data_dir = os.path.join(root_dir,tn)
     print(f"Using data directory: {data_dir}")
-    data = {}
 
+    data = {}
     # Load all .fits files in the directory
     for fname in glob.glob(os.path.join(data_dir, "*.fits")):
         key = os.path.splitext(os.path.basename(fname))[0]
@@ -38,6 +35,36 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             arr = hdul[0].data
         data[key] = arr
         print('key:', key, 'type:', type(data[key]))
+
+    if return_dir:
+        return data, data_dir, tn
+    else:
+        return data
+
+
+def get_residual_psd(root_dir:str,tn:str=None):
+    data,data_dir,tn = get_sim_data(root_dir,tn,return_dir=True)
+    params_path = os.path.join(data_dir,'params.yml')
+    with open(params_path, 'r') as file:
+        params = yaml.safe_load(file)
+        fs = 1.0/float(params['main']['time_step'])
+    init = int(0.4*fs)
+    dt = 1/fs
+    try:
+        res = data["dm_res"][init+1:, :]
+        res_psd, f = get_psd(res.T,dt=dt)
+        return f, res_psd
+    except KeyError:
+        res1 = data["dm1_res"][init+1:, :]
+        res2 = data["dm2_res"][init+1:, :]
+        res1_psd, f = get_psd(res1.T,dt=dt)
+        res2_psd, f = get_psd(res2.T,dt=dt)
+        return f, res1_psd, res2_psd
+
+
+def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
+
+    data,data_dir,tn = get_sim_data(root_dir,tn,return_dir=True)
 
     ################### Parameters #########################
     params_path = os.path.join(data_dir,'params.yml')
@@ -458,7 +485,20 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         plt.xlim([0,30])
         plt.grid(which='both',alpha=0.7)
     except KeyError:
-        print(f"coro_psf_profile.fits file not found in {data_dir}.")
+        try:
+            rad_dist,coro_psf1_profile = data['coro_psf1_profile'][0]
+            rad_dist,coro_psf2_profile = data['coro_psf2_profile'][0]
+            plt.figure(figsize=(8,5))
+            plt.semilogy(rad_dist,coro_psf1_profile)
+            plt.semilogy(rad_dist,coro_psf2_profile)
+            plt.xlim([0,30])
+            plt.grid(which='both',alpha=0.7)
+        except KeyError:
+            print(f"coro_psf_profile.fits file not found in {data_dir}.")
+
+
+# def get_residual_psd():
+
 
 
 if __name__ == "__main__":

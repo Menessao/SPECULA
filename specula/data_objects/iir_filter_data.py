@@ -26,8 +26,9 @@ class IirFilterData(BaseDataObj):
                  num,
                  den,
                  n_modes=None,
-                 target_device_idx: int=None,
-                 precision: int=None):
+                 target_device_idx: int=-1,#None,
+                 precision: int=0, #None,
+                 ):
         """
         :class:`~specula.data_objects.iir_filter_data.IirFilterData` - IIR Filter Data representation.
  

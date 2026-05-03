@@ -84,17 +84,20 @@ def save_and_test_restore(filter_data_complex:IirFilterData, file_name:str):
     except FileNotFoundError:
         print("File FITS not found")
 
+
 def create_stepped_t(n_filters:int, excluded_filters:int=None):
     n = radial_order(n_filters)
     if excluded_filters is not None:
         n_min = radial_order(excluded_filters)
     else:
         n_min = 0
+    n_max = radial_order(n_filters)
     rad_t = np.zeros(int(n))
-    rad_t[n_min:] = np.linspace(0, 1, int(n - n_min))
+    rad_t[n_min:] = np.linspace(1/n_max, 1, int(n - n_min))
     t = np.hstack([np.repeat(rad_t[i-2],i) for i in range(2, len(rad_t)+2)])
     t = t[:n_filters]  # Ensure we only have n_filters elements
     return t
+
 
 def guidos_standard_iir(n_filters:int, excluded_filters:int,
                         start_pole = [1.0, 0.995],
@@ -104,6 +107,12 @@ def guidos_standard_iir(n_filters:int, excluded_filters:int,
                         power_exponent = 2.0, iir_gain=1.0):
     t = create_stepped_t(n_filters,excluded_filters=excluded_filters)
     t_powered = t**power_exponent 
+
+    end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
+    end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
+
+    end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
+    end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
 
     zero_values = start_zero[0] + (end_zero[0] - start_zero[0]) * t_powered
     zero2_values = start_zero[1] + (end_zero[1] - start_zero[1]) * t_powered
@@ -138,7 +147,8 @@ def plot_iir_tfs(filter_data_complex:IirFilterData, fs:float, n_filters:int, del
     nw_delay, dw_delay = filter_data_complex.discrete_delay_tf(delay_frames)
     freq = np.logspace(-2, np.log10(fs/2), 2000)    
     plt.figure(figsize=(16,5))
-    for mode in np.linspace(0,n_filters-1,5,dtype=int):
+    modes = np.round(10**np.linspace(0,np.log10(n_filters),5)-1).astype(int)
+    for mode in modes:
         rtf = filter_data_complex.RTF(mode=mode, fs=fs, freq=freq, dm=1.0, nw=nw_delay, dw=dw_delay, plot=False)
         ntf = filter_data_complex.NTF(mode=mode, fs=fs, freq=freq, dm=1.0, nw=nw_delay, dw=dw_delay, plot=False)
         plt.subplot(1,2,1)
@@ -148,13 +158,13 @@ def plot_iir_tfs(filter_data_complex:IirFilterData, fs:float, n_filters:int, del
     plt.subplot(1,2,1)
     plt.legend()
     plt.grid(which='both',alpha=0.3)
-    plt.xlim([1e-2,fs/2])
+    plt.xlim([1e-1,fs/2])
     plt.xlabel('Frequency [Hz]')
     plt.title('RTF')
     plt.subplot(1,2,2)
     plt.legend()
     plt.grid(which='both',alpha=0.3)
-    plt.xlim([1e-2,fs/2])
+    plt.xlim([1e-1,fs/2])
     plt.xlabel('Frequency [Hz]')
     plt.title('NTF')
 
@@ -167,7 +177,7 @@ if __name__ == "__main__":
     path = os.path.join(root_dir,'filter')
     os.makedirs(path,exist_ok=True)
 
-    fs = 2000  # sampling frequency
+    fs = 4000  # sampling frequency
     n_filters = 300
     excluded_filters = 2
     make_tiled = False
@@ -175,7 +185,7 @@ if __name__ == "__main__":
 
     num_array,den_array=guidos_standard_iir(n_filters=n_filters,
                                             excluded_filters=excluded_filters,
-                                            power_exponent=1.0)
+                                            power_exponent=2.0)
     
     # b,a=design_f3_controller(fs=2000,f1=10,f2=300,N=2)
 

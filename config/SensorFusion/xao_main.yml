@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        4.000                 # [s] 1 second simulation
+  total_time:        10.000                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -152,7 +152,7 @@ pyr0_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_48x48'           
   slopes_from_intensity:  true
-  # sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
+  sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
   inputs:
     in_pixels:        'cred10.out_pixels'
   outputs:           ['out_slopes']
@@ -251,7 +251,7 @@ filter:
   class:                    'MultirateComplementaryFilter'
   simul_params_ref:         'main'
   delay:                    1             # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes'  
+  iir_filter_data_object:  'iirfilter_1300modes'  #'iir_opt_1300modes' #
   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
   N_list:                   [4]           # ffast/slow frequency ratio (list)
   g_track:                  0.9           # gain
@@ -263,8 +263,8 @@ filter:
 
 gain_ramp:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.2],[0.5]]
-  scheduled_times: [0.01]
+  scheduled_values: [[0.2],[0.45]]
+  scheduled_times: [0.02]
   modes_per_group: [1300]
 
 # filter:
@@ -342,6 +342,7 @@ data_store:
                   # 'psf_std-psf.out_std_psf',
                   # 'coro_psf-coro_psf.out_coronagraph_psf',
                   # 'coro_psf_std-coro_psf.out_std_coronagraph_psf',
+                  'psf_profile-coro_psf.out_int_psf_profile',
                   'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
