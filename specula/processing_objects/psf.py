@@ -199,6 +199,7 @@ class PSF(BaseProcessingObj):
 
         if peak is None:
             peak = self.xp.max(psf)
+
         if float(peak) <= 0.0:
             norm_psf = self.xp.zeros_like(psf)
         else:

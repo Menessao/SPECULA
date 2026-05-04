@@ -232,10 +232,12 @@ class PsfCoronagraph(PSF):
                 self._set_radial_profile_output(
                     self.int_coronagraph_psf.value,
                     self.int_coronagraph_psf_profile,
+                    norm_peak=1.0, # do not normalize peak to 1
                 )
                 self._set_radial_profile_output(
                     self.std_coronagraph_psf.value,
-                    self.std_coronagraph_psf_profile,
+                    self.std_coronagraph_psf_profile,                    
+                    norm_peak=1.0, # do not normalize peak to 1
                 )
 
         self.int_coronagraph_psf.generation_time = self.current_time

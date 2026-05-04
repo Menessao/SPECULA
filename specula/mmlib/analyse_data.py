@@ -72,7 +72,10 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
     with open(params_path, 'r') as file:
         params = yaml.safe_load(file)
         fs = 1.0/float(params['main']['time_step'])
-        pupil_tag = params['pupilstop']['tag']
+        try:
+            pupil_tag = params['pupilstop']['tag']
+        except KeyError:
+            pass
         try:
             filter_data_complex, delay_frames = get_control_data(calib_dir,'filter','gain_ramp',params=params)
         except:

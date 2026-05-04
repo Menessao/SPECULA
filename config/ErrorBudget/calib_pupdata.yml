@@ -11,7 +11,7 @@ pyr_pupdata:
     in_i: 'pyr.out_i'
 
 pyr_override:
-  mod_amp:           30.0   # Modulation radius (in lambda/D units)
+  mod_amp:           10.0   # Modulation radius (in lambda/D units)
   inputs:
     in_ef: 'prop.out_source_ngs_ef'
 

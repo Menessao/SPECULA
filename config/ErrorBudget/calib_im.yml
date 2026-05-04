@@ -13,7 +13,7 @@ pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    649                         # Number of modes to calibrate
   im_tag:    'pyr3.0_40x40_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -21,7 +21,7 @@ pyr_im_calibrator:
 # Override main simulation parameters
 main_override:
   time_step: 0.000588
-  total_time: 0.763224                 # 660 modes × 2 (push+pull) × 0.000588s
+  total_time: 0.763224                 # 649 modes × 2 (push+pull) × 0.000588s
 
 # Disable atmosphere for clean calibration
 prop_override:
@@ -41,9 +41,6 @@ pyr_override:
   # mod_amp: 0.5
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
-
-# pyr_slopes_override:
-#   slopes_from_intensity: false
 
 # Disable noise for clean measurements
 ocam_override:

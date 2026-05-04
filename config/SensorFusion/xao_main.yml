@@ -227,17 +227,6 @@ pyr0_modalrec:
 #   outputs: ['out_value']
 
 # filter:
-#   class:                'IirFilter'
-#   simul_params_ref:     'main'
-#   iir_gain:             0.5
-#   delay:                1 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'tiled_iirfilter'
-#   inputs:
-#     delta_comm: 'concat_wfs_modes.out_value' 
-#     gain_mod: 'bootstrap.output'
-#   outputs:  ['out_comm']
-
-# filter:
 #   class:             'Integrator'
 #   simul_params_ref:  'main'
 #   delay:             1                     # 1 frame delay (realistic)
@@ -261,21 +250,22 @@ filter:
     gain_mod:                 'gain_ramp.output'
   outputs:  ['out_comm']
 
-gain_ramp:
-  class:             'ScheduleGenerator'
-  scheduled_values: [[0.2],[0.45]]
-  scheduled_times: [0.02]
-  modes_per_group: [1300]
-
 # filter:
 #   class:                'IirFilter'
 #   simul_params_ref:     'main'
 #   delay:                1 # Total temporal delay in time steps is this value +1
 #   iir_filter_data_object:  'iirfilter_1300modes'
 #   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes' #'ogc_modes.out_value' 
-#     gain_mod:   'gain_ramp.output'
+#     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+#     gain_mod: 'gain_ramp.output'
 #   outputs:  ['out_comm']
+
+
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.2],[0.4]]
+  scheduled_times: [0.01]
+  modes_per_group: [1300]
 
 dm:
   class:             'DM'
@@ -298,7 +288,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
-  verbose: true
+  # verbose: true
   compute_profile_metrics: true
   inputs:
     in_ef:           'ef_prop.out_ef'
@@ -310,6 +300,7 @@ coro_psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
+  # verbose: true
   use_average_field: false
   compute_profile_metrics: true
   inputs:
@@ -347,7 +338,7 @@ data_store:
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',
-                  # 'pyr_modes-pyr_modalrec.out_modes',
+                  'pyr_modes-pyr0_modalrec.out_modes',
                   # 'zwfs_modes-zwfs_modalrec.out_modes',
                   # 'ccd1-cred1.out_pixels',
                   # 'ccd2-ocam2.out_pixels'

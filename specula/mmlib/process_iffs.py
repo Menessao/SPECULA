@@ -31,7 +31,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float):
     pmask[idx] = False
     pmask = pmask.reshape([dpix,dpix])
     simul_params = SimulParams(pixel_pupil=dpix,pixel_pitch=D/dpix)
-    pupil_mask = Pupilstop(simul_params=simul_params, input_mask=pmask)
+    pupil_mask = Pupilstop(simul_params=simul_params, input_mask=1-pmask)
 
     # Influence functions
     influence_functions = kl_basis.T @ specula.xp.linalg.pinv(m2c)
@@ -70,6 +70,13 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float):
 
     # Step 4: Save using SPECULA data objects
     print(f"\nSaving influence functions and modal basis...")
+
+    # Regularize influence functions
+    thr = 1e-3
+    U,S,Vt = np.linalg.svd(influence_functions,full_matrices=False)
+    Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
+    influence_functions = (U * Sreg) @ Vt
+    print(f'Regularized {np.sum(S<thr*S.max()):1.0f} eigenvalues')
 
     # Create IFunc object and save
     ifunc_obj = IFunc(
