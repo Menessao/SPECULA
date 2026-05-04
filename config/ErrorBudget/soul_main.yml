@@ -103,7 +103,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'        
-  # sn_object:            'pyr3.0_40x40_sn'
+  sn_object:            'pyr3.0_40x40_sn'
   inputs:
     in_pixels:        'ocam.out_pixels'
   outputs:           ['out_slopes']

@@ -198,10 +198,10 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         turb_modes = res + comm
 
         dt = 1/fs
-        pol_psd, f = get_psd(pol_modes.T,dt=dt)#,interval=interval)
-        res_psd, f = get_psd(res.T,dt=dt)#,interval=interval)
+        pol_psd, f = get_psd(pol_modes.T,dt=dt,nperseg=512)#,interval=interval)
+        res_psd, f = get_psd(res.T,dt=dt,nperseg=512)#,interval=interval)
 
-        flims = [0.1,1/dt/2]
+        flims = [np.maximum(0.1,1/(dt*turb_modes.shape[1])),1/dt/2]
         freq = np.logspace(-2,np.log10(fs/2),2000)
         nw_delay, dw_delay = filter_data_complex.discrete_delay_tf(delay_frames)
 
@@ -209,7 +209,8 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         plt.figure(figsize=(18,18))
         plt.subplot(2,2,1)
         for k,mode in enumerate(lo_mode_ids):
-            plt.loglog(f,pol_psd[mode,:]/np.min(pol_psd[mode,:][f<flims[-1]]),c=f'C{k}',label=f'Mode {mode:1.0f}')
+            plt.loglog(f,res_psd[mode,:]/np.min(res_psd[mode,:][f<flims[-1]]),c=f'C{k}',label=f'Mode {mode:1.0f}')
+            # plt.loglog(f,pol_psd[mode,:]/np.min(pol_psd[mode,:][f<flims[-1]]),c=f'C{k}',label=f'Mode {mode:1.0f}')
             try:
                 rtf = filter_data_complex.RTF(mode=mode, fs=fs, freq=freq, dm=1.0, nw=nw_delay, dw=dw_delay, plot=False)
                 plt.loglog(freq,rtf**-2,'--',c=f'C{k}',label='')            
@@ -220,7 +221,8 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         plt.legend()
         plt.xlim(flims)
         plt.ylabel(r'RMS [$nm^2$]')
-        plt.title('Pseudo-open-loop PSD')
+        # plt.title('Pseudo-open-loop PSD')
+        plt.title('Turbulence PSD')
         plt.subplot(2,2,3)
         for mode in lo_mode_ids:
             plt.loglog(f,res_psd[mode,:],label=f'Mode {mode:1.0f}')
@@ -237,7 +239,8 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             ho_mode_ids = [50,100,200,300,400]
         plt.subplot(2,2,2)
         for k,mode in enumerate(ho_mode_ids):
-            plt.loglog(f,pol_psd[mode,:]/np.min(pol_psd[mode,:][f<flims[-1]]),c=f'C{k}',label=f'Mode {mode:1.0f}')
+            plt.loglog(f,res_psd[mode,:]/np.min(res_psd[mode,:][f<flims[-1]]),c=f'C{k}',label=f'Mode {mode:1.0f}')
+            # plt.loglog(f,pol_psd[mode,:]/np.min(pol_psd[mode,:][f<flims[-1]]),c=f'C{k}',label=f'Mode {mode:1.0f}')
             try:
                 rtf = filter_data_complex.RTF(mode=mode, fs=fs, freq=freq, dm=1.0, nw=nw_delay, dw=dw_delay, plot=False)
                 plt.loglog(freq,rtf**-2,'--',c=f'C{k}',label='')
@@ -248,7 +251,8 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         plt.legend()
         plt.xlim(flims)
         plt.ylabel(r'RMS [$nm^2$]')
-        plt.title('Pseudo-open-loop PSD')
+        plt.title('Turbulence PSD')
+        # plt.title('Pseudo-open-loop PSD')
         plt.subplot(2,2,4)
         for mode in ho_mode_ids:
             plt.loglog(f,res_psd[mode,:],label=f'Mode {mode:1.0f}')
@@ -283,10 +287,10 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             turb_modes[:, :comm2.shape[1]] += comm2
 
             dt = 1/fs
-            pol_psd, f = get_psd(turb_modes.T,dt=dt)#,interval=interval)
-            res_psd, f = get_psd(res2.T,dt=dt)#,interval=interval)
+            pol_psd, f = get_psd(turb_modes.T,dt=dt,nperseg=512)#,interval=interval)
+            res_psd, f = get_psd(res2.T,dt=dt,nperseg=512)#,interval=interval)
 
-            flims = [0.1,1/dt/2]
+            flims = [np.maximum(0.1,1/(dt*turb_modes.shape[1])),1/dt/2]
             freq = np.logspace(-2,np.log10(fs/2),2000)
             nw_delay, dw_delay = filter_data1.discrete_delay_tf(delay_frames1)
 

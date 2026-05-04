@@ -4,8 +4,9 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       660                        # Number of DM actuators
-  amp:          15
+  nmodes:       649                        # Number of DM actuators
+  amp:          10
+  constant_amp: false
   outputs:   ['output']
 
 # Interaction matrix calibrator

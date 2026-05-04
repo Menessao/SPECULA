@@ -16,12 +16,18 @@ from specula.calib_manager import CalibManager
 def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float):
     fname = os.path.join(data_path,'phase_matrix.sav')
     data_dict = readsav(fname)
+
     
     kl_basis = data_dict['klmatrix'].T
     dpix = data_dict['dpix']
     m2c_full = data_dict['klm2c']
-    m2c = m2c_full[:,:kl_basis.shape[0]]
+    mode_ids = (np.sum(abs(m2c_full),axis=0)>0).astype(bool)
+    act_ids = (np.sum(abs(m2c_full),axis=1)>0).astype(bool)
+    m2c = m2c_full[:,mode_ids]
+    m2c = m2c[act_ids,:]
     idx = data_dict['idx_mask']
+
+    # print(m2c_full.shape,np.sum(np.sum(abs(m2c_full),axis=0)>0), np.sum(np.sum(abs(m2c_full),axis=1)>0))
 
     print('Reading data from: '+fname)
     print(f'Scale: {dpix} pixels across diameter')
@@ -61,7 +67,15 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float):
     print(f"KL basis shape: {kl_basis.shape}")
     print(f"Number of KL modes: {kl_basis.shape[0]}")
 
-    kl_basis_inv = np.linalg.pinv(kl_basis)
+    # kl_basis_inv = np.linalg.pinv(kl_basis)
+    
+    # Regularized inversion
+    thr = 1e-2
+    U,S,Vt = np.linalg.svd(kl_basis,full_matrices=False)
+    Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
+    # kl_basis = (U * Sreg) @ Vt
+    kl_basis_inv = (Vt.T * 1/Sreg) @ U.T
+    print(f'Regularized {np.sum(S<thr*S.max()):1.0f} eigenvalues')
 
     # Step 3: Create output directory
     os.makedirs(os.path.join(root_dir, 'pupilstop'), exist_ok=True)
@@ -70,13 +84,6 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float):
 
     # Step 4: Save using SPECULA data objects
     print(f"\nSaving influence functions and modal basis...")
-
-    # Regularize influence functions
-    thr = 1e-3
-    U,S,Vt = np.linalg.svd(influence_functions,full_matrices=False)
-    Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
-    influence_functions = (U * Sreg) @ Vt
-    print(f'Regularized {np.sum(S<thr*S.max()):1.0f} eigenvalues')
 
     # Create IFunc object and save
     ifunc_obj = IFunc(
