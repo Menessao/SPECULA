@@ -115,15 +115,31 @@ pyr_modalrec:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
+# filter:
+#   class:             'Integrator'
+#   simul_params_ref:  'main'
+#   delay:             2                      # Total temporal delay in time steps
+#   int_gain:          [0.55,   0.45,     0.40,     0.35] #,     0.3]
+#   ff:                [1.0,    0.999996, 0.999365, 0.977895] #, 0.95]
+#   n_modes:           [30,     70,       100,      300] #,      160]
+#   inputs:
+#       delta_comm: 'pyr_modalrec.out_modes'
+
 filter:
-  class:             'Integrator'
-  simul_params_ref:  'main'
-  delay:             2                      # Total temporal delay in time steps
-  int_gain:          [0.55,   0.45,     0.40,     0.35] #,     0.3]
-  ff:                [1.0,    0.999996, 0.999365, 0.977895] #, 0.95]
-  n_modes:           [30,     70,       100,      300] #,      160]
+  class:                'IirFilter'
+  simul_params_ref:     'main'
+  delay:                2 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_500modes'
   inputs:
-      delta_comm: 'pyr_modalrec.out_modes'
+    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+    gain_mod: 'gain_ramp.output'
+  outputs:  ['out_comm']
+
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.2],[0.7]]
+  scheduled_times: [0.01]
+  modes_per_group: [500]
 
 dm:
   class:             'DM'

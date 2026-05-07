@@ -4,25 +4,25 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       648                        # Number of DM actuators
-  amp:          15
-  # constant_amp: false
+  nmodes:       300                         # Number of DM actuators
+  amp:          10 
+  # constant_amp: true
   outputs:   ['output']
 
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    648                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_40x40_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  nmodes:    300                         # Number of modes to calibrate
+  im_tag:    'pyr0.0_300modes_24x24_im'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
   inputs:
-    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
+    in_slopes:   'pyr0_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
 
 # Override main simulation parameters
 main_override:
-  time_step: 0.000588
-  total_time: 0.762048                 # 648 modes × 2 (push+pull) × 0.000588s
+  time_step: 0.00025
+  total_time: 0.150                 # 463 modes × 2 (push+pull) × 0.00025s
 
 # Disable atmosphere for clean calibration
 prop_override:
@@ -34,21 +34,20 @@ prop_override:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 648                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
-pyr_override:
-  # mod_amp: 0.5
+pyr0_override:
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
+
 # Disable noise for clean measurements
-ocam_override:
+cred10_override:
   photon_noise:   false                   # No photon noise
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes',
-        'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec',] 
+remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', 'pyr', 'cred1', 'pyr_slopes', #'source_science',
+        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop','pyr_modalrec', 'pyr0_modalrec'] #, 'bootstrap', 'concat_wfs_modes'

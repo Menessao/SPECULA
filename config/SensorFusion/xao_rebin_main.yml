@@ -13,7 +13,7 @@ main:
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          1.2                  # [arcsec]
+  constant:          0.88                  # [arcsec]
   outputs:           ['output']
 
 wind_speed:
@@ -123,8 +123,8 @@ pyr_modalrec:
 pyr0:
   class:             'ModulatedPyramid'
   simul_params_ref:  'main'
-  pup_diam:          48.                     # Pupil diameter in subaps.
-  pup_dist:          60.                     # Separation between pupil centers in subaps.
+  pup_diam:          24.                     # Pupil diameter in subaps.
+  pup_dist:          30.                     # Separation between pupil centers in subaps.
   fov:               2.0                     # Requested field-of-view [arcsec]
   mod_amp:           0.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
@@ -150,129 +150,80 @@ cred10:
 
 pyr0_slopes:
   class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata_48x48'           
+  pupdata_object:         'pyr_pupdata_24x24'           
   slopes_from_intensity:  true
-  sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
+  sn_object:            'pyr0.0_24x24_sn'
   inputs:
     in_pixels:        'cred10.out_pixels'
   outputs:           ['out_slopes']
 
 pyr0_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr0.0_48x48_1300modes_rec'        
+  recmat_object:     'pyr0.0_24x24_300modes_rec'        
   inputs:
     in_slopes:       'pyr0_slopes.out_slopes'
   outputs:           ['out_modes']
 
-# ########################### ZWFS ####################################
-# zwfs:
-#   class:              'ZernikeSensor' 
-#   simul_params_ref:   'main'
-#   pup_diam:           48.                     # Pupil diameter in subaps.
-#   fov:                2.0                     # Requested field-of-view [arcsec]
-#   spot_radius_lambda: 0.75                     # Spot radius in λ/D units
-#   fft_res:            8.0
-#   output_resolution:  120                     # Output sampling [usually corresponding to CCD pixels]
-#   wavelengthInNm:     750                     # [nm] zWFS wavelength
-#   inputs:
-#     in_ef: 'ef_prop.out_ef' 
-
-# ocam2:
-#   class:             'CCD'
-#   simul_params_ref:  'main'
-#   size:              [120,120]             # Total detector size
-#   dt:                0.00025                # [s] Integration time (2000 fps)
-#   bandw:             400                   # [nm]
-#   photon_noise:      true                  # Enable photon noise
-#   readout_noise:     true                  # Enable read noise
-#   excess_noise:      true                  # Enable excess noise
-#   readout_level:     0.5                   # [e-/pix/frame] Read noise level
-#   emccd_gain:        400                   # EMCCD gain factor
-#   quantum_eff:       0.2                   # QE x transmission
-#   inputs:
-#     in_i:            'zwfs.out_i' 
-#   outputs:           ['out_pixels']
-
-# zwfs_slopes:
-#   class:             'ZwfsSlopec'
-#   # sn_object:         'z1.5wfs_48x48_sn'
-#   pup_diam:          48.0
-#   ccd_size:          120
-#   obsratio:          0.0 #14
-#   inputs:
-#     in_pixels:        'ocam2.out_pixels'
-#   outputs:           ['out_slopes']
-
-# zwfs_modalrec:
-#   class:             'Modalrec'
-#   recmat_object:     'z1.5wfs_48x48_1300modes_rec'        
-#   inputs:
-#     in_slopes:       'zwfs_slopes.out_slopes'
-#   outputs:           ['out_modes']
-
 ############################ Control ################################
-# bootstrap:
-#   class:              'ScheduleGenerator'
-#   scheduled_values:   [[1.0, 0.0],
-#                       [0.7,0.5]] # Nrows x Ncols, times x gains
-#   modes_per_group:    [1200,1200] # Ncols
-#   scheduled_times:    [0.1] # Nrows-1
-
-# concat_wfs_modes:
-#   class:      'BaseOperation'
-#   concat: true
+# lo_mod_pyr_modes:
+#   class: 'BaseSlicer'
+#   slice_args: [0,300]
 #   inputs:
-#     in_value1:  'pyr_modalrec.out_modes'
-#     in_value2:  'pyr0_modalrec.out_modes' #'zwfs_modalrec.out_modes'
+#     in_value: 'pyr_modalrec.out_modes'
 #   outputs: ['out_value']
 
-# filter:
-#   class:             'Integrator'
-#   simul_params_ref:  'main'
-#   delay:             1                     # 1 frame delay (realistic)
-#   int_gain:          [0.4]
-#   n_modes:           [1300]                 # Number of modes to control
+# lo_filter:
+#   class:                    'MultirateComplementaryFilter'
+#   simul_params_ref:         'main'
+#   delay:                    1             # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object:  'iirfilter_300modes'  #'iir_opt_1300modes' #
+#   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
+#   N_list:                   [4]           # ffast/slow frequency ratio (list)
+#   g_track:                  0.7           # gain
 #   inputs:
-#     delta_comm:      'pyr_modalrec.out_modes' #
-#   outputs:           ['out_comm']
+#     in_ys: 'lo_mod_pyr_modes.out_value'
+#     in_yf: 'pyr0_modalrec.out_modes'
+#     gain_mod:  'gain_ramp.output'
+#   outputs:  ['out_comm']
 
-slice_modes:
-  class: 'BaseSlicer'
-  slice_args: [0,299]
-  inputs:
-    in_value: 'pyr_modalrec.out_modes'
-  outputs: ['out_value']
+# gain_ramp:
+#   class:             'ScheduleGenerator'
+#   scheduled_values: [[0.2],[0.4]]
+#   scheduled_times: [0.001]
+#   modes_per_group: [300]
 
-filter:
-  class:                    'MultirateComplementaryFilter'
-  simul_params_ref:         'main'
-  delay:                    1             # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes'  #'iir_opt_1300modes' #
-  weights:                  [0.5,0.5]     # weigths for fast and slow measurements
-  N_list:                   [4]           # ffast/slow frequency ratio (list)
-  g_track:                  0.9           # gain
-  inputs:
-    in_ys: 'pyr_modalrec.out_modes'
-    in_yf: 'pyr0_modalrec.out_modes' #'zwfs_modalrec.out_modes'  #
-    gain_mod:                 'gain_ramp.output'
-  outputs:  ['out_comm']
-
-# filter:
+# ho_filter:
 #   class:                'IirFilter'
 #   simul_params_ref:     'main'
 #   delay:                1 # Total temporal delay in time steps is this value +1
 #   iir_filter_data_object:  'iirfilter_1300modes'
 #   inputs:
-#     delta_comm: 'pyr0_modalrec.out_modes' #'concat_wfs_modes.out_value' 
-#     gain_mod: 'gain_ramp.output'
+#     delta_comm: 'pyr_modalrec.out_modes' # 
 #   outputs:  ['out_comm']
 
+# ho_comm:
+#   class: 'BaseSlicer'
+#   slice_args: [301,1300]
+#   inputs:
+#     in_value: 'ho_filter.out_comm'
+#   outputs: ['out_value']
 
-gain_ramp:
-  class:             'ScheduleGenerator'
-  scheduled_values: [[0.2],[0.45]]
-  scheduled_times: [0.01]
-  modes_per_group: [1300]
+# concat_comms:
+#   class:      'BaseOperation'
+#   concat: true
+#   inputs:
+#     in_value1:  'lo_filter.out_comm'
+#     in_value2:  'ho_comm.out_value'
+#   outputs: ['out_value']
+
+filter:
+  class:                'IirFilter'
+  simul_params_ref:     'main'
+  delay:                1 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_300modes'
+  inputs:
+    delta_comm: 'pyr0_modalrec.out_modes' # 
+  outputs:  ['out_comm']
 
 dm:
   class:             'DM'
@@ -282,7 +233,7 @@ dm:
   nmodes:            1300             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'filter.out_comm'
+    in_command:      'ho_filter.out_comm' #'filter.out_comm' #'concat_comms.out_value' #
   outputs:           ['out_layer']
 
 
@@ -344,7 +295,8 @@ data_store:
                   'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
-                  'dm_cmd-filter.out_comm',
+                  # 'dm_ho_cmd-ho_filter.out_comm',
+                  # 'dm_cmd-concat_comms.out_value',
                   'pyr_modes-pyr0_modalrec.out_modes',
                   # 'zwfs_modes-zwfs_modalrec.out_modes',
                   # 'ccd1-cred1.out_pixels',
