@@ -75,6 +75,7 @@ class CalibManager():
             'time_hist': 'data/',
             'Source': 'data/',
             'SpatioTempArray': 'arrays/',
+            'cube': 'arrays/',
             'SubapData': 'subapdata/',
             'vibrations': 'vibrations/',
             'Layer': 'layers/',

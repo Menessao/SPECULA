@@ -5,8 +5,7 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       300                         # Number of DM actuators
-  amp:          10 
-  # constant_amp: true
+  amp:          15
   outputs:   ['output']
 
 # Interaction matrix calibrator
@@ -49,5 +48,5 @@ cred10_override:
   excess_noise:   false                   # No excess noise
 
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', 'pyr', 'cred1', 'pyr_slopes', #'source_science',
-        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop','pyr_modalrec', 'pyr0_modalrec'] #, 'bootstrap', 'concat_wfs_modes'
+remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', 'pyr', 'cred1', 'pyr_slopes', 'ho_comm', #'source_science',
+        'dm_mode_res','ho_filter','lo_filter','psf', 'coro_psf','concat_comms', 'ef_prop','pyr_modalrec', 'pyr0_modalrec', 'lo_mod_pyr_modes'] #, 'bootstrap', 'concat_wfs_modes'

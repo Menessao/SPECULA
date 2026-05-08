@@ -44,11 +44,11 @@ def guidos_standard_iir(n_filters:int, excluded_filters:int,
     t = create_stepped_t(n_filters,excluded_filters=excluded_filters)
     t_powered = t**power_exponent 
 
-    # end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
-    # end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
+    end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
+    end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
 
-    # end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
-    # end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
+    end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
+    end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
 
     zero_values = start_zero[0] + (end_zero[0] - start_zero[0]) * t_powered
     zero2_values = start_zero[1] + (end_zero[1] - start_zero[1]) * t_powered
@@ -69,14 +69,6 @@ def guidos_standard_iir(n_filters:int, excluded_filters:int,
 
     num_array *= iir_gain
     return num_array, den_array
-
-
-# def opt_iir(V:float, fs:float, D:float):
-#     fz = fs/20
-#     fp = 0.3 * V/D * (n+1)
-#     z = (2*np.pi*np.array([0.95*fz, fz, 1.05*fz])).tolist()
-#     p = (2*np.pi*np.array([0.95*fp, fp, 1.05*fp])).tolist()
-
 
 
 def plot_iir_tfs(filter_data_complex:IirFilterData, fs:float, n_filters:int, delay_frames:float=2.0):
@@ -116,13 +108,13 @@ if __name__ == "__main__":
 
     fs = 1000  # sampling frequency
     n_filters = 300
-    excluded_filters = 2
+    excluded_filters = 1
     make_tiled = False
     file_name = os.path.join(path,f'iirfilter_{n_filters}modes.fits')
 
     num_array,den_array=guidos_standard_iir(n_filters=n_filters,
                                             excluded_filters=excluded_filters,
-                                            power_exponent=1.0)
+                                            power_exponent=2.0)
     
     # b,a=design_f3_controller(fs=2000,f1=10,f2=300,N=2)
 

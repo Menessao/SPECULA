@@ -165,64 +165,67 @@ pyr0_modalrec:
   outputs:           ['out_modes']
 
 ############################ Control ################################
-# lo_mod_pyr_modes:
-#   class: 'BaseSlicer'
-#   slice_args: [0,300]
-#   inputs:
-#     in_value: 'pyr_modalrec.out_modes'
-#   outputs: ['out_value']
+lo_mod_pyr_modes:
+  class: 'BaseSlicer'
+  slice_args: [0,300]
+  inputs:
+    in_value: 'pyr_modalrec.out_modes'
+  outputs: ['out_value']
 
-# lo_filter:
-#   class:                    'MultirateComplementaryFilter'
-#   simul_params_ref:         'main'
-#   delay:                    1             # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_300modes'  #'iir_opt_1300modes' #
-#   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
-#   N_list:                   [4]           # ffast/slow frequency ratio (list)
-#   g_track:                  0.7           # gain
-#   inputs:
-#     in_ys: 'lo_mod_pyr_modes.out_value'
-#     in_yf: 'pyr0_modalrec.out_modes'
-#     gain_mod:  'gain_ramp.output'
-#   outputs:  ['out_comm']
+lo_filter:
+  class:                    'MultirateComplementaryFilter'
+  simul_params_ref:         'main'
+  delay:                    1             # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_300modes'  #'iir_opt_1300modes' #
+  weights:                  [0.5,0.5]     # weigths for fast and slow measurements
+  N_list:                   [4]           # ffast/slow frequency ratio (list)
+  g_track:                  0.9           # gain
+  inputs:
+    in_ys: 'lo_mod_pyr_modes.out_value'
+    in_yf: 'pyr0_modalrec.out_modes'
+    gain_mod:  'gain_ramp.output'
+  outputs:  ['out_comm']
 
-# gain_ramp:
-#   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.2],[0.4]]
-#   scheduled_times: [0.001]
-#   modes_per_group: [300]
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.2],[0.5]]
+  scheduled_times: [0.001]
+  modes_per_group: [300]
 
-# ho_filter:
-#   class:                'IirFilter'
-#   simul_params_ref:     'main'
-#   delay:                1 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_1300modes'
-#   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes' # 
-#   outputs:  ['out_comm']
-
-# ho_comm:
-#   class: 'BaseSlicer'
-#   slice_args: [301,1300]
-#   inputs:
-#     in_value: 'ho_filter.out_comm'
-#   outputs: ['out_value']
-
-# concat_comms:
-#   class:      'BaseOperation'
-#   concat: true
-#   inputs:
-#     in_value1:  'lo_filter.out_comm'
-#     in_value2:  'ho_comm.out_value'
-#   outputs: ['out_value']
-
-filter:
+ho_filter:
   class:                'IirFilter'
   simul_params_ref:     'main'
   delay:                1 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_1300modes'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes' # 
+  outputs:  ['out_comm']
+
+ho_comm:
+  class: 'BaseSlicer'
+  slice_args: [301,1300]
+  inputs:
+    in_value: 'ho_filter.out_comm'
+  outputs: ['out_value']
+
+concat_comms:
+  class:      'BaseOperation'
+  concat: true
+  inputs:
+    in_value1:  'filter.out_comm' #'lo_filter.out_comm'
+    in_value2:  'ho_comm.out_value'
+  outputs: ['out_value']
+
+filter:
+  class:                'IirFilter' #'Integrator'
+  simul_params_ref:     'main'
+  delay:                1 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_300modes'
+  # int_gain: [0.5]
+  # n_modes: [300]
   inputs:
     delta_comm: 'pyr0_modalrec.out_modes' # 
+    gain_mod: 'gain_ramp.output'
   outputs:  ['out_comm']
 
 dm:
@@ -230,10 +233,10 @@ dm:
   simul_params_ref:  'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
   m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
-  nmodes:            1300             # Number of controlled modes
+  nmodes:            300             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'ho_filter.out_comm' #'filter.out_comm' #'concat_comms.out_value' #
+    in_command:      'concat_comms.out_value' #'filter.out_comm' # #'ho_filter.out_comm' 
   outputs:           ['out_layer']
 
 

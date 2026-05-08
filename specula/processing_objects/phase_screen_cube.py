@@ -128,6 +128,13 @@ class PhaseScreenCube(BaseProcessingObj):
 
         self.ef_interpolator.interpolate()
 
+    def check_ready(self, t):
+        super().check_ready(t)
+        if not self.inputs_changed:
+            self.inputs_changed = True
+            self.prepare_trigger(t)
+        return self.inputs_changed
+
 
     @classmethod
     def input_names(cls):
