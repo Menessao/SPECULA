@@ -103,14 +103,14 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'        
-  # sn_object:            'pyr3.0_40x40_sn'
+  sn_object:            'pyr3.0_40x40_sn'
   inputs:
     in_pixels:        'ocam.out_pixels'
   outputs:           ['out_slopes']
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr3.0_40x40_500modes_rec'     
+  recmat_object:     'pyr3.0_40x40_600modes_rec'     
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -129,7 +129,7 @@ filter:
   class:                'IirFilter'
   simul_params_ref:     'main'
   delay:                2 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_500modes'
+  iir_filter_data_object:  'iirfilter_600modes'
   inputs:
     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
     gain_mod: 'gain_ramp.output'
@@ -139,7 +139,7 @@ gain_ramp:
   class:             'ScheduleGenerator'
   scheduled_values: [[0.2],[0.7]]
   scheduled_times: [0.01]
-  modes_per_group: [500]
+  modes_per_group: [600]
 
 dm:
   class:             'DM'
@@ -147,7 +147,7 @@ dm:
   ifunc_object:      'asm_v30dx_ifunc'      # Our computed influence functions
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            500
+  nmodes:            600
   inputs:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']

@@ -13,7 +13,7 @@ main:
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          1.8                  # [arcsec]
+  constant:          1.5                  # [arcsec]
 
 wind_speed:
   class:             'WaveGenerator'
@@ -116,9 +116,9 @@ filter: # Use your favourite filter
   class:             'Integrator'
   simul_params_ref:  'main'
   delay:             1                      # Temporal delay in time steps
-  int_gain:          [0.7,0.65,0.6] #[0.4] #
-  ff:                [0.995,0.95,0.9]
-  n_modes:           [2,200,198] #[400] #
+  int_gain:          [0.6] #
+  ff:                [1.0]
+  n_modes:           [400] #
   inputs:
       delta_comm: 'pyr_modalrec.out_modes'
 
@@ -143,7 +143,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        0.5                  # Start PSF integration after 500ms
-  # verbose: false
+  verbose: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
@@ -169,13 +169,13 @@ data_store:
   inputs:
     input_list: [
                   'sr-psf.out_sr',
-                  'psf-psf.out_psf',
-                  'psf_std-psf.out_std_psf',
+                  # 'psf-psf.out_psf',
+                  # 'psf_std-psf.out_std_psf',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',
                   'pyr_modes-pyr_modalrec.out_modes',
-                  'ccd-ocam.out_pixels',
+                  # 'ccd-ocam.out_pixels',
                   ]
 
 # remove: ['']

@@ -21,11 +21,12 @@ def save_spatiotemp_array(dir_path:str, phs_file:str, tag:str, dt:float):
     return fname
     
 if __name__ == "__main__":
-    dir_path = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
-    tag = '20230507_030749_res_OPD_fit'
-    phs_file = '/raid1/mmenessini/calibration/SOUL/KLv30dx/data/20230507_030749_res_OPD_fit.fits'
+    tn = '20230507_030929'
     dt = 0.000588
-    save_spatiotemp_array(dir_path=dir_path, phs_file=phs_file, tag=tag, dt=dt)
-    tag = '20230507_030749_res_OPD'
-    phs_file = '/raid1/mmenessini/calibration/SOUL/KLv30dx/data/20230507_030749_res_OPD.fits'
+    dir_path = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
+    # tag = tn+'_res_OPD_fit'
+    # phs_file = '/raid1/mmenessini/calibration/SOUL/KLv30dx/data/'+tn+'_res_OPD_fit.fits'
+    # save_spatiotemp_array(dir_path=dir_path, phs_file=phs_file, tag=tag, dt=dt)
+    tag = tn+'_res_OPD'
+    phs_file = '/raid1/mmenessini/calibration/SOUL/KLv30dx/data/'+tn+'_res_OPD.fits'
     save_spatiotemp_array(dir_path=dir_path, phs_file=phs_file, tag=tag, dt=dt)

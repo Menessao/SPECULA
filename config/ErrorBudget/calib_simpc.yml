@@ -4,8 +4,8 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       660                         # Number of DM actuators
-  amp:          10  
+  nmodes:       500                         # Number of DM actuators
+  amp:          50  
   ncycles:       40
   repeat_full_sequence: true
   # constant_amp: true
@@ -14,8 +14,8 @@ pushpull:
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    660                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_s1.4_c0.9_im'            # Output IM filename
+  nmodes:    500                         # Number of modes to calibrate
+  im_tag:    'pyr3.0_s1.0_c20260506_092825_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -23,13 +23,13 @@ pyr_im_calibrator:
 
 # Override main simulation parameters
 main_override:
-  total_time: 31.0646                # 660 modes × 2 (push+pull) × 0.000588s x 40 cycles
+  total_time: 23.52                # 500 modes × 2 (push+pull) × 0.000588s x 40 cycles
 
 ################################## ATMO RESIDUAL #####################################
 seeing_random:
   class:             'RandomGenerator'
   amp:               0.0                 # Variation amplitude [arcsec]
-  constant:          1.4                 # Mean seeing [arcsec]
+  constant:          1.0                 # Mean seeing [arcsec]
   distribution:      'UNIFORM'           # 
   outputs: ['output']
 
@@ -39,7 +39,7 @@ atmo_random:
   simul_params_ref:     'main'
   L0:                   25               # [m] Outer scale
   source_dict_ref:      ['source_ngs']
-  # update_interval:      1320                 # Update after push-pull of all modes
+  update_interval:      1000                 # Update after push-pull of all modes
   inputs:
     seeing:             'seeing_random.output'
     pupilstop:          'pupilstop'
@@ -48,15 +48,15 @@ atmo_random:
 # Modal decomposition of atmospheric phase
 modal_analysis_random:
   class: 'ModalAnalysis'
-  ifunc_inv_object: 'asm_kl_inv'
-  nmodes: 720
+  ifunc_inv_object: 'asm_v30dx_kl_inv'
+  nmodes: 648
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
 
 scale_random:
   class:  'BaseOperation'
-  constant_mul_data: 'correction_vector_600modes_c0.99-0.20' 
+  constant_mul_data: 'correction_vector_20260506_092825' 
   inputs:
     in_value1: 'modal_analysis_random.out_modes'
   outputs: ['out_value']
@@ -65,9 +65,8 @@ scale_random:
 dm_random:
   class: 'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_ifunc'      # Our computed influence functions
-  m2c_object:        'asm_m2c'        # Modal-to-command matrix
-  # nmodes:            660            # Number of controlled modes
+  ifunc_object:      'asm_v30dx_ifunc'      # Our computed influence functions
+  m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
     in_command: 'scale_random.out_value'
@@ -92,7 +91,7 @@ ef_mode:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 660                            # Use all modes for calibration
+  nmodes: 500                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
@@ -108,11 +107,11 @@ ocam_override:
 
 atmo_pc_modes:
   class: 'ModalAnalysis'
-  ifunc_inv_object: 'asm_kl_inv'
+  ifunc_inv_object: 'asm_v30dx_kl_inv'
   inputs:
     in_ef: 'atmo_pc.out_ef'
   outputs: ['out_modes']
 
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'source_science',
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', 'data_store', #'source_science',
         'dm_mode_res','filter','psf', 'ef_prop', 'prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'

@@ -4,17 +4,17 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       10                         # Number of DM actuators
-  amp:          10  
-  ncycles:      40
+  nmodes:       1                         # Number of DM actuators
+  amp:          0  
+  ncycles:      2000
   repeat_full_sequence: true
   outputs:   ['output']
 
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    10                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_10modes_resOPD'            # Output IM filename
+  nmodes:    1                         # Number of modes to calibrate
+  im_tag:    'pyr3.0_030749_resOPD'            # Output IM filename
   overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -22,37 +22,59 @@ pyr_im_calibrator:
 
 # Override main simulation parameters
 main_override:
-  total_time: 0.4704                # 10 modes × 2 (push+pull) × 0.000588s x 40 cycles
+  total_time: 2.352                # 10 modes × 2 (push+pull) × 0.000588s x 40 cycles
 
 atmo_res:
   class: 'PhaseScreenCube'
   simul_params_ref: 'main'
   cube_object:     '20230507_030749_res_OPD'
   pixel_scale:       0.042639
+  source_dict_ref:   ['source_ngs']
   inputs:
     pupilstop: 'pupilstop'
-  outputs: ['out_layer','out_ef']
+  outputs: ['out_source_ngs_layer','out_source_ngs_ef']
 
 atmo_pc:
   class: 'ElectricFieldCombinator'
   inputs:
-    in_ef1: 'atmo_res.out_ef'    # Turbulence
+    in_ef1: 'atmo_res.out_source_ngs_ef'    # Turbulence
     in_ef2: 'dm.out_layer'              # Partial correction
   outputs: ['out_ef']
 
+# atmo_pc:
+#   class:             'AtmoPropagation'
+#   simul_params_ref:  'main'
+#   source_dict_ref:   ['source_ngs'] 
+#   inputs:
+#     common_layer_list: ['pupilstop','dm.out_layer']       # Pupil
+#   outputs:           ['out_source_ngs_ef'] 
 
-######################################################################################
 
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 10                            # Use all modes for calibration
+  nmodes: 1                            # Use all modes for calibration
   inputs:
-    in_command: 'pushpull.output'         # Connect to push-pull generator
+    in_command: 'pushpull.output'         # Connect to push-pull generator 'dm_pc_command.out_value' #
 
 pyr_override:
   inputs: 
     in_ef: 'atmo_pc.out_ef'
+
+# atmo_dm_modes:
+#   class:            'ModalAnalysis'
+#   ifunc_inv_object: 'asm_v30dx_kl_inv'
+#   inputs:
+#     in_ef: ['atmo_res.out_source_ngs_ef']
+#   outputs: ['out_modes']
+
+# dm_pc_command:
+#   class:  'BaseOperation'
+#   sum: true
+#   inputs:
+#     in_value1: 'atmo_dm_modes.out_modes'
+#     in_value2: 'pushpull.output'
+#   outputs: ['out_value']
 
 # Disable noise for clean measurements
 ocam_override:

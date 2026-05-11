@@ -135,6 +135,8 @@ class PhaseScreenCube(BaseProcessingObj):
             self.prepare_trigger(t)
         return self.inputs_changed
 
+    def check_output_names(self): # Skip static output_names validation for dynamic outputs
+        pass
 
     @classmethod
     def input_names(cls):
