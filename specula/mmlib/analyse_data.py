@@ -136,6 +136,7 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         plt.plot(x,res_rms, '-.', label='AO residuals')
 
         corr = res_rms/turb_rms
+        corr = 1-np.minimum(corr,1.0)
         dir_path = os.path.join(calib_dir, 'data')
         os.makedirs(dir_path, exist_ok=True)
         fname = os.path.join(dir_path,f'correction_vector_{tn}.fits')
@@ -237,7 +238,7 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         if np.shape(pol_modes)[1] >= 1000:
             ho_mode_ids = [50,100,200,500,1000]
         else:
-            ho_mode_ids = [50,100,200,300,400]
+            ho_mode_ids = [50,100,200,300,350]
         plt.subplot(2,2,2)
         for k,mode in enumerate(ho_mode_ids):
             plt.loglog(f,turb_psd[mode,:]/np.min(turb_psd[mode,:][f<flims[-1]]),'-.',c=f'C{k}',label=f'Mode {mode:1.0f}')

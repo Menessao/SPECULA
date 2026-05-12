@@ -120,8 +120,19 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float, r0=0.1, L0=2
         ifunc_inv=kl_basis_inv,
         mask=(1-pmask).astype(np.uint8)
     )
-    ifunc_inv_obj.save(base_inv_filename, overwrite=False)
+    ifunc_inv_obj.save(base_inv_filename, overwrite=True)
     print("OK: " + base_inv_filename + f" (inverse modal base: {kl_basis_inv.shape})")
+
+    # Save actual base inv
+    kl = influence_functions @ m2c
+    kl_inv = np.linalg.pinv(kl.T)
+    base_inv_filename = calib_manager.filename('ifunc', tag+'_ifunc_inv')
+    ifunc_inv_obj = IFuncInv(
+        ifunc_inv=kl_inv,
+        mask=(1-pmask).astype(np.uint8)
+    )
+    ifunc_inv_obj.save(base_inv_filename, overwrite=True)
+    print("OK: " + base_inv_filename + f" (inverse modal base: {kl_inv.shape})")
 
     fname = os.path.join(root_dir, 'pupilstop', tag+f'_{dpix:1.0f}pixels.fits')
     pupil_mask.save(fname)

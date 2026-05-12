@@ -10,15 +10,15 @@ pyr_pupdata:
   inputs:
     in_i: 'pyr.out_i'
 
-clean_aperture:
-  class:             'Pupilstop'
-  simul_params_ref:   'main'
-  mask_diam:         1.0     
-  obs_diam:          0.3
+# clean_aperture:
+#   class:             'Pupilstop'
+#   simul_params_ref:   'main'
+#   mask_diam:         1.0     
+#   obs_diam:          0.3
 
 prop_override:
   inputs:
-    common_layer_list: ['clean_aperture']       # Pupil
+    common_layer_list: ['pupilstop']       # Pupil
 
 pyr_override:
   mod_amp:           10.0   # Modulation radius (in lambda/D units)
@@ -30,5 +30,5 @@ main_override:
 
 # Remove unnecessary components to avoid issues and speed up the calibration
 remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'pyr_slopes', 'dm',
-         'filter', 'ef_prop', 'dm_mode_res', 'ocam', 'pupilstop',
+         'filter', 'ef_prop', 'dm_mode_res', 'ocam', # 'pupilstop',
            'data_store', 'psf', 'pyr_modalrec', 'atmo_modes']

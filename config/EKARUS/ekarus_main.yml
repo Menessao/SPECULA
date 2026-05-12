@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/EKARUS/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       120                   # Must match influence function computation
   pixel_pitch:       0.015167              # [m] Pitch of the pupil phase array (1.82m/120pix)
-  total_time:        2.0                   # [s] Total simulation running time
+  total_time:        1.0                   # [s] Total simulation running time
   time_step:         0.001                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -34,7 +34,7 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'copernico_pupil_120pixels' 
+  tag:               'DM468_120pixels' #'copernico_pupil_120pixels' 
 
 # Multi-layer atmospheric model
 atmo:
@@ -99,7 +99,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'           
-  # sn_object:              'pyr5.0_40x40_sn' # Commented during calibration
+  sn_object:              'pyr5.0_40x40_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
     in_pixels:        'ocam.out_pixels'
@@ -107,7 +107,7 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr5.0_40x40_400modes_rec'        
+  recmat_object:     'pyr5.0_40x40_384modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -116,19 +116,19 @@ filter: # Use your favourite filter
   class:             'Integrator'
   simul_params_ref:  'main'
   delay:             1                      # Temporal delay in time steps
-  int_gain:          [0.6] #
-  ff:                [1.0]
-  n_modes:           [400] #
+  int_gain:          [0.7,0.6,0.0] #
+  ff:                [1.0,1.0,0.99]
+  n_modes:           [2,200,182] #
   inputs:
       delta_comm: 'pyr_modalrec.out_modes'
 
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'dm468_ifunc'      # Influence functions
-  m2c_object:        'dm468_m2c'        # Modal-to-command matrix
+  ifunc_object:      'DM468_ifunc' #'dm468_ifunc'      # Influence functions
+  m2c_object:        'DM468_m2c' #'dm468_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            400
+  nmodes:            384
   inputs:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']

@@ -15,8 +15,8 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_s1.0_c20260506_092825_nofit_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  im_tag:    'pyr3.0_s1.0_c20260506_092825_zerofit_im'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -71,7 +71,7 @@ atmo_res:
 
 pushpull_in_pc:
   class:  'BaseOperation'
-  sub: true
+  sum: true
   inputs:
     in_value1: 'atmo_res.out_value'
     in_value2: 'pushpull.output'
@@ -99,7 +99,7 @@ dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
   nmodes: 500                            # Use all modes for calibration
   inputs:
-    in_command: 'pushpull_in_pc.output'         # Connect to push-pull generator
+    in_command: 'pushpull_in_pc.out_value'         # Connect to push-pull generator
 
 pyr_override:
   inputs: 
@@ -115,9 +115,14 @@ atmo_pc_modes:
   class: 'ModalAnalysis'
   ifunc_inv_object: 'asm_v30dx_kl_inv'
   inputs:
-    in_ef: 'atmo_pc.out_ef'
+    in_ef: 'ef_mode.out_ef'
   outputs: ['out_modes']
 
+
+data_store_override:
+  inputs:
+    input_list: ['atmo_res-atmo_pc_modes.out_modes']
+
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', 'data_store', #'source_science',
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store', #'source_science',
         'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'

@@ -15,8 +15,8 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_s1.0_c20260506_092825_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  im_tag:    'pyr3.0_s1.2_c20260506_092825_im'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -29,7 +29,7 @@ main_override:
 seeing_random:
   class:             'RandomGenerator'
   amp:               0.0                 # Variation amplitude [arcsec]
-  constant:          1.0                 # Mean seeing [arcsec]
+  constant:          1.2                 # Mean seeing [arcsec]
   distribution:      'UNIFORM'           # 
   outputs: ['output']
 
@@ -48,7 +48,7 @@ atmo_random:
 # Modal decomposition of atmospheric phase
 modal_analysis_random:
   class: 'ModalAnalysis'
-  ifunc_inv_object: 'asm_v30dx_kl_inv'
+  ifunc_inv_object: 'asm_v30dx_ifunc_inv'
   nmodes: 648
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
@@ -112,6 +112,10 @@ atmo_pc_modes:
     in_ef: 'atmo_pc.out_ef'
   outputs: ['out_modes']
 
+data_store_override:
+  inputs:
+    input_list: ['atmo_res-atmo_pc_modes.out_modes']
+
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', 'data_store', #'source_science',
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store', #'source_science',
         'dm_mode_res','filter','psf', 'ef_prop', 'prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'

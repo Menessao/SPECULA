@@ -5,7 +5,7 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       648                        # Number of DM actuators
-  amp:          15
+  amp:          50
   # constant_amp: false
   outputs:   ['output']
 
