@@ -103,18 +103,19 @@ if __name__ == "__main__":
 
     root_dir = '/raid1/mmenessini/calibration/XAO'
     root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
+    root_dir = '/raid1/mmenessini/calibration/EKARUS'
     path = os.path.join(root_dir,'filter')
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 600
-    excluded_filters = 2
+    n_filters = 240
+    excluded_filters = 3
     make_tiled = False
     file_name = os.path.join(path,f'iirfilter_{n_filters}modes.fits')
 
     num_array,den_array=guidos_standard_iir(n_filters=n_filters,
                                             excluded_filters=excluded_filters,
-                                            power_exponent=2.0)
+                                            power_exponent=1.0)
     
     # b,a=design_f3_controller(fs=2000,f1=10,f2=300,N=2)
 

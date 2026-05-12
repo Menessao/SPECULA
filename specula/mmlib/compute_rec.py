@@ -84,7 +84,7 @@ if __name__ == "__main__":
     # rec_tag = f'pyr3.0_40x40_{Nmodes}modes'
     # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    Nmodes = 384
+    Nmodes = 240
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
     im_tag = 'pyr5.0_40x40_im'
     rec_tag = f'pyr5.0_40x40_{Nmodes}modes'

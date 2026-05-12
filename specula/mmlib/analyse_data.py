@@ -237,8 +237,10 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
 
         if np.shape(pol_modes)[1] >= 1000:
             ho_mode_ids = [50,100,200,500,1000]
+        elif np.shape(pol_modes)[1] >= 400:
+            ho_mode_ids = [50,100,200,300,400]
         else:
-            ho_mode_ids = [50,100,200,300,350]
+            ho_mode_ids = [50,100,200,210,220]
         plt.subplot(2,2,2)
         for k,mode in enumerate(ho_mode_ids):
             plt.loglog(f,turb_psd[mode,:]/np.min(turb_psd[mode,:][f<flims[-1]]),'-.',c=f'C{k}',label=f'Mode {mode:1.0f}')

@@ -64,7 +64,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
         L0=L0,
         zern_modes=zern_modes,
         oversampling=oversampling,
-        if_max_condition_number=None, #1e+4,
+        if_max_condition_number=1e+3, #None, #1e+4,
         xp=specula.xp,
         dtype=specula.xp.float32
     )

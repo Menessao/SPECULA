@@ -107,20 +107,36 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr5.0_40x40_384modes_rec'        
+  recmat_object:     'pyr5.0_40x40_240modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-filter: # Use your favourite filter
-  class:             'Integrator'
-  simul_params_ref:  'main'
-  delay:             1                      # Temporal delay in time steps
-  int_gain:          [0.7,0.6,0.0] #
-  ff:                [1.0,1.0,0.99]
-  n_modes:           [2,200,182] #
+# filter: 
+#   class:             'Integrator'
+#   simul_params_ref:  'main'
+#   delay:             1                      # Temporal delay in time steps
+#   int_gain:          [0.7,0.6,0.0] #
+#   ff:                [1.0,1.0,0.99]
+#   n_modes:           [2,200,38] #
+#   inputs:
+#       delta_comm: 'pyr_modalrec.out_modes'
+
+filter:
+  class:                'IirFilter'
+  simul_params_ref:     'main'
+  delay:                1 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_240modes'
   inputs:
-      delta_comm: 'pyr_modalrec.out_modes'
+    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+    gain_mod: 'gain_ramp.output'
+  outputs:  ['out_comm']
+
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.4],[0.9]]
+  scheduled_times: [0.01]
+  modes_per_group: [240]
 
 dm:
   class:             'DM'
@@ -128,7 +144,7 @@ dm:
   ifunc_object:      'DM468_ifunc' #'dm468_ifunc'      # Influence functions
   m2c_object:        'DM468_m2c' #'dm468_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            384
+  nmodes:            240
   inputs:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']
@@ -150,14 +166,14 @@ psf:
 
 dm_mode_res:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'dm468_kl_inv'
+  ifunc_inv_object: 'DM468_kl_inv'
   inputs:
     in_ef: ['ef_prop.out_ef']
   outputs: ['out_modes']
 
 atmo_modes:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'dm468_kl_inv'
+  ifunc_inv_object: 'DM468_kl_inv'
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
   outputs: ['out_modes']
