@@ -17,7 +17,15 @@ from specula.lib.toccd import toccd
 
 # from specula import cpuArray
 
-def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:int, D:float, r0=0.1, L0=25):
+
+def regularize_mat(mat, thr:float=1e-2):
+    U,S,Vt = specula.xp.linalg.svd(mat,full_matrices=False)
+    Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
+    mat = (U * Sreg) @ Vt
+    print(f'Regularized {specula.xp.sum(S<thr*S.max()):1.0f} eigenvalues')
+    return mat
+
+def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:int, D:float, r0=0.03, L0=25):
     
     iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_iffs.fits')))
     mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
@@ -44,6 +52,10 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     # fits.writeto(os.path.join(root_dir,'mask','pup_mask.fits'),cpuArray(bin_mask.astype(float)),overwrite=True)
     # print(bin_mask.shape,specula.xp.sum(1-bin_mask))
 
+
+    # Regularized influence functions
+    iffs = regularize_mat(iffs, thr=1e-2)  # was 2e/4
+
     IF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_pup_mask))])
     unobsIF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))])
 
@@ -53,7 +65,11 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
         IF[j,:] = bin_if[~bin_pup_mask]
         unobsIF[j,:] = bin_if[~bin_mask]
 
-    zern_modes = 0
+    
+    # Regularized influence functions
+    IF = regularize_mat(IF, thr=1e-3)
+
+    zern_modes = 2
     oversampling = 4
     
     kl_basis, m2c, _ = make_modal_base_from_ifs_fft(
@@ -89,12 +105,8 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     #     aux[~bin_mask] = kl_basis_copy[j,:]
     #     kl_basis[j,:] = aux[~bin_pup_mask]
 
-    # Regularized kl_basis
-    thr = 1e-2
-    U,S,Vt = specula.xp.linalg.svd(kl_basis,full_matrices=False)
-    Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
-    kl_basis = (U * Sreg) @ Vt
-    print(f'Regularized {specula.xp.sum(S<thr*S.max()):1.0f} eigenvalues')
+    kl_basis = regularize_mat(kl_basis, thr=1e-2)
+    # m2c = regularize_mat(m2c, thr=1e-2)
 
     kl_basis_inv = specula.xp.linalg.pinv(kl_basis)
 
