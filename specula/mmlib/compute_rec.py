@@ -56,24 +56,27 @@ def save_rec(root_dir:str, rec, rec_tag:str, overwrite:bool=False):
     print('Reconstructor saved as '+rec_tag)
 
 
-# def compute_pyr_rec(Nmodes:int, im_tag:str='pyr_1821modes', compute_ml:bool=False, frame_tag = '', cov_tag=None):
-#     if compute_ml is False:
-#         rec_tag = f'pyr_{Nmodes:1.0f}modes'
-#         rec = compute_rec(im_tag=im_tag, Nmodes=Nmodes)
-#     else:
-#         rec_tag = f'pyr_{Nmodes:1.0f}modes_ml'
-#         rec = compute_ml_rec(im_tag=im_tag, Nmodes=Nmodes, frame_tag=frame_tag, cov_tag=cov_tag, RON=0.5, isPyr=True)
-#     return rec, rec_tag
+def rec_ron_cov(rec,frame,mask,flux=None):
+    if flux is None:
+        flux = np.sum(frame)
+    norm = np.mean(frame[mask.astype(bool)])
+    norm_rec = rec / (norm / flux)
+    rec_cov = norm_rec @ norm_rec.T
+    return np.diag(rec_cov)
 
+def rec_phot_cov(rec,frame,mask,sn,flux=None):
+    if flux is None:
+        flux = np.sum(frame)
+    norm = np.mean(frame[mask.astype(bool)])
+    phot_noise = np.diag(sn/ (norm / flux))
+    rec_cov = rec @ phot_noise @ rec.T
+    return np.diag(rec_cov)
 
-# def compute_zwfs_rec(Nmodes:int, im_tag:str='zwfs_1821modes', compute_ml:bool=False, frame_tag = '', cov_tag=None):
-#     if compute_ml is False:
-#         rec_tag = f'zwfs_{Nmodes:1.0f}modes'
-#         rec = compute_rec(im_tag=im_tag, Nmodes=Nmodes)
-#     else:
-#         rec_tag = f'zwfs_{Nmodes:1.0f}modes_ml'
-#         rec = compute_ml_rec(im_tag=im_tag, Nmodes=Nmodes, frame_tag=frame_tag, cov_tag=cov_tag, RON=0.5, isPyr=False)
-#     return rec, rec_tag
+def rec_noise(rec, frame, mask, sn,  RON:float, Nphot:float, flux=None):
+    ron_cov = rec_ron_cov(rec, frame, mask, flux)
+    shot_cov = rec_phot_cov(rec, frame, mask, sn, flux)
+    sigma = ron_cov * RON/Nphot**2 + shot_cov / Nphot
+    return sigma
 
 
 if __name__ == "__main__":

@@ -218,6 +218,9 @@ def check_calibration(root_dir:str):
         rec_cov = rec @ phot_noise @ rec.T
         return np.diag(rec_cov)
 
+    def rec_noise(shot_cov,ron_cov, RON=0.5, Nphot=1e+6):
+        sigma = ron_cov * RON/Nphot**2 + shot_cov / Nphot
+        return sigma
 
     pyr0_16x16_ron_cov = rec_covariance(pyr0_16x16_rec,mask=pyr_masks_16x16,frame=pyr0_16x16_frame,flux=flux)
     pyr0_24x24_ron_cov = rec_covariance(pyr0_24x24_rec,mask=pyr_masks_24x24,frame=pyr0_24x24_frame,flux=flux)
@@ -311,11 +314,6 @@ def check_calibration(root_dir:str):
     plt.yscale('log')
     plt.grid()
     plt.title('Reconstructor covariance\nShot noise')
-
-
-    def rec_noise(shot_cov,ron_cov, RON=0.5, Nphot=1e+6):
-        sigma = ron_cov * RON/Nphot**2 + shot_cov / Nphot
-        return sigma
 
     RON = 0.5
     Nphot = 2e+5

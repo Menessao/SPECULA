@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        10.000                 # [s] 1 second simulation
+  total_time:        0.500                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -13,17 +13,25 @@ main:
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          1.2                  # [arcsec]
+  constant:          0.88                  # [arcsec]
   outputs:           ['output']
 
 wind_speed:
   class:             'WaveGenerator'
-  constant:          [15.0, 13.0, 13.0, 9.0, 9.0, 15.0, 25.0, 40.0, 21.0]    # [m/s] Multi-layer wind speeds
+  constant:          [5.5, 5.5, 5.1, 5.5, 5.6, 5.7, 5.8, 6.0, 6.5, 7.0,
+                      7.5, 8.5, 9.5, 11.5, 17.5, 23.0, 26.0, 29.0, 32.0, 27.0,
+                      22.0, 14.5, 9.5, 6.3, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0,
+                      8.5, 9.0, 9.5, 10.0, 10.0]      # [m/s] Wind speed value
+  # constant:          [15.0, 13.0, 13.0, 9.0, 9.0, 15.0, 25.0, 40.0, 21.0]    # [m/s] Multi-layer wind speeds
   outputs:           ['output']
 
 wind_direction:
   class:             'WaveGenerator'
-  constant:          [38.0, 34.0, 54.0, 42.0, 57.0, 48.0, -102.0, -83.0, -77.0] # [deg] Wind directions for each layer
+  constant:          [ -92.2,   68.2,   59.3,    2.2,  108.5,  -20.9,  180.0,  -1.6, -95.4, -135.,
+                      38.4,   -9.3,   22.1,  -66.9,  -91.7,  -57.9,  103.9,  -80.,    76.5,   42.4,
+                      -26.5,  -40.1,  -60.8,   17.3,  153.4,   37.7,    6.1,  -30.9,  -18,     9.,
+                      39.6,   44.3,   97.4,  -75.,    19.2]   # [degrees] Wind direction value
+  # constant:          [38.0, 34.0, 54.0, 42.0, 57.0, 48.0, -102.0, -83.0, -77.0] # [deg] Wind directions for each layer
   outputs:           ['output']
 
 # Natural guide star for WFS
@@ -38,9 +46,6 @@ source_ngs:
 pupilstop:
   class:             'Pupilstop'
   tag:               'vlt_pupil_160pixels'
-  # simul_params_ref:  'main'
-  # mask_diam:         1.0                  # Full pupil diameter
-  # obs_diam:          0.0                  # no central obstruction
 
 
 # Multi-layer atmospheric model
@@ -48,8 +53,16 @@ atmo:
   class:             'AtmoEvolution'
   simul_params_ref:  'main'
   L0:                25.0                   # [m] Outer scale
-  heights:           [42.0, 140.0, 281.0, 562.0, 1125.0, 2250.0, 4500.0, 9000.0, 18000.0] # [m] Ground, mid, high layers at 0 zenith angle
-  Cn2:               [0.5328,0.0145,0.035,0.0957,0.1083,0.0437,0.0658,0.0371,0.0671]        # Cn2 fractions (sum = 1.0)
+  heights:              [30.0000, 90.0000, 150.000, 200.000, 245.000, 300.000, 390.000, 601.000, 1130.00, 1880.00,
+                         2630.00, 3500.00, 4500.00, 5500.00, 6500.00, 7500.00, 8500.00, 9500.00, 10500.0, 11500.0,
+                         12500.0, 13500.0, 14500.0, 15500.0, 16500.0, 17500.0, 18500.0, 19500.0, 20500.0, 21500.0,
+                         22500.0, 23500.0, 24500.0, 25500.0, 26500.0] # [m] layer heights at 0 zenith angle
+  Cn2:                  [0.241954, 0.119977, 0.0968817, 0.0589889, 0.0472911, 0.0472911, 0.0472911, 0.0472911, 0.0398925, 0.0323939,
+                         0.0161969, 0.0260951, 0.0155971, 0.0103980, 0.00999811, 0.0119977, 0.00400924, 0.0139974, 0.0129975, 0.00700868,
+                         0.0159970, 0.0258951, 0.0190964, 0.00986813, 0.00616883, 0.00400924, 0.00246953, 0.00215959, 0.00184965, 0.00135974,
+                         0.00110979, 0.000616883, 0.000925825, 0.000493907, 0.000431918] # Cn2 weights (total must be eq 1)
+  # heights:           [42.0, 140.0, 281.0, 562.0, 1125.0, 2250.0, 4500.0, 9000.0, 18000.0] # [m] Ground, mid, high layers at 0 zenith angle
+  # Cn2:               [0.5328,0.0145,0.035,0.0957,0.1083,0.0437,0.0658,0.0371,0.0671]        # Cn2 fractions (sum = 1.0)
   fov:               0.0                    # [arcsec] Field of view
   inputs:
     seeing:          'seeing.output'
@@ -62,6 +75,8 @@ prop:
   class:             'AtmoPropagation'
   simul_params_ref:  'main'
   source_dict_ref:   ['source_ngs'] 
+  # doFresnel: true
+  # padding_factor: 4
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']       # Pupil
@@ -236,12 +251,12 @@ pyr0_modalrec:
 #     delta_comm:      'pyr_modalrec.out_modes' #
 #   outputs:           ['out_comm']
 
-slice_modes:
-  class: 'BaseSlicer'
-  slice_args: [0,299]
-  inputs:
-    in_value: 'pyr_modalrec.out_modes'
-  outputs: ['out_value']
+# slice_modes:
+#   class: 'BaseSlicer'
+#   slice_args: [0,299]
+#   inputs:
+#     in_value: 'pyr_modalrec.out_modes'
+#   outputs: ['out_value']
 
 filter:
   class:                    'MultirateComplementaryFilter'
@@ -335,6 +350,7 @@ data_store:
   store_dir:         '/raid1/mmenessini/results/XAO'            # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
+                  # 'test_fresnel_ef-prop.out_source_ngs_ef',
                   'sr-psf.out_sr',
                   # 'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
