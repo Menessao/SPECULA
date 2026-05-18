@@ -138,7 +138,7 @@ filter:
 
 gain_ramp:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.6,0.4,0.2],[1.2,1.0,0.2]]
+  scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
   modes_per_group: [150,150,100]
   scheduled_times: [0.01]
 
@@ -148,7 +148,7 @@ dm:
   ifunc_object:      'DM468_ifunc' #'dm468_ifunc'      # Influence functions
   m2c_object:        'DM468_m2c' #'dm468_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            290
+  nmodes:            400
   inputs:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']

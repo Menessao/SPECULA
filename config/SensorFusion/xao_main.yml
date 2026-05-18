@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        0.500                 # [s] 1 second simulation
+  total_time:        1.500                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -88,6 +88,14 @@ ef_prop:
     in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
     in_ef2: 'dm.out_layer:-1'          # DM1 correction
   outputs: ['out_ef']
+
+perfect_corr:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm_perfect.out_layer'          # DM1 correction
+  outputs: ['out_ef']
+
 
 ########################### PWFS ##############################
 pyr:
@@ -285,7 +293,7 @@ filter:
 
 gain_ramp:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.2],[0.45]]
+  scheduled_values: [[0.2],[0.3]]
   scheduled_times: [0.01]
   modes_per_group: [1300]
 
@@ -300,6 +308,16 @@ dm:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']
 
+dm_perfect:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
+  m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
+  nmodes:            1300             # Number of controlled modes
+  height:            0                # Ground-conjugated DM
+  inputs:
+    in_command:      'atmo_modes.out_modes'
+  outputs:           ['out_layer']
 
 ###########################################################
 ##################### POST-PROCESSING #####################
@@ -327,8 +345,20 @@ coro_psf:
   compute_profile_metrics: true
   inputs:
     in_ef:           'ef_prop.out_ef' 
-  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf','out_int_coronagraph_psf_profile','out_std_coronagraph_psf_profile']
+  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf_profile'] # 'out_std_coronagraph_psf','out_int_coronagraph_psf_profile',
 
+coro_opt_psf:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                    # 4x padding for PSF
+  start_time:        1.0                  # Start PSF integration after 500ms
+  # verbose: true
+  use_average_field: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'perfect_corr.out_ef' 
+  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf_profile'] 
 
 dm_mode_res:
   class:            'ModalAnalysis'
@@ -352,12 +382,14 @@ data_store:
     input_list: [
                   # 'test_fresnel_ef-prop.out_source_ngs_ef',
                   'sr-psf.out_sr',
-                  # 'psf-psf.out_psf',
+                  'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
-                  # 'coro_psf-coro_psf.out_coronagraph_psf',
+                  'coro_psf-coro_psf.out_coronagraph_psf',
+                  'opt_psf-coro_opt_psf.out_psf',
                   # 'coro_psf_std-coro_psf.out_std_coronagraph_psf',
                   'psf_profile-coro_psf.out_int_psf_profile',
                   'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
+                  'coro_opt_psf_profile-coro_opt_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',

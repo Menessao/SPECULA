@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        10.000                 # [s] 1 second simulation
+  total_time:        3.000                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -88,6 +88,13 @@ ef_prop:
   inputs:
     in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
     in_ef2: 'dm.out_layer:-1'          # DM1 correction
+  outputs: ['out_ef']
+
+perfect_corr:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm_perfect.out_layer'          # DM1 correction
   outputs: ['out_ef']
 
 ########################### PWFS ##############################
@@ -195,18 +202,24 @@ lo_filter:
   iir_filter_data_object:  'iirfilter_300modes'  #'iir_opt_1300modes' #
   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
   N_list:                   [4]           # ffast/slow frequency ratio (list)
-  g_track:                  0.9           # gain
+  g_track:                  0.01           # gain
   inputs:
     in_ys: 'lo_mod_pyr_modes.out_value'
     in_yf: 'pyr0_modalrec.out_modes'
-    gain_mod:  'gain_ramp.output'
+    gain_mod:  'gain_ramp_lo.output'
   outputs:  ['out_comm']
 
-gain_ramp:
+gain_ramp_lo:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.2],[0.3]]
+  scheduled_times: [0.001]
+  modes_per_group: [300]
+
+gain_ramp_ho:
   class:             'ScheduleGenerator'
   scheduled_values: [[0.2],[0.5]]
   scheduled_times: [0.001]
-  modes_per_group: [300]
+  modes_per_group: [1300]
 
 ho_filter:
   class:                'IirFilter'
@@ -214,7 +227,8 @@ ho_filter:
   delay:                1 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_1300modes'
   inputs:
-    delta_comm: 'pyr_modalrec.out_modes' # 
+    delta_comm: 'pyr_modalrec.out_modes'
+    gain_mod: 'gain_ramp_ho.output'
   outputs:  ['out_comm']
 
 ho_comm:
@@ -228,7 +242,7 @@ concat_comms:
   class:      'BaseOperation'
   concat: true
   inputs:
-    in_value1:  'filter.out_comm' #'lo_filter.out_comm'
+    in_value1:  'filter.out_comm' #'lo_filter.out_comm' #
     in_value2:  'ho_comm.out_value'
   outputs: ['out_value']
 
@@ -238,8 +252,8 @@ filter:
   delay:                1 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_300modes'
   inputs:
-    delta_comm: 'pyr0_modalrec.out_modes' # 
-    gain_mod: 'gain_ramp.output'
+    delta_comm: 'pyr0_modalrec.out_modes'
+    gain_mod: 'gain_ramp_lo.output'
   outputs:  ['out_comm']
 
 dm:
@@ -247,10 +261,21 @@ dm:
   simul_params_ref:  'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
   m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
-  nmodes:            300             # Number of controlled modes
+  nmodes:            1300             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'ho_filter.out_comm' #'concat_comms.out_value' #'filter.out_comm' # #
+    in_command:      'concat_comms.out_value' #'filter.out_comm' #'ho_filter.out_comm' #
+  outputs:           ['out_layer']
+
+dm_perfect:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
+  m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
+  nmodes:            1300             # Number of controlled modes
+  height:            0                # Ground-conjugated DM
+  inputs:
+    in_command:      'atmo_modes.out_modes'
   outputs:           ['out_layer']
 
 
@@ -275,12 +300,23 @@ coro_psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
-  # verbose: true
   use_average_field: false
   compute_profile_metrics: true
   inputs:
     in_ef:           'ef_prop.out_ef' 
-  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf','out_int_coronagraph_psf_profile','out_std_coronagraph_psf_profile']
+  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf_profile'] #'out_std_coronagraph_psf','out_int_coronagraph_psf_profile',
+
+coro_opt_psf:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                    # 4x padding for PSF
+  start_time:        1.0                  # Start PSF integration after 500ms
+  use_average_field: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'perfect_corr.out_ef' 
+  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf_profile'] 
 
 
 dm_mode_res:
@@ -310,6 +346,7 @@ data_store:
                   # 'coro_psf_std-coro_psf.out_std_coronagraph_psf',
                   'psf_profile-coro_psf.out_int_psf_profile',
                   'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
+                  'coro_opt_psf_profile-coro_opt_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   # 'dm_ho_cmd-ho_filter.out_comm',

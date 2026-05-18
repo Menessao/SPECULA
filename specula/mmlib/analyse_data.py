@@ -93,7 +93,7 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         except:
             pass
 
-    init = int(0.2*fs)
+    init = int(0.5*fs)
 
     #################### SR ######################
     try:
@@ -356,27 +356,29 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             print(f"dm_res.fits, pyr_res.fits or atmo_res.fits files not found in {data_dir}.")
 
     ################### PSF ########################
+    oversampling = 4
+    psf_dl = get_reference_psf(root_dir=calib_dir,pupil_tag=pupil_tag,nd=oversampling)
     try:
         psf = data["psf"]
         psf = np.sqrt(np.mean(psf[init+1:]**2,axis=0))
         plt.figure(figsize=(12,5))
         plt.subplot(1,2,1)
-        show_psf(psf, title='PSF\n'+tn, cmap='inferno', ext=0.55, vmin=-6)    
+        show_psf(psf, title='PSF\n'+tn, cmap='inferno', ext=0.55, vmin=-6, maxVal=np.max(psf_dl))    
         coro_psf = data["coro_psf"]
         coro_psf = np.sqrt(np.mean(coro_psf[init+1:]**2,axis=0))
         plt.subplot(1,2,2)
-        show_psf(coro_psf, title='Coronagraphic PSF\n'+tn, cmap='inferno', ext=0.55,  vmin=-6)
+        show_psf(coro_psf, title='Coronagraphic PSF\n'+tn, cmap='inferno', ext=0.55,  vmin=-6, maxVal=np.max(psf_dl))
     except KeyError:
         try:
             psf1 = data["psf1"]
             psf1 = np.sqrt(np.mean(psf1[init1:]**2,axis=0))
             plt.figure(figsize=(12,5))
             plt.subplot(1,2,1)
-            show_psf(psf1, title=r'$1^{st}$ stage PSF'+'\n'+tn, cmap='inferno', ext=0.55, vmin=-6)    
+            show_psf(psf1, title=r'$1^{st}$ stage PSF'+'\n'+tn, cmap='inferno', ext=0.55, vmin=-6, maxVal=np.max(psf_dl))    
             psf2 = data["psf2"]
             psf2 = np.sqrt(np.mean(psf2[init2:]**2,axis=0))
             plt.subplot(1,2,2)
-            show_psf(psf2, title=r'$2^{nd}$ stage PSF'+'\n'+tn, cmap='inferno', ext=0.55, vmin=-6)   
+            show_psf(psf2, title=r'$2^{nd}$ stage PSF'+'\n'+tn, cmap='inferno', ext=0.55, vmin=-6, maxVal=np.max(psf_dl))   
         except KeyError:
             print(f"psf.fits file not found in {data_dir}.")
 
@@ -425,20 +427,25 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
 
 
     ################# PSF profiles #######################
-    oversampling = 4
-    psf_dl = get_reference_psf(root_dir=calib_dir,pupil_tag=pupil_tag,nd=oversampling)
     rad_psf_dl, dist = compute_radial_profile(psf_dl)
     try:
         psf = data["psf"]
         psf = np.sqrt(np.mean(psf[init+1:]**2,axis=0))
+        rad_psf, dist = compute_radial_profile(psf)
         coro_psf = data["coro_psf"]
         coro_psf = np.sqrt(np.mean(coro_psf[init+1:]**2,axis=0))
-        rad_psf, dist = compute_radial_profile(psf)
         rad_cpsf, dist = compute_radial_profile(coro_psf)
         plt.figure(figsize=(12,5))
         plt.subplot(1,2,1)
-        plt.plot(dist/oversampling, rad_psf/np.max(psf_dl), label=r'AO corrected', c='blue')
-        plt.plot(dist/oversampling, rad_psf_dl/np.max(psf_dl), '--', label='Diffraction limit', c='black')
+        plt.plot(dist/oversampling, rad_psf/np.max(psf_dl), label=r'AO corrected')
+        # plt.plot(dist/oversampling, rad_psf_dl/np.max(psf_dl), '--', label='Diffraction limit', c='black')
+        try:
+            opt_psf = data["opt_psf"]
+            opt_psf = np.sqrt(np.mean(opt_psf[init+1:]**2,axis=0))
+            rad_optpsf, dist = compute_radial_profile(opt_psf)
+            plt.plot(dist/oversampling, rad_optpsf/np.max(psf_dl), ':', label='Perfect correction', c='k')
+        except KeyError:
+            pass
         plt.legend()
         plt.yscale('log')
         plt.xlim([0,30])
@@ -447,10 +454,10 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         plt.title('PSF radial profile (RMS)\n'+tn)
         plt.xlabel(r'$\lambda/D$')
         plt.subplot(1,2,2)
-        plt.plot(dist/oversampling, rad_cpsf/np.max(psf_dl), c='blue')
+        plt.plot(dist/oversampling, rad_cpsf/np.max(psf_dl))
         plt.yscale('log')
         plt.xlim([0,30])
-        plt.ylim([1e-7,1])
+        plt.ylim([1e-6,1])
         plt.grid()
         plt.title('Coronographic PSF radial profile (Std Dev)\n'+tn)
         plt.xlabel(r'$\lambda/D$')
@@ -476,7 +483,7 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             plt.legend()
             plt.yscale('log')
             plt.xlim([0,30])
-            plt.ylim([1e-7,1])
+            plt.ylim([1e-6,1])
             plt.grid()
             plt.title('PSF radial profile (RMS)\n'+tn)
             plt.xlabel(r'$\lambda/D$')
@@ -485,7 +492,7 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
             plt.plot(dist/oversampling, rad_cpsf2/np.max(psf_dl), label=r'$2^{nd}$ stage')
             plt.yscale('log')
             plt.xlim([0,30])
-            plt.ylim([1e-7,1])
+            plt.ylim([1e-6,1])
             plt.grid()
             plt.title('Coronographic PSF radial profile (Std Dev)\n'+tn)
             plt.xlabel(r'$\lambda/D$')
@@ -496,7 +503,14 @@ def plot_output_data(root_dir:str,calib_dir:str,tn:str=None):
         rad_dist,coro_psf_profile = data['coro_psf_profile'][0]
         plt.figure(figsize=(8,5))
         plt.semilogy(rad_dist,coro_psf_profile)
+        try:
+            rad_dist,opt_coro_psf_profile = data['coro_opt_psf_profile'][0]
+            plt.semilogy(rad_dist,opt_coro_psf_profile,':',c='k',label='perfect')
+        except KeyError:
+            pass
         plt.xlim([0,30])
+        plt.ylim([1e-7,1e-2])
+        plt.legend()
         plt.grid(which='both',alpha=0.7)
     except KeyError:
         try:
