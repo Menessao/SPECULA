@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        1.500                 # [s] 1 second simulation
+  total_time:        10.00                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -266,34 +266,34 @@ pyr0_modalrec:
 #     in_value: 'pyr_modalrec.out_modes'
 #   outputs: ['out_value']
 
-filter:
-  class:                    'MultirateComplementaryFilter'
-  simul_params_ref:         'main'
-  delay:                    1             # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes'  #'iir_opt_1300modes' #
-  weights:                  [0.5,0.5]     # weigths for fast and slow measurements
-  N_list:                   [4]           # ffast/slow frequency ratio (list)
-  g_track:                  0.9           # gain
-  inputs:
-    in_ys: 'pyr_modalrec.out_modes'
-    in_yf: 'pyr0_modalrec.out_modes' #'zwfs_modalrec.out_modes'  #
-    gain_mod:                 'gain_ramp.output'
-  outputs:  ['out_comm']
-
 # filter:
-#   class:                'IirFilter'
-#   simul_params_ref:     'main'
-#   delay:                1 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_1300modes'
+#   class:                    'MultirateComplementaryFilter'
+#   simul_params_ref:         'main'
+#   delay:                    1             # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object:  'iirfilter_1300modes'  #'iir_opt_1300modes' #
+#   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
+#   N_list:                   [4]           # ffast/slow frequency ratio (list)
+#   g_track:                  0.9           # gain
 #   inputs:
-#     delta_comm: 'pyr0_modalrec.out_modes' #'concat_wfs_modes.out_value' 
-#     gain_mod: 'gain_ramp.output'
+#     in_ys: 'pyr_modalrec.out_modes'
+#     in_yf: 'pyr0_modalrec.out_modes' #'zwfs_modalrec.out_modes'  #
+#     gain_mod:                 'gain_ramp.output'
 #   outputs:  ['out_comm']
+
+filter:
+  class:                'IirFilter'
+  simul_params_ref:     'main'
+  delay:                1 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_1300modes'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+    gain_mod: 'gain_ramp.output'
+  outputs:  ['out_comm']
 
 
 gain_ramp:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.2],[0.3]]
+  scheduled_values: [[0.1],[0.2]]
   scheduled_times: [0.01]
   modes_per_group: [1300]
 

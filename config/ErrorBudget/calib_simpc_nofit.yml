@@ -15,7 +15,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr1.0_s1.0_c20260506_092825_nofit_im'            # Output IM filename
+  im_tag:    'pyr0.0_s1.0_c20260506_092825_nofit_im'            # Output IM filename
   overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -97,7 +97,7 @@ ef_mode:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 648                            # Use all modes for calibration
+  nmodes: 500                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull_in_pc.out_value'         # Connect to push-pull generator
 

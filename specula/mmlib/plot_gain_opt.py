@@ -6,9 +6,9 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 
 
-def plot_gain_optimization(root_dir:str, init:int=200):
-    dirs = sorted(glob.glob(os.path.join(root_dir, "gain_opt/*")))
-    print(dirs,os.path.join(root_dir, "gain_opt/*"),root_dir)
+def plot_gain_optimization(root_dir:str, dirname:str="gain_opt/*", init:int=500):
+    dirs = sorted(glob.glob(os.path.join(root_dir, dirname)))
+    # print(dirs,os.path.join(root_dir, dirname),root_dir)
 
     gains = []
     mean_sr = []
@@ -17,12 +17,12 @@ def plot_gain_optimization(root_dir:str, init:int=200):
         # Find the YAML file to get the gain value
         yml_files = glob.glob(os.path.join(d, "*.yml"))
         gain = None
-        for yml in yml_files:
-            with open(yml, "r") as f:
-                yml_data = yaml.safe_load(f)
-                if "filter" in yml_data:
-                    gain = float(yml_data["filter"]["iir_gain"])#["g_track"]) #
-                    break
+        # for yml in yml_files:
+        #     with open(yml, "r") as f:
+        #         yml_data = yaml.safe_load(f)
+        #         if "filter" in yml_data:
+        #             gain = float(yml_data["filter"]["iir_gain"])#["g_track"]) #
+        #             break
         if gain is None:
             # Fallback: parse from directory name
             gain = float(d.split("_")[-1].replace("/", ""))
@@ -48,5 +48,5 @@ def plot_gain_optimization(root_dir:str, init:int=200):
 
 
 if __name__ == "__main__":
-    root_dir = '/raid1/mmenessini/results/SOUL'
+    root_dir = '/raid1/mmenessini/results/XAO'
     plot_gain_optimization(root_dir=root_dir)

@@ -2,7 +2,7 @@
 # ================================================
 pyr_sn:
   class: 'SnCalibrator'
-  output_tag: 'pyr0.0_40x40_sn_pc_nofit'           # Output filename
+  output_tag: 'pyr0.0_40x40_sn_pc_zerofit'           # Output filename
   overwrite: false
   inputs:
     in_slopes: 'pyr_slopes.out_slopes'
@@ -34,7 +34,7 @@ atmo_random:
 atmo_random_modes:
   class: 'ModalAnalysis'
   ifunc_inv_object: 'asm_v30dx_ifunc_inv'
-  nmodes: 648
+  nmodes: 500
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
