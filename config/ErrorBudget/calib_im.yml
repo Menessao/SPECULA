@@ -5,7 +5,7 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       648                        # Number of DM actuators
-  amp:          50
+  amp:          20
   # constant_amp: false
   outputs:   ['output']
 
@@ -13,8 +13,8 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    648                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_40x40_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  im_tag:    'pyr0.0_40x40_im'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands

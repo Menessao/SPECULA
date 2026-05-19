@@ -56,10 +56,12 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float, r0=0.1, L0=2
     # tags
     ifunc_tag = tag+'_ifunc'
     m2c_tag = tag+'_m2c'
+    m2c_full_tag = tag+'_m2c_full'
     base_inv_tag = tag+'_kl_inv'
 
     ifunc_filename = calib_manager.filename('ifunc', ifunc_tag)
     m2c_filename = calib_manager.filename('m2c', m2c_tag)
+    m2c_full_filename = calib_manager.filename('m2c', m2c_full_tag)
     base_inv_filename = calib_manager.filename('ifunc', base_inv_tag)
 
     # # Regularized influence functions
@@ -112,7 +114,13 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float, r0=0.1, L0=2
         m2c=m2c
     )
     m2c_obj.save(m2c_filename, overwrite=True)
-    print("OK: " + m2c_filename + f" (m2c matrix: {m2c.shape})")
+    print("OK: " + m2c_full_filename + f" (m2c matrix: {m2c.shape})")
+    
+    m2c_obj = M2C(
+        m2c=m2c_full
+    )
+    m2c_obj.save(m2c_full_filename, overwrite=True)
+    print("OK: " + m2c_full_filename + f" (m2c matrix: {m2c_full.shape})")
 
     # inverse influence function object for modal analysis
     print(f"\nSaving inverse modal base...")

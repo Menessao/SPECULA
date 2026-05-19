@@ -1,29 +1,15 @@
 # Synthetic interaction matrix in partial correction
 # ================================================
-
-# Push-pull command generator
-pushpull:
-  class:        'PushPullGenerator'
-  nmodes:       500                         # Number of DM actuators
-  amp:          50  
-  ncycles:       40
-  repeat_full_sequence: true
-  # constant_amp: true
-  outputs:   ['output']
-
-# Interaction matrix calibrator
-pyr_im_calibrator:
-  class:     'ImCalibrator'
-  nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_s1.0_c20260506_092825_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+pyr_sn:
+  class: 'SnCalibrator'
+  output_tag: 'pyr0.0_40x40_sn_pc_nofit'           # Output filename
+  overwrite: false
   inputs:
-    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
-    in_commands: 'pushpull.output'        # Push-pull commands
+    in_slopes: 'pyr_slopes.out_slopes'
 
 # Override main simulation parameters
 main_override:
-  total_time: 23.52                # 500 modes × 2 (push+pull) × 0.000588s x 40 cycles
+  total_time: 0.588                # 1000 cycles × 0.000588s
 
 ################################## ATMO RESIDUAL #####################################
 seeing_random:
@@ -39,14 +25,13 @@ atmo_random:
   simul_params_ref:     'main'
   L0:                   25               # [m] Outer scale
   source_dict_ref:      ['source_ngs']
-  update_interval:      1000                 # Update after push-pull of all modes
   inputs:
     seeing:             'seeing_random.output'
     pupilstop:          'pupilstop'
   outputs:              ['out_source_ngs_ef']
 
 # Modal decomposition of atmospheric phase
-modal_analysis_random:
+atmo_random_modes:
   class: 'ModalAnalysis'
   ifunc_inv_object: 'asm_v30dx_ifunc_inv'
   nmodes: 648
@@ -54,11 +39,19 @@ modal_analysis_random:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
 
-scale_random:
+atmo_correction:
   class:  'BaseOperation'
   constant_mul_data: 'correction_vector_20260506_092825' 
   inputs:
-    in_value1: 'modal_analysis_random.out_modes'
+    in_value1: 'atmo_random_modes.out_modes'
+  outputs: ['out_value']
+
+atmo_res:
+  class:  'BaseOperation'
+  sub: true
+  inputs:
+    in_value1: 'atmo_random_modes.out_modes'
+    in_value2: 'atmo_correction.out_value'
   outputs: ['out_value']
 
 # DM applying partial correction
@@ -69,7 +62,7 @@ dm_random:
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
-    in_command: 'scale_random.out_value'
+    in_command: 'atmo_res.out_value'
   outputs: ['out_layer']
 
 atmo_pc:
@@ -79,25 +72,12 @@ atmo_pc:
     in_ef2: 'dm_random.out_layer'              # Partial correction
   outputs: ['out_ef']
 
-ef_mode:
-  class: 'ElectricFieldCombinator'
-  inputs:
-    in_ef1: 'atmo_pc.out_ef'    # Partially corrected turbulence
-    in_ef2: 'dm.out_layer'      # Mode amplitudes
-  outputs: ['out_ef']
 
 ######################################################################################
 
-# Override DM to use calibration commands
-dm_override:
-  sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 500                            # Use all modes for calibration
-  inputs:
-    in_command: 'pushpull.output'         # Connect to push-pull generator
-
 pyr_override:
   inputs: 
-    in_ef: 'ef_mode.out_ef'
+    in_ef: 'atmo_pc.out_ef'
 
 # Disable noise for clean measurements
 ocam_override:
@@ -105,17 +85,17 @@ ocam_override:
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
-atmo_pc_modes:
-  class: 'ModalAnalysis'
-  ifunc_inv_object: 'asm_v30dx_kl_inv'
-  inputs:
-    in_ef: 'atmo_pc.out_ef'
-  outputs: ['out_modes']
+# atmo_pc_modes:
+#   class: 'ModalAnalysis'
+#   ifunc_inv_object: 'asm_v30dx_kl_inv'
+#   inputs:
+#     in_ef: 'atmo_pc.out_ef'
+#   outputs: ['out_modes']
 
-data_store_override:
-  inputs:
-    input_list: ['atmo_res-atmo_pc_modes.out_modes']
+# data_store_override:
+#   inputs:
+#     input_list: ['atmo_res-atmo_pc_modes.out_modes']
 
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store', #'source_science',
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', 'dm', #'data_store', #'source_science',
         'dm_mode_res','filter','psf', 'ef_prop', 'prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'
