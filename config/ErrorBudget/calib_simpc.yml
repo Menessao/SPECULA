@@ -15,8 +15,8 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_s1.0_c20260506_092825_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  im_tag:    'pyr1.0_s1.4_c20260506_092825_im'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -29,7 +29,7 @@ main_override:
 seeing_random:
   class:             'RandomGenerator'
   amp:               0.0                 # Variation amplitude [arcsec]
-  constant:          1.0                 # Mean seeing [arcsec]
+  constant:          1.4                 # Mean seeing [arcsec]
   distribution:      'UNIFORM'           # 
   outputs: ['output']
 
@@ -91,11 +91,12 @@ ef_mode:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 500                            # Use all modes for calibration
+  nmodes: 648                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
+  # mod_amp: 1.0
   inputs: 
     in_ef: 'ef_mode.out_ef'
 

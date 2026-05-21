@@ -81,11 +81,11 @@ def rec_noise(rec, frame, mask, sn,  RON:float, Nphot:float, flux=None):
 
 if __name__ == "__main__":
 
-    Nmodes = 500
-    root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
-    im_tag = 'pyr0.0_40x40_im'
-    rec_tag = f'pyr0.0_40x40_{Nmodes}modes'
-    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    # Nmodes = 500
+    # root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
+    # im_tag = 'pyr0.0_40x40_im'
+    # rec_tag = f'pyr0.0_40x40_{Nmodes}modes'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
     # Nmodes = 410
     # root_dir = '/raid1/mmenessini/calibration/EKARUS'
@@ -93,11 +93,11 @@ if __name__ == "__main__":
     # rec_tag = f'pyr5.0_40x40_{Nmodes}modes'
     # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    # Nmodes = 300
-    # root_dir = '/raid1/mmenessini/calibration/XAO'
-    # im_tag = 'pyr0.0_300modes_24x24_im'
-    # rec_tag = 'pyr0.0_24x24_300modes'
-    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    Nmodes = 1300
+    root_dir = '/raid1/mmenessini/calibration/XAO'
+    im_tag = 'pyr0.5_1821modes_40x40_im'
+    rec_tag = 'pyr0.5_48x48_1300modes'
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
 #     Nmodes = 1300
 #     rMods = np.array([0,0.5,1,2,3])

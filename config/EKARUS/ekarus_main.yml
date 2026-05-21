@@ -71,6 +71,13 @@ ef_prop:
     in_ef2: 'dm.out_layer:-1'          # DM1 correction
   outputs: ['out_ef']
 
+perf_prop:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'ef_prop.out_ef'    # Turbulence
+    in_ef2: 'perfect_dm.out_layer'          # DM1 correction
+  outputs: ['out_ef']
+
 ########################### PWFS ##############################
 pyr:
   class:             'ModulatedPyramid'
@@ -154,6 +161,18 @@ dm:
   outputs:           ['out_layer']
 
 
+perfect_dm:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'DM468_ifunc' #'dm468_ifunc'      # Influence functions
+  m2c_object:        'DM468_m2c' #'dm468_m2c'        # Modal-to-command matrix
+  height:            0                # Ground-conjugated DM
+  nmodes:            400
+  inputs:
+    in_command:      'dm_mode_res.out_modes'
+  outputs:           ['out_layer']
+
+
 ###########################################################
 ##################### POST-PROCESSING #####################
 # Coronagraphic and non-coronagraphic PSFs
@@ -167,6 +186,29 @@ psf:
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+
+coro_psf:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                   # 4x padding for PSF
+  start_time:        0.5                 # Start PSF integration after 500ms
+  verbose: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'ef_prop.out_ef' 
+
+
+perf_coro_psf:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                   # 4x padding for PSF
+  start_time:        0.5                 # Start PSF integration after 500ms
+  verbose: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'perf_prop.out_ef' 
 
 dm_mode_res:
   class:            'ModalAnalysis'

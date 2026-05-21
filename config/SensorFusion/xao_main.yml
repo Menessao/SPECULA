@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        10.00                 # [s] 1 second simulation
+  total_time:        4.00                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -18,20 +18,22 @@ seeing:
 
 wind_speed:
   class:             'WaveGenerator'
-  constant:          [5.5, 5.5, 5.1, 5.5, 5.6, 5.7, 5.8, 6.0, 6.5, 7.0,
-                      7.5, 8.5, 9.5, 11.5, 17.5, 23.0, 26.0, 29.0, 32.0, 27.0,
-                      22.0, 14.5, 9.5, 6.3, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0,
-                      8.5, 9.0, 9.5, 10.0, 10.0]      # [m/s] Wind speed value
+  # constant:          [5.5, 5.5, 5.1, 5.5, 5.6, 5.7, 5.8, 6.0, 6.5, 7.0,
+  #                     7.5, 8.5, 9.5, 11.5, 17.5, 23.0, 26.0, 29.0, 32.0, 27.0,
+  #                     22.0, 14.5, 9.5, 6.3, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0,
+  #                     8.5, 9.0, 9.5, 10.0, 10.0]      # [m/s] Wind speed value
   # constant:          [15.0, 13.0, 13.0, 9.0, 9.0, 15.0, 25.0, 40.0, 21.0]    # [m/s] Multi-layer wind speeds
+  constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
   outputs:           ['output']
 
 wind_direction:
   class:             'WaveGenerator'
-  constant:          [ -92.2,   68.2,   59.3,    2.2,  108.5,  -20.9,  180.0,  -1.6, -95.4, -135.,
-                      38.4,   -9.3,   22.1,  -66.9,  -91.7,  -57.9,  103.9,  -80.,    76.5,   42.4,
-                      -26.5,  -40.1,  -60.8,   17.3,  153.4,   37.7,    6.1,  -30.9,  -18,     9.,
-                      39.6,   44.3,   97.4,  -75.,    19.2]   # [degrees] Wind direction value
+  # constant:          [ -92.2,   68.2,   59.3,    2.2,  108.5,  -20.9,  180.0,  -1.6, -95.4, -135.,
+  #                     38.4,   -9.3,   22.1,  -66.9,  -91.7,  -57.9,  103.9,  -80.,    76.5,   42.4,
+  #                     -26.5,  -40.1,  -60.8,   17.3,  153.4,   37.7,    6.1,  -30.9,  -18,     9.,
+  #                     39.6,   44.3,   97.4,  -75.,    19.2]   # [degrees] Wind direction value
   # constant:          [38.0, 34.0, 54.0, 42.0, 57.0, 48.0, -102.0, -83.0, -77.0] # [deg] Wind directions for each layer
+  constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
   outputs:           ['output']
 
 # Natural guide star for WFS
@@ -48,21 +50,23 @@ pupilstop:
   tag:               'vlt_pupil_160pixels'
 
 
-# Multi-layer atmospheric model
+# Multi-layer atmospheric model 
 atmo:
   class:             'AtmoEvolution'
   simul_params_ref:  'main'
   L0:                25.0                   # [m] Outer scale
-  heights:              [30.0000, 90.0000, 150.000, 200.000, 245.000, 300.000, 390.000, 601.000, 1130.00, 1880.00,
-                         2630.00, 3500.00, 4500.00, 5500.00, 6500.00, 7500.00, 8500.00, 9500.00, 10500.0, 11500.0,
-                         12500.0, 13500.0, 14500.0, 15500.0, 16500.0, 17500.0, 18500.0, 19500.0, 20500.0, 21500.0,
-                         22500.0, 23500.0, 24500.0, 25500.0, 26500.0] # [m] layer heights at 0 zenith angle
-  Cn2:                  [0.241954, 0.119977, 0.0968817, 0.0589889, 0.0472911, 0.0472911, 0.0472911, 0.0472911, 0.0398925, 0.0323939,
-                         0.0161969, 0.0260951, 0.0155971, 0.0103980, 0.00999811, 0.0119977, 0.00400924, 0.0139974, 0.0129975, 0.00700868,
-                         0.0159970, 0.0258951, 0.0190964, 0.00986813, 0.00616883, 0.00400924, 0.00246953, 0.00215959, 0.00184965, 0.00135974,
-                         0.00110979, 0.000616883, 0.000925825, 0.000493907, 0.000431918] # Cn2 weights (total must be eq 1)
+  # heights:              [30.0000, 90.0000, 150.000, 200.000, 245.000, 300.000, 390.000, 601.000, 1130.00, 1880.00,
+  #                        2630.00, 3500.00, 4500.00, 5500.00, 6500.00, 7500.00, 8500.00, 9500.00, 10500.0, 11500.0,
+  #                        12500.0, 13500.0, 14500.0, 15500.0, 16500.0, 17500.0, 18500.0, 19500.0, 20500.0, 21500.0,
+  #                        22500.0, 23500.0, 24500.0, 25500.0, 26500.0] # [m] layer heights at 0 zenith angle
+  # Cn2:                  [0.241954, 0.119977, 0.0968817, 0.0589889, 0.0472911, 0.0472911, 0.0472911, 0.0472911, 0.0398925, 0.0323939,
+  #                        0.0161969, 0.0260951, 0.0155971, 0.0103980, 0.00999811, 0.0119977, 0.00400924, 0.0139974, 0.0129975, 0.00700868,
+  #                        0.0159970, 0.0258951, 0.0190964, 0.00986813, 0.00616883, 0.00400924, 0.00246953, 0.00215959, 0.00184965, 0.00135974,
+  #                        0.00110979, 0.000616883, 0.000925825, 0.000493907, 0.000431918] # Cn2 weights (total must be eq 1)
   # heights:           [42.0, 140.0, 281.0, 562.0, 1125.0, 2250.0, 4500.0, 9000.0, 18000.0] # [m] Ground, mid, high layers at 0 zenith angle
   # Cn2:               [0.5328,0.0145,0.035,0.0957,0.1083,0.0437,0.0658,0.0371,0.0671]        # Cn2 fractions (sum = 1.0)
+  heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] Ground, mid, high layers at 0 zenith angle
+  Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
   fov:               0.0                    # [arcsec] Field of view
   inputs:
     seeing:          'seeing.output'
@@ -89,12 +93,12 @@ ef_prop:
     in_ef2: 'dm.out_layer:-1'          # DM1 correction
   outputs: ['out_ef']
 
-perfect_corr:
-  class: 'ElectricFieldCombinator'
-  inputs:
-    in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
-    in_ef2: 'dm_perfect.out_layer'          # DM1 correction
-  outputs: ['out_ef']
+# perfect_corr:
+#   class: 'ElectricFieldCombinator'
+#   inputs:
+#     in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+#     in_ef2: 'dm_perfect.out_layer'          # DM1 correction
+#   outputs: ['out_ef']
 
 
 ########################### PWFS ##############################
@@ -114,7 +118,7 @@ cred1:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.001                # [s] Integration time (2000 fps)
+  dt:                0.00025                # [s] Integration time (2000 fps)
   bandw:             400                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -142,50 +146,50 @@ pyr_modalrec:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-######################### Unmod Pyr ##############################
-pyr0:
-  class:             'ModulatedPyramid'
-  simul_params_ref:  'main'
-  pup_diam:          48.                     # Pupil diameter in subaps.
-  pup_dist:          60.                     # Separation between pupil centers in subaps.
-  fov:               2.0                     # Requested field-of-view [arcsec]
-  mod_amp:           0.0                     # Modulation radius (in lambda/D units)
-  output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    750                     # [nm] Pyramid wavelength
-  inputs:
-    in_ef: 'ef_prop.out_ef' #'prop.out_source_ngs_ef'
+# ######################### Unmod Pyr ##############################
+# pyr0:
+#   class:             'ModulatedPyramid'
+#   simul_params_ref:  'main'
+#   pup_diam:          48.                     # Pupil diameter in subaps.
+#   pup_dist:          60.                     # Separation between pupil centers in subaps.
+#   fov:               2.0                     # Requested field-of-view [arcsec]
+#   mod_amp:           0.0                     # Modulation radius (in lambda/D units)
+#   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
+#   wavelengthInNm:    750                     # [nm] Pyramid wavelength
+#   inputs:
+#     in_ef: 'ef_prop.out_ef' #'prop.out_source_ngs_ef'
 
-cred10:
-  class:             'CCD'
-  simul_params_ref:  'main'
-  size:              [120,120]            # Total detector size
-  dt:                0.00025                # [s] Integration time (2000 fps)
-  bandw:             400                   # [nm]
-  photon_noise:      true                  # Enable photon noise
-  readout_noise:     true                  # Enable read noise
-  excess_noise:      true                  # Enable excess noise
-  readout_level:     0.5                   # [e-/pix/frame] Read noise level
-  emccd_gain:        400                   # EMCCD gain factor
-  quantum_eff:       0.2                   # QE x transmission
-  inputs:
-    in_i:            'pyr0.out_i' 
-  outputs:           ['out_pixels']
+# cred10:
+#   class:             'CCD'
+#   simul_params_ref:  'main'
+#   size:              [120,120]            # Total detector size
+#   dt:                0.00025                # [s] Integration time (2000 fps)
+#   bandw:             400                   # [nm]
+#   photon_noise:      true                  # Enable photon noise
+#   readout_noise:     true                  # Enable read noise
+#   excess_noise:      true                  # Enable excess noise
+#   readout_level:     0.5                   # [e-/pix/frame] Read noise level
+#   emccd_gain:        400                   # EMCCD gain factor
+#   quantum_eff:       0.2                   # QE x transmission
+#   inputs:
+#     in_i:            'pyr0.out_i' 
+#   outputs:           ['out_pixels']
 
-pyr0_slopes:
-  class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata_48x48'           
-  slopes_from_intensity:  true
-  sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
-  inputs:
-    in_pixels:        'cred10.out_pixels'
-  outputs:           ['out_slopes']
+# pyr0_slopes:
+#   class:                  'PyrSlopec'
+#   pupdata_object:         'pyr_pupdata_48x48'           
+#   slopes_from_intensity:  true
+#   sn_object:            'pyr0.0_48x48_sn' #'pyr0.0_sn_pc_s0.9_c095'  #'pyr0.0_slope_null_4kHz'
+#   inputs:
+#     in_pixels:        'cred10.out_pixels'
+#   outputs:           ['out_slopes']
 
-pyr0_modalrec:
-  class:             'Modalrec'
-  recmat_object:     'pyr0.0_48x48_1300modes_rec'        
-  inputs:
-    in_slopes:       'pyr0_slopes.out_slopes'
-  outputs:           ['out_modes']
+# pyr0_modalrec:
+#   class:             'Modalrec'
+#   recmat_object:     'pyr0.0_48x48_1300modes_rec'        
+#   inputs:
+#     in_slopes:       'pyr0_slopes.out_slopes'
+#   outputs:           ['out_modes']
 
 # ########################### ZWFS ####################################
 # zwfs:
@@ -293,7 +297,7 @@ filter:
 
 gain_ramp:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.1],[0.2]]
+  scheduled_values: [[0.1],[0.35]]
   scheduled_times: [0.01]
   modes_per_group: [1300]
 
@@ -308,31 +312,31 @@ dm:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']
 
-dm_perfect:
-  class:             'DM'
-  simul_params_ref:  'main'
-  ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
-  m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
-  nmodes:            1300             # Number of controlled modes
-  height:            0                # Ground-conjugated DM
-  inputs:
-    in_command:      'atmo_modes.out_modes'
-  outputs:           ['out_layer']
+# dm_perfect:
+#   class:             'DM'
+#   simul_params_ref:  'main'
+#   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
+#   m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
+#   nmodes:            1300             # Number of controlled modes
+#   height:            0                # Ground-conjugated DM
+#   inputs:
+#     in_command:      'atmo_modes.out_modes'
+#   outputs:           ['out_layer']
 
 ###########################################################
 ##################### POST-PROCESSING #####################
 # Coronagraphic and non-coronagraphic PSFs
-psf:
-  class:             'PSF'
-  simul_params_ref:  'main'
-  wavelengthInNm:    750                 # [nm] visible
-  nd:                4                    # 4x padding for PSF
-  start_time:        1.0                  # Start PSF integration after 500ms
-  verbose: true
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'ef_prop.out_ef'
-  outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+# psf:
+#   class:             'PSF'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    750                 # [nm] visible
+#   nd:                4                    # 4x padding for PSF
+#   start_time:        1.0                  # Start PSF integration after 500ms
+#   verbose: true
+#   # compute_profile_metrics: true
+#   inputs:
+#     in_ef:           'ef_prop.out_ef'
+#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 coro_psf:
   class:             'PsfCoronagraph'
@@ -341,24 +345,22 @@ coro_psf:
   nd:                4                    # 4x padding for PSF
   start_time:        1.0                  # Start PSF integration after 500ms
   # verbose: true
-  use_average_field: false
+  use_average_field: true
   compute_profile_metrics: true
   inputs:
     in_ef:           'ef_prop.out_ef' 
-  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf_profile'] # 'out_std_coronagraph_psf','out_int_coronagraph_psf_profile',
 
-coro_opt_psf:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    750                 # [nm] visible
-  nd:                4                    # 4x padding for PSF
-  start_time:        1.0                  # Start PSF integration after 500ms
-  # verbose: true
-  use_average_field: false
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'perfect_corr.out_ef' 
-  outputs:           ['out_coronagraph_psf','out_std_coronagraph_psf_profile'] 
+# coro_opt_psf:
+#   class:             'PsfCoronagraph'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    750                 # [nm] visible
+#   nd:                4                    # 4x padding for PSF
+#   start_time:        1.0                  # Start PSF integration after 500ms
+#   # verbose: true
+#   use_average_field: true
+#   # compute_profile_metrics: true
+#   inputs:
+#     in_ef:           'perfect_corr.out_ef' 
 
 dm_mode_res:
   class:            'ModalAnalysis'
@@ -381,19 +383,20 @@ data_store:
   inputs:
     input_list: [
                   # 'test_fresnel_ef-prop.out_source_ngs_ef',
-                  'sr-psf.out_sr',
-                  'psf-psf.out_psf',
+                  # 'sr-psf.out_sr',
+                  # 'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
+                  'sr-coro_psf.out_sr',
                   'coro_psf-coro_psf.out_coronagraph_psf',
-                  'opt_psf-coro_opt_psf.out_psf',
+                  # 'coro_opt_psf-coro_opt_psf.out_coronagraph_psf',
                   # 'coro_psf_std-coro_psf.out_std_coronagraph_psf',
-                  'psf_profile-coro_psf.out_int_psf_profile',
-                  'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
-                  'coro_opt_psf_profile-coro_opt_psf.out_std_coronagraph_psf_profile',
+                  # 'psf_profile-coro_psf.out_int_psf_profile',
+                  # 'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
+                  # 'coro_opt_psf_profile-coro_opt_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',
-                  'pyr_modes-pyr0_modalrec.out_modes',
+                  'pyr_modes-pyr_modalrec.out_modes',
                   # 'zwfs_modes-zwfs_modalrec.out_modes',
                   # 'ccd1-cred1.out_pixels',
                   # 'ccd2-ocam2.out_pixels'
