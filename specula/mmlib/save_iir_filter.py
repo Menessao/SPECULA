@@ -44,11 +44,11 @@ def guidos_standard_iir(n_filters:int, excluded_filters:int,
     t = create_stepped_t(n_filters,excluded_filters=excluded_filters)
     t_powered = t**power_exponent 
 
-    end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
-    end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
+    # end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
+    # end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
 
-    end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
-    end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
+    # end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
+    # end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
 
     zero_values = start_zero[0] + (end_zero[0] - start_zero[0]) * t_powered
     zero2_values = start_zero[1] + (end_zero[1] - start_zero[1]) * t_powered
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 1300
+    n_filters = 300
     excluded_filters = 0
     make_tiled = False
     file_name = os.path.join(path,f'cascading_iirfilter_{n_filters}modes.fits')

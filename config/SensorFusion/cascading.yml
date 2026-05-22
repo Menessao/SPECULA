@@ -231,7 +231,7 @@ filter2:
   # class:             'Integrator'
   # simul_params_ref:  'main'
   # delay:             1                     # 1 frame delay (realistic)
-  # int_gain:          [0.6]
+  # int_gain:          [0.7]
   # n_modes:           [300]                 # Number of modes to control
   # inputs:
   #   delta_comm:      'pyr0_modalrec.out_modes' #
@@ -239,7 +239,7 @@ filter2:
   class:                'IirFilter'
   simul_params_ref:     'main'
   delay:                1 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_300modes'
+  iir_filter_data_object:  'cascading_iirfilter_300modes'
   inputs:
     delta_comm: 'pyr0_modalrec.out_modes'
     gain_mod: 'bootstrap.output'

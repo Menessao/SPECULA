@@ -4,26 +4,22 @@ import os
 
 from specula.mmlib.utils import radial_order
 
-# def save_correction_vector(dir_path:str,min_corr:float,max_corr:float,Nmodes:int=660,Ncorrmodes:int=None):
-#     if Ncorrmodes is None:
-#         Ncorrmodes = Nmodes
-#     max_rad_order = radial_order(Nmodes)+1
-#     cc = np.linspace(max_corr,min_corr,max_rad_order-2)
-#     tt = np.hstack([np.repeat(cc[i-2],i) for i in range(2,max_rad_order)])
-#     residuals = np.zeros(Nmodes)
-#     residuals[:Ncorrmodes] = tt[:Ncorrmodes]
+def save_perfect_correction_vector(dir_path:str,Nmodes:int=660,Ncorrmodes:int=500):
+
+    residuals = np.ones(Nmodes)
+    residuals[:Ncorrmodes] = 0
     
-#     dirpath = os.path.join(dir_path,'data')
-#     os.makedirs(dirpath,exist_ok=True)
-#     fname = f'correction_vector_{Ncorrmodes}modes_c{max_corr:1.2f}-{min_corr:1.2f}.fits'
-#     filepath = os.path.join(dirpath,fname)
-#     hdr = fits.Header()
-#     hdr['VERSION'] = 1
-#     hdr['OBJ_TYPE'] = 'BaseValue'
-#     hdr['NDARRAY'] = 1
-#     fits.writeto(filepath, residuals, hdr, overwrite=True)
-#     print(f'Saved correction vector as {fname}')
-#     return fname
+    dirpath = os.path.join(dir_path,'data')
+    os.makedirs(dirpath,exist_ok=True)
+    fname = f'correction_vector_perfect{Ncorrmodes}modes.fits'
+    filepath = os.path.join(dirpath,fname)
+    hdr = fits.Header()
+    hdr['VERSION'] = 1
+    hdr['OBJ_TYPE'] = 'BaseValue'
+    hdr['NDARRAY'] = 1
+    fits.writeto(filepath, residuals, hdr, overwrite=True)
+    print(f'Saved correction vector as {fname}')
+    return fname
 
 
 def save_correction_vector(dir_path:str, max_corr: float, min_corr: float,  Nmodes: int = 720, Ncorrmodes: int = None):
@@ -59,9 +55,11 @@ def save_correction_vector(dir_path:str, max_corr: float, min_corr: float,  Nmod
     return fname
     
 if __name__ == "__main__":
-    dir_path = '/raid1/mmenessini/calibration/SOUL'
-    Ncorrmodes = 600
-    save_correction_vector(dir_path=dir_path, max_corr=0.99, min_corr=0.2, Ncorrmodes=Ncorrmodes)
-    save_correction_vector(dir_path=dir_path, max_corr=0.9, min_corr=0.2, Ncorrmodes=Ncorrmodes)
-    save_correction_vector(dir_path=dir_path, max_corr=0.85, min_corr=0.2, Ncorrmodes=Ncorrmodes)
-    save_correction_vector(dir_path=dir_path, max_corr=0.8, min_corr=0.2, Ncorrmodes=Ncorrmodes)
+    # dir_path = '/raid1/mmenessini/calibration/SOUL'
+    # Ncorrmodes = 600
+    # save_correction_vector(dir_path=dir_path, max_corr=0.99, min_corr=0.2, Ncorrmodes=Ncorrmodes)
+    # save_correction_vector(dir_path=dir_path, max_corr=0.9, min_corr=0.2, Ncorrmodes=Ncorrmodes)
+    # save_correction_vector(dir_path=dir_path, max_corr=0.85, min_corr=0.2, Ncorrmodes=Ncorrmodes)
+    # save_correction_vector(dir_path=dir_path, max_corr=0.8, min_corr=0.2, Ncorrmodes=Ncorrmodes)
+    dir_path = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
+    save_perfect_correction_vector(dir_path=dir_path, Ncorrmodes=500, Nmodes=649)
