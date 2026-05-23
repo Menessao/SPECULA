@@ -48,6 +48,7 @@ class PyrPupdataCalibrator(BaseProcessingObj):
                  thr2: float = 0.25,
                  obs_thr: float = 0.8,
                  slopes_from_intensity: bool=False,
+                 super_resolution_shift: float=0.0,
                  output_tag: str = None,
                  auto_detect_obstruction: bool = True,
                  min_obstruction_ratio: float = 0.05,
@@ -109,6 +110,7 @@ class PyrPupdataCalibrator(BaseProcessingObj):
         self.thr2 = thr2
         self.obs_thr = obs_thr
         self.slopes_from_intensity = slopes_from_intensity
+        self.super_resolution_shift = super_resolution_shift
         self.auto_detect_obstruction = auto_detect_obstruction
         self.min_obstruction_ratio = min_obstruction_ratio
         self.display_debug = display_debug
@@ -176,6 +178,11 @@ class PyrPupdataCalibrator(BaseProcessingObj):
         if self.display_debug:
             self._debug_plot(image, centers, radii)
 
+        self.sr_shifts = 0
+        if self.super_resolution_shift > 0:
+            # shift right pupils in x and bottom pupils in y
+            self.sr_shifts = self.xp.array([[1,0],[0,0],[0,1],[1,1]])
+        
         # Generate indices
         ind_pup = self._generate_indices(centers, radii, image.shape)
 
@@ -187,6 +194,7 @@ class PyrPupdataCalibrator(BaseProcessingObj):
         self.pupdata.cy = centers[pup_order, 1]
         self.pupdata.framesize = image.shape
         self.pupdata.slopes_from_intensity = self.slopes_from_intensity
+        self.pupdata.super_resolution_shift = self.super_resolution_shift * self.sr_shifts
         self.pupdata.generation_time = self.current_time
 
         # Reset integrated intensity
@@ -401,11 +409,17 @@ class PyrPupdataCalibrator(BaseProcessingObj):
                                      "Check input image and parameters.")
 
                 # Distance from center
-                r = self.xp.sqrt((x_coords - centers[i, 0])**2 + (y_coords - centers[i, 1])**2)
+                r_obs = self.xp.sqrt((x_coords - centers[i, 0])**2 + (y_coords - centers[i, 1])**2)
 
+                if self.super_resolution_shift > 0:
+                    shifted_center = center[i,:] + self.sr_shifts[i,:]
+                    r = self.xp.sqrt((x_coords - shifted_center)**2 + (y_coords - shifted_center)**2)
+                else:
+                    r = r_obs.copy()
+                    
                 # Create mask (annulus if obstruction detected)
                 if self.central_obstruction_ratio > 0:
-                    mask = (r <= radii[i]) & (r >= radii[i] * self.central_obstruction_ratio)
+                    mask = (r <= radii[i]) & (r_obs >= radii[i] * self.central_obstruction_ratio)
                 else:
                     mask = r <= radii[i]
 
