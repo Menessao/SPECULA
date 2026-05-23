@@ -14,6 +14,7 @@ class WaveGenerator(BaseGenerator):
                  offset: float = 0.0,
                  constant: float = 0.0,
                  slope: float = 0.0,
+                 mode_numbers = None
                  vsize: int = 1,
                  output_size: int = 1,
                  target_device_idx: int = None,
@@ -43,6 +44,17 @@ class WaveGenerator(BaseGenerator):
         self.slope = self.to_xp(np.atleast_1d(slope), dtype=self.dtype)
         self.constant = self.to_xp(np.atleast_1d(constant), dtype=self.dtype)
         self.vsize_array = self.xp.ones(vsize, dtype=self.dtype)
+
+        if mode_numbers is not None:
+            self.amp = self.xp.zeros(vsize, dtype=self.dtype)
+            self.freqs = self.xp.zeros(vsize, dtype=self.dtype)
+            self.slope = self.xp.zeros(vsize, dtype=self.dtype)
+            self.offset = self.xp.zeros(vsize, dtype=self.dtype)
+            self.constant = self.xp.zeros(vsize, dtype=self.dtype)
+            for a,f,m in zip(amp, freq, mode_numbers):
+                self.amp[int(m)] = a
+                self.freqs[int(m)] = f
+            
 
         # Validate array sizes
         self._validate_array_sizes(
