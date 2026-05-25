@@ -64,6 +64,7 @@ class PyrSlopec(Slopec):
         
         if self.slopes_from_intensity:
             self.slopes.single_mask = self.pupdata.complete_mask()
+            self.slopes.resize(len(self.pup_idx))
         else:
             self.slopes.single_mask = self.pupdata.single_mask()
         self.slopes.display_map = self.pupdata.display_map
@@ -81,7 +82,7 @@ class PyrSlopec(Slopec):
 
     def nslopes(self):
         if self.slopes_from_intensity:
-            return len(self.pupdata.pupil_idx(0)) * 4
+            return len(self.pupdata.pupil_idx(0)) + len(self.pupdata.pupil_idx(1)) + len(self.pupdata.pupil_idx(2)) + len(self.pupdata.pupil_idx(3))
         else:
             return len(self.pupdata.pupil_idx(0)) * 2
 
@@ -104,9 +105,10 @@ class PyrSlopec(Slopec):
         C = self.flat_pixels[self.pup_idx2].astype(self.xp.float32)
         D = self.flat_pixels[self.pup_idx3].astype(self.xp.float32)
 
+        min_pup_len = self.xp.min(self.xp.array([len(self.pup_idx0),len(self.pup_idx1),len(self.pup_idx2),len(self.pup_idx3)]))
         # Compute flux per subaperture (sum of all 4 pupils)
-        flux_per_subap = A + B + C + D
-        self.flux_per_subaperture_vector.value[:] = flux_per_subap
+        flux_per_subap = A[:min_pup_len] + B[:min_pup_len] + C[:min_pup_len] + D[:min_pup_len]
+        self.flux_per_subaperture_vector.value[:min_pup_len] = flux_per_subap
 
         # Compute total intensity
         self.total_intensity = self.xp.sum(flux_per_subap)
@@ -142,8 +144,13 @@ class PyrSlopec(Slopec):
                 self.sx *= inv_factor[0]
                 self.sy *= inv_factor[0]
 
-        self.slopes.xslopes = self.sx
-        self.slopes.yslopes = self.sy
+        if self.slopes_from_intensity:
+            meta_intensities = self.xp.concatenate((self.sx,self.sy))
+            self.slopes.xslopes = meta_intensities[:self.slopes.size//2]
+            self.slopes.yslopes = meta_intensities[self.slopes.size//2:self.slopes.size//2+len(self.slopes.yslopes)]
+        else:
+            self.slopes.xslopes = self.sx
+            self.slopes.yslopes = self.sy
 
     def post_trigger(self):
         super().post_trigger()

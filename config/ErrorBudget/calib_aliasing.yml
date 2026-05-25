@@ -2,7 +2,7 @@
 # ================================================
 # Override main simulation parameters
 main_override:
-  total_time: 11.76                # 20'000 frames x 0.000588 s
+  total_time: 5.88                # 10'000 frames x 0.000588 s
 
 ################################## ATMO RESIDUAL #####################################
 
@@ -10,9 +10,9 @@ main_override:
 perfect_dm:
   class: 'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_ifunc'      # Our computed influence functions
-  m2c_object:        'asm_m2c'        # Modal-to-command matrix
-  nmodes:            630              # Number of controlled modes
+  ifunc_object:      'asm_v30dx_ifunc'      # Our computed influence functions
+  m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
+  nmodes:            500              # Number of controlled modes
   height:            0.0              # Ground-conjugated DM
   inputs:
     in_command: 'atmo_modes.out_modes'
@@ -36,12 +36,6 @@ ocam_override:
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
-pyr_pc_modalrec:
-  class:             'Modalrec'
-  recmat_object:     'pyr3.0_40x40_s1.0_400modes_rec'        
-  inputs:
-    in_slopes:       'pyr_slopes.out_slopes'
-  outputs:           ['out_modes']
 
 
 # Data store for results
@@ -49,7 +43,7 @@ data_store_override:
   store_dir:         '/raid1/mmenessini/calibration/SOUL/scratch_aliasing' 
   create_tn: false
   inputs:
-    input_list: ['pyr_modes-pyr_modalrec.out_modes','pyr_pc_modes-pyr_pc_modalrec.out_modes']
+    input_list: ['res_screens-ef_prop.out_ef','rec_modes-pyr_modalrec.out_modes']
 
 
 # Remove unnecessary objects during calibration

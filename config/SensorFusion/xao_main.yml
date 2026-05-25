@@ -338,19 +338,7 @@ dm:
 #     in_ef:           'ef_prop.out_ef'
 #   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
-coro_psf:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    750                 # [nm] visible
-  nd:                4                    # 4x padding for PSF
-  start_time:        1.0                  # Start PSF integration after 500ms
-  # verbose: true
-  use_average_field: true
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'ef_prop.out_ef' 
-
-# coro_opt_psf:
+# coro_psf:
 #   class:             'PsfCoronagraph'
 #   simul_params_ref:  'main'
 #   wavelengthInNm:    750                 # [nm] visible
@@ -358,9 +346,21 @@ coro_psf:
 #   start_time:        1.0                  # Start PSF integration after 500ms
 #   # verbose: true
 #   use_average_field: true
-#   # compute_profile_metrics: true
+#   compute_profile_metrics: true
 #   inputs:
-#     in_ef:           'perfect_corr.out_ef' 
+#     in_ef:           'ef_prop.out_ef' 
+
+coro_opt_psf:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                    # 4x padding for PSF
+  start_time:        1.0                  # Start PSF integration after 500ms
+  # verbose: true
+  use_average_field: true
+  # compute_profile_metrics: true
+  inputs:
+    in_ef:           'perfect_corr.out_ef' 
 
 dm_mode_res:
   class:            'ModalAnalysis'
@@ -387,12 +387,11 @@ data_store:
                   # 'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
                   'sr-coro_psf.out_sr',
-                  'coro_psf-coro_psf.out_coronagraph_psf',
+                  # 'coro_psf-coro_psf.out_coronagraph_psf',
                   # 'coro_opt_psf-coro_opt_psf.out_coronagraph_psf',
                   # 'coro_psf_std-coro_psf.out_std_coronagraph_psf',
                   # 'psf_profile-coro_psf.out_int_psf_profile',
                   # 'coro_psf_profile-coro_psf.out_std_coronagraph_psf_profile',
-                  # 'coro_opt_psf_profile-coro_opt_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',

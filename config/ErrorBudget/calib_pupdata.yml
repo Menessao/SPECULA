@@ -5,7 +5,9 @@ pyr_pupdata:
   thr1: 0.1
   thr2: 0.4
   display_debug: false
-  output_tag:        'pyr_pupdata_40x40'
+  output_tag:        'pyr_pupdata_20x20'
+  # super_resolution_shift: 0.5
+  # slopes_from_intensity: true
   overwrite: false
   inputs:
     in_i: 'pyr.out_i'
@@ -14,7 +16,6 @@ pyr_override:
   mod_amp:           10.0   # Modulation radius (in lambda/D units)
   inputs:
     in_ef: 'prop.out_source_ngs_ef'
-
 
 main_override:
   total_time:  0.000588

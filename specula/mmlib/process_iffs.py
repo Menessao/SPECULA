@@ -64,32 +64,32 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float, r0=0.1, L0=2
     m2c_full_filename = calib_manager.filename('m2c', m2c_full_tag)
     base_inv_filename = calib_manager.filename('ifunc', base_inv_tag)
 
-    # # Regularized influence functions
-    # thr = 1e-2
-    # U,S,Vt = np.linalg.svd(influence_functions,full_matrices=False)
-    # Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
-    # influence_functions = (U * Sreg) @ Vt
-    # print(f'Regularized {np.sum(S<thr*S.max()):1.0f} eigenvalues')
+    # Regularized influence functions
+    thr = 1e-2
+    U,S,Vt = np.linalg.svd(influence_functions,full_matrices=False)
+    Sreg = S+S.max()*thr #np.maximum(S,S.max()*thr)
+    influence_functions = (U * Sreg) @ Vt
+    print(f'Regularized {np.sum(S<thr*S.max()):1.0f} eigenvalues')
 
     print(f"Influence functions shape: {influence_functions.shape}")
     print(f"KL basis shape: {kl_basis.shape}")
     print(f"Number of KL modes: {kl_basis.shape[0]}")
 
-    # zern_modes = 2
-    # oversampling = 4
+    zern_modes = 2
+    oversampling = 4
 
-    # kl_basis, m2c, singular_values = make_modal_base_from_ifs_fft(
-    #     pupil_mask=specula.xp.array(1-pmask), #specula.xp.array(unobs_pupil_mask),#
-    #     diameter=D,
-    #     influence_functions=influence_functions.T,
-    #     r0=r0,
-    #     L0=L0,
-    #     zern_modes=zern_modes,
-    #     oversampling=oversampling,
-    #     if_max_condition_number=1e+2,
-    #     xp=specula.xp,
-    #     dtype=specula.xp.float32
-    # )
+    kl_basis, m2c, singular_values = make_modal_base_from_ifs_fft(
+        pupil_mask=specula.xp.array(1-pmask), #specula.xp.array(unobs_pupil_mask),#
+        diameter=D,
+        influence_functions=influence_functions.T,
+        r0=r0,
+        L0=L0,
+        zern_modes=zern_modes,
+        oversampling=oversampling,
+        if_max_condition_number=1e+2,
+        xp=specula.xp,
+        dtype=specula.xp.float32
+    )
 
     kl_basis_inv = np.linalg.pinv(kl_basis)
 
@@ -114,7 +114,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float, r0=0.1, L0=2
         m2c=m2c
     )
     m2c_obj.save(m2c_filename, overwrite=True)
-    print("OK: " + m2c_full_filename + f" (m2c matrix: {m2c.shape})")
+    print("OK: " + m2c_filename + f" (m2c matrix: {m2c.shape})")
     
     m2c_obj = M2C(
         m2c=m2c_full

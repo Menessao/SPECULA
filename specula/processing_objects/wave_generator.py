@@ -14,7 +14,7 @@ class WaveGenerator(BaseGenerator):
                  offset: float = 0.0,
                  constant: float = 0.0,
                  slope: float = 0.0,
-                 mode_numbers = None
+                 mode_numbers = None,
                  vsize: int = 1,
                  output_size: int = 1,
                  target_device_idx: int = None,

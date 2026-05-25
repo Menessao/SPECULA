@@ -181,7 +181,7 @@ class PyrPupdataCalibrator(BaseProcessingObj):
         self.sr_shifts = 0
         if self.super_resolution_shift > 0:
             # shift right pupils in x and bottom pupils in y
-            self.sr_shifts = self.xp.array([[1,0],[0,0],[0,1],[1,1]])
+            self.sr_shifts = self.xp.array([[0,1],[1,1],[0,0],[1,0]])
         
         # Generate indices
         ind_pup = self._generate_indices(centers, radii, image.shape)
@@ -412,8 +412,8 @@ class PyrPupdataCalibrator(BaseProcessingObj):
                 r_obs = self.xp.sqrt((x_coords - centers[i, 0])**2 + (y_coords - centers[i, 1])**2)
 
                 if self.super_resolution_shift > 0:
-                    shifted_center = center[i,:] + self.sr_shifts[i,:]
-                    r = self.xp.sqrt((x_coords - shifted_center)**2 + (y_coords - shifted_center)**2)
+                    shifted_center = centers[i,:] + self.sr_shifts[i,:]
+                    r = self.xp.sqrt((x_coords - shifted_center[0])**2 + (y_coords - shifted_center[1])**2)
                 else:
                     r = r_obs.copy()
                     
