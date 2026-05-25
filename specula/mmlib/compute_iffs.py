@@ -1,5 +1,5 @@
 import specula
-specula.init(-1)  # Use GPU device 0 (or -1 for CPU)
+specula.init(0)  # Use GPU device 0 (or -1 for CPU)
 
 import numpy as np
 import os
@@ -314,5 +314,9 @@ if __name__ == "__main__":
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
     Npix = 120
-    compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
+    compute_and_save_influence_functions(ekarus_dir,tag='dm820', pupil_pixels=Npix, n_acts=32, #shrink_coords=0.9,
                                           geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
+    compute_and_save_influence_functions(ekarus_dir,tag='dm241', pupil_pixels=Npix, n_acts=17, #shrink_coords=0.9,
+                                          geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
+    # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
+    #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
