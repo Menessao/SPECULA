@@ -152,10 +152,11 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, D:float, r0=0.1, L0=2
 
 if __name__ == "__main__":
     D = 8.4
-    data_path = '/raid1/mmenessini/LBTData/KLv30dx'
-    soul_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
-
-    postprocess_iffs(root_dir=soul_dir, data_path=data_path, tag='asm_v30dx', D=D)
+    version = 'v30dx'
+    version = 'v32sx'
+    data_path = '/raid1/mmenessini/LBTData/KL'+version
+    soul_dir = '/raid1/mmenessini/calibration/SOUL/KL'+version
+    postprocess_iffs(root_dir=soul_dir, data_path=data_path, tag='asm_'+version, D=D)
 
 
 

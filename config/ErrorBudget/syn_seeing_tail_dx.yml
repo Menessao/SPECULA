@@ -101,7 +101,9 @@ dm:
 data_store:
   class:             'DataStore'
   store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx'             # Data result directory: 'store_dir'/TN/
+  create_tn:          false
   inputs:
-    input_list: ['atmo_screens-prop.out_source_ngs_ef']
+    input_list: ['atmo_s1.0_modes501.648-prop.out_source_ngs_ef',
+                  'modal_cmds-atmo_correction.out_value']
 
 # remove: ['']

@@ -62,4 +62,5 @@ if __name__ == "__main__":
     # save_correction_vector(dir_path=dir_path, max_corr=0.85, min_corr=0.2, Ncorrmodes=Ncorrmodes)
     # save_correction_vector(dir_path=dir_path, max_corr=0.8, min_corr=0.2, Ncorrmodes=Ncorrmodes)
     dir_path = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
-    save_perfect_correction_vector(dir_path=dir_path, Ncorrmodes=500, Nmodes=649)
+    dir_path = '/raid1/mmenessini/calibration/SOUL/KLv32sx'
+    save_perfect_correction_vector(dir_path=dir_path, Ncorrmodes=500, Nmodes=651)

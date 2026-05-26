@@ -1,0 +1,109 @@
+
+# Main simulation parameters
+main:
+  class:             'SimulParams'
+  root_dir:          '/raid1/mmenessini/calibration/SOUL/KLv32sx'       # CalibManager root directory (all the data are in subdirectories)
+  pixel_pupil:       198                   # Must match influence function computation
+  pixel_pitch:       0.042639            # [m] Pitch of the pupil phase array
+  total_time:        4.724                # [s] Total simulation running time
+  time_step:         0.001176               # [s] Simulation time step
+  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  display_server:    false                 # Disable for batch runs
+
+# Atmospheric conditions
+seeing:
+  class:             'WaveGenerator'
+  constant:          1.0                  # [arcsec]
+
+wind_speed:
+  class:             'WaveGenerator'
+  constant:          [15.0, 13.0, 13.0, 9.0, 9.0, 15.0, 25.0, 40.0, 21.0]    # [m/s] Multi-layer wind speeds
+
+wind_direction:
+  class:             'WaveGenerator'
+  constant:          [38.0, 34.0, 54.0, 42.0, 57.0, 48.0, -102.0, -83.0, -77.0] # [deg] Wind directions for each layer
+
+# Natural guide star for WFS
+source_ngs:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
+  height:            .inf                  # Infinite height (star)
+  magnitude:         8.0                   # R-band magnitude (bright NGS)
+  wavelengthInNm:    750                   # [nm] R-band for WFS
+
+# Telescope pupil geometry
+pupilstop:
+  class:             'Pupilstop'
+  tag:               'asm_v32sx_198pixels'
+
+
+# Multi-layer atmospheric model
+atmo:
+  class:             'AtmoEvolution'
+  simul_params_ref:  'main'
+  L0:                25.0                   # [m] Outer scale
+  heights:           [42.0, 140.0, 281.0, 562.0, 1125.0, 2250.0, 4500.0, 9000.0, 18000.0] # [m] Ground, mid, high layers at 0 zenith angle
+  Cn2:               [0.5328,0.0145,0.035,0.0957,0.1083,0.0437,0.0658,0.0371,0.0671]        # Cn2 fractions (sum = 1.0)
+  fov:               0.0                    # [arcsec] Field of view
+  inputs:
+    seeing:          'seeing.output'
+    wind_speed:      'wind_speed.output'
+    wind_direction:  'wind_direction.output'
+  outputs:           ['layer_list']
+
+
+atmo_prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs'] 
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']       # Pupil
+  outputs:           ['out_source_ngs_ef'] 
+
+prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs'] 
+  inputs:
+    common_layer_list: ['pupilstop','dm.out_layer']       # Pupil
+  outputs:           ['out_source_ngs_ef'] 
+
+atmo_modes:
+  class: 'ModalAnalysis'
+  ifunc_inv_object: 'asm_v32sx_kl_inv'
+  nmodes: 651
+  inputs:
+    in_ef: 'atmo_prop.out_source_ngs_ef'
+  outputs: ['out_modes']
+
+atmo_correction:
+  class:  'BaseOperation'
+  constant_mul_data: 'correction_vector_perfect500modes' 
+  inputs:
+    in_value1: 'atmo_modes.out_modes'
+  outputs: ['out_value']
+
+dm:
+  class:             'DM'
+  sign:              1
+  simul_params_ref:  'main'
+  ifunc_object:      'asm_v32sx_ifunc'      # Our computed influence functions
+  m2c_object:        'asm_v32sx_m2c'        # Modal-to-command matrix
+  height:            0                # Ground-conjugated DM
+  nmodes:            651
+  inputs:
+    in_command:      'atmo_correction.out_value'
+  outputs:           ['out_layer']
+
+
+# Data store for results
+data_store:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/SOUL/KLv32sx'             # Data result directory: 'store_dir'/TN/
+  create_tn:          false
+  inputs:
+    input_list: ['atmo_s1.0_modes501.651-prop.out_source_ngs_ef',
+                  'modal_cmds-atmo_correction.out_value']
+
+# remove: ['']

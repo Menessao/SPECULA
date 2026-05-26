@@ -13,7 +13,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    648                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_20x20_im'            # Output IM filename
+  im_tag:    'pyr5.0_40x40_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -39,13 +39,13 @@ dm_override:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
-  # mod_amp: 0.5
+  mod_amp: 5.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
 # Super resolution testing
 pyr_slopes_override:
-  pupdata_object:         'pyr_pupdata_20x20'  
+  pupdata_object:         'pyr_pupdata_40x40'  
   # slopes_from_intensity: true  
 
 # Disable noise for clean measurements

@@ -15,7 +15,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr5.0_s1.0_c20260506_092825_im'            # Output IM filename
+  im_tag:    'pyr3.0_s1.0_c500perf_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -49,17 +49,10 @@ atmo_random:
 modal_analysis_random:
   class: 'ModalAnalysis'
   ifunc_inv_object: 'asm_v30dx_ifunc_inv'
-  nmodes: 648
+  nmodes: 500
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
-
-scale_random:
-  class:  'BaseOperation'
-  constant_mul_data: 'correction_vector_20260506_092825' 
-  inputs:
-    in_value1: 'modal_analysis_random.out_modes'
-  outputs: ['out_value']
 
 # DM applying partial correction
 dm_random:
@@ -69,7 +62,7 @@ dm_random:
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
-    in_command: 'scale_random.out_value'
+    in_command: 'modal_analysis_random.out_modes'
   outputs: ['out_layer']
 
 atmo_pc:
@@ -96,7 +89,7 @@ dm_override:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
-  mod_amp: 5.0
+  mod_amp: 3.0
   inputs: 
     in_ef: 'ef_mode.out_ef'
 

@@ -78,7 +78,7 @@ perfect_dm:
   ifunc_object:      'dm468_ifunc'    # Influence functions
   m2c_object:        'dm468_m2c'       # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            200
+  nmodes:            0
   inputs:
     in_command:      'dm_mode_res.out_modes'
   outputs:           ['out_layer']
@@ -94,6 +94,7 @@ coro_psf:
   nd:                4                   # 4x padding for PSF
   start_time:        0.0                 # Start PSF integration after 500ms
   verbose: false
+  use_average_field: true
   compute_profile_metrics: true
   inputs:
     in_ef:           'perf_prop.out_ef' 
@@ -101,7 +102,7 @@ coro_psf:
 dm_mode_res:
   class:            'ModalAnalysis'
   ifunc_inv_object: 'dm468_kl_inv'
-  nmodes:            200
+  nmodes:            0
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
   outputs: ['out_modes']
