@@ -95,7 +95,7 @@ dm_perfect:
   simul_params_ref:  'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
   m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
-  nmodes:           400             # Number of controlled modes
+  nmodes:           1300             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
     in_command:      'atmo_modes.out_modes'
@@ -107,7 +107,7 @@ coro_psf:
   class:             'PsfCoronagraph'
   simul_params_ref:  'main'
   wavelengthInNm:    750                 # [nm] visible
-  nd:                4                    # 4x padding for PSF
+  nd:                6                    # 4x padding for PSF
   start_time:        0.0                  # Start PSF integration after 500ms
   # verbose: true
   use_average_field: true
@@ -118,7 +118,7 @@ coro_psf:
 atmo_modes:
   class:            'ModalAnalysis'
   ifunc_inv_object: 'bmc2k_vlt_kl_inv'
-  nmodes:           400
+  nmodes:           1300
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
   outputs: ['out_modes']

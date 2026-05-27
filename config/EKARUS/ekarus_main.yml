@@ -17,13 +17,15 @@ seeing:
 
 wind_speed:
   class:             'WaveGenerator'
+  constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
   # constant:          [15.0, 13.0, 13.0, 9.0, 9.0, 15.0, 25.0, 40.0, 21.0]    # [m/s] Multi-layer wind speeds
-  constant:          [2, 4, 6, 25]    # [m/s] Multi-layer wind speeds
+  # constant:          [2, 4, 6, 25]    # [m/s] Multi-layer wind speeds
 
 wind_direction:
   class:             'WaveGenerator'
+  constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
   # constant:          [38.0, 34.0, 54.0, 42.0, 57.0, 48.0, -102.0, -83.0, -77.0] # [deg] Wind directions for each layer
-  constant:          [38, 162, -102, -45] # [deg] Wind directions for each layer
+  # constant:          [38, 162, -102, -45] # [deg] Wind directions for each layer
 
 # Natural guide star for WFS
 source_ngs:
@@ -43,10 +45,10 @@ atmo:
   class:             'AtmoEvolution'
   simul_params_ref:  'main'
   L0:                25.0                   # [m] Outer scale
-  # heights:           [42.0, 140.0, 281.0, 562.0, 1125.0, 2250.0, 4500.0, 9000.0, 18000.0] # [m] Ground, mid, high layers at 0 zenith angle
-  # Cn2:               [0.5328,0.0145,0.035,0.0957,0.1083,0.0437,0.0658,0.0371,0.0671]        # Cn2 fractions (sum = 1.0)
-  heights:           [103, 725, 2637, 11068] # [m] Ground, mid, high layers at 0 zenith angle
-  Cn2:               [0.70, 0.06, 0.14, 0.10]        # Cn2 fractions (sum = 1.0)
+  heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] Ground, mid, high layers at 0 zenith angle
+  Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
+  # heights:           [103, 725, 2637, 11068] # [m] Ground, mid, high layers at 0 zenith angle
+  # Cn2:               [0.70, 0.06, 0.14, 0.10]        # Cn2 fractions (sum = 1.0)
   fov:               0.0                    # [arcsec] Field of view
   inputs:
     seeing:          'seeing.output'
@@ -117,31 +119,37 @@ pyr_modalrec:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-# filter: 
-#   class:             'Integrator'
-#   simul_params_ref:  'main'
-#   delay:             1                      # Temporal delay in time steps
-#   int_gain:          [0.7,0.6,0.0] #
-#   ff:                [1.0,1.0,0.99]
-#   n_modes:           [2,200,38] #
-#   inputs:
-#       delta_comm: 'pyr_modalrec.out_modes'
-
-filter:
-  class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                1 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_400modes'
+filter: 
+  class:             'Integrator'
+  simul_params_ref:  'main'
+  delay:             1.5                     # Temporal delay in time steps
+  int_gain:          [0.5] #[0.7,0.6,0.0] #
+  ff:                [1.0]
+  n_modes:           [400] #
   inputs:
-    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
-    gain_mod: 'gain_ramp.output'
-  outputs:  ['out_comm']
+      delta_comm: 'pyr_modalrec.out_modes'
 
-gain_ramp:
-  class:             'ScheduleGenerator'
-  scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
-  modes_per_group: [150,150,100]
-  scheduled_times: [0.01]
+# filter:
+#   class:                'IirFilter'
+#   simul_params_ref:     'main'
+#   delay:                1 # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object:  'iirfilter_400modes'
+#   inputs:
+#     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+#     gain_mod: 'gain_ramp.output'
+#   outputs:  ['out_comm']
+
+# gain_ramp:
+#   class:             'ScheduleGenerator'
+#   scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
+#   modes_per_group: [150,150,100]
+#   scheduled_times: [0.01]
+
+# gain_ramp:
+#   class:             'ScheduleGenerator'
+#   scheduled_values: [[0.2],[1.0]]
+#   modes_per_group: [400]
+#   scheduled_times: [0.01]
 
 dm:
   class:             'DM'
@@ -163,21 +171,10 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        0.5                  # Start PSF integration after 500ms
-  verbose: true
+  verbose: false
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
-
-# coro_psf:
-#   class:             'PsfCoronagraph'
-#   simul_params_ref:  'main'
-#   wavelengthInNm:    750                 # [nm] visible
-#   nd:                4                   # 4x padding for PSF
-#   start_time:        0.5                 # Start PSF integration after 500ms
-#   verbose: false
-#   compute_profile_metrics: true
-#   inputs:
-#     in_ef:           'ef_prop.out_ef' 
  
 
 dm_mode_res:

@@ -1,0 +1,5 @@
+filter_override:
+  int_gain: [0.8]
+data_store_override:
+  store_dir: /raid1/mmenessini/results/EKARUS/gain_opt/sao_pyr3_250Hz_s1.5_mag7/gain_0.8
+  create_tn: false

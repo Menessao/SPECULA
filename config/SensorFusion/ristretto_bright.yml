@@ -95,7 +95,7 @@ cred1:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.00025                # [s] Integration time (3000 fps)
+  dt:                0.0005                # [s] Integration time (3000 fps)
   bandw:             400                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -171,7 +171,7 @@ pyr_modalrec:
 ############################ Control ################################
 bootstrap1:
   class:              'ScheduleGenerator'
-  scheduled_values:   [[0.1],[0.3],[0.75]] # Nrows x Ncols, times x gains
+  scheduled_values:   [[0.1],[0.3],[0.7]] # Nrows x Ncols, times x gains
   modes_per_group:    [1300] # Ncols
   scheduled_times:    [0.01,0.05] # Nrows-1
 
@@ -186,7 +186,7 @@ filter1:
   # outputs:           ['out_comm']
   class:                'IirFilter'
   simul_params_ref:     'main'
-  delay:                1 # Total temporal delay in time steps is this value +1
+  delay:                0.5 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'cascading_iirfilter_1300modes' #'iirfilter_1300modes_exc1_pow1.5' #
   inputs:
     delta_comm: 'pyr_modalrec.out_modes' #'ogc_modes.out_value' 
