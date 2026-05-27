@@ -108,14 +108,15 @@ if __name__ == "__main__":
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 300
-    excluded_filters = 0
+    n_filters = 1300
+    excluded_filters = 2
+    power = 2.0 # used 0.8 for EKARUS
     make_tiled = False
-    file_name = os.path.join(path,f'cascading_iirfilter_{n_filters}modes.fits')
+    file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
 
     num_array,den_array=guidos_standard_iir(n_filters=n_filters,
                                             excluded_filters=excluded_filters,
-                                            power_exponent=2.0) # used 0.8 for EKARUS
+                                            power_exponent=power)
     
     # b,a=design_f3_controller(fs=2000,f1=10,f2=300,N=2)
 

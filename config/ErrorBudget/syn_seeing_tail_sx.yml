@@ -72,7 +72,7 @@ prop:
 atmo_modes:
   class: 'ModalAnalysis'
   ifunc_inv_object: 'asm_v32sx_kl_inv'
-  nmodes: 651
+  nmodes: 600
   inputs:
     in_ef: 'atmo_prop.out_source_ngs_ef'
   outputs: ['out_modes']
@@ -91,7 +91,7 @@ dm:
   ifunc_object:      'asm_v32sx_ifunc'      # Our computed influence functions
   m2c_object:        'asm_v32sx_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            651
+  nmodes:            600
   inputs:
     in_command:      'atmo_correction.out_value'
   outputs:           ['out_layer']
@@ -103,7 +103,7 @@ data_store:
   store_dir:         '/raid1/mmenessini/results/SOUL/KLv32sx'             # Data result directory: 'store_dir'/TN/
   create_tn:          false
   inputs:
-    input_list: ['atmo_s1.0_modes501.651-prop.out_source_ngs_ef',
+    input_list: ['atmo_s1.0_modes501.600-prop.out_source_ngs_ef',
                   'modal_cmds-atmo_correction.out_value']
 
 # remove: ['']

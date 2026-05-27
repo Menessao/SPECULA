@@ -1,15 +1,15 @@
 # Slope null calibrator - averages WFS response over atmospheric realizations
 pyr_sn:
   class: 'SnCalibrator'
-  output_tag: 'pyr0.0_48x48_pc1300modes_sn'           # Output filename
+  output_tag: 'pyr0.0_24x24_pc500modes_sn'           # Output filename
   overwrite: true
   inputs:
-    in_slopes: 'pyr_slopes.out_slopes'
+    in_slopes: 'pyr0_slopes.out_slopes'
 
 # Random seeing generator - varies around nominal value (here 1.0 arcsec)
 seeing_random:
   class:             'RandomGenerator'
-  amp:               0.1                 # Variation amplitude [arcsec]
+  amp:               0.05                 # Variation amplitude [arcsec]
   constant:          1.0                 # Mean seeing [arcsec]
   distribution:      'UNIFORM'           # Uniform distribution in [0.9, 1.1]
   outputs: ['output']
@@ -22,7 +22,7 @@ atmo_random:
   source_dict_ref:      ['source_ngs']
   inputs:
     seeing: 'seeing_random.output'
-    pupilstop: 'pupilstop''
+    pupilstop: 'pupilstop'
   outputs: ['out_source_ngs_ef']
 
 # Modal decomposition of atmospheric phase
@@ -47,14 +47,14 @@ dm_random:
   simul_params_ref: 'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
   m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
-  nmodes:            1300             # Number of controlled modes
+  nmodes:            500             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
     in_command: 'modal_analysis_random.out_modes' #'scale_random.out_value'
   outputs: ['out_layer']
 
 # Combine atmospheric turbulence with DM correction
-ef_prop_override:
+second_stage_prop_override:
   inputs:
     in_ef1: 'atmo_random.out_source_ngs_ef'    # Turbulence
     in_ef2: 'dm_random.out_layer'                  # Partial correction
@@ -63,18 +63,27 @@ ef_prop_override:
 main_override:
   total_time: 1.000                    # 1000 frames at 1kHz
 
-# # Override Pyramid input to use combined field
-# pyr_override:
-#   mod_amp: 0.0
-#   pup_diam: 24.0
-#   pup_dist: 30.0
+# Override Pyramid input to use combined field
+pyr0_override:
+  mod_amp: 0.0
+  pup_diam: 24.0
+  pup_dist: 30.0
+  inputs:
+    in_ef: 'second_stage_prop.out_ef' 
   
-# cred1_override:
+# cred2_override:
 #   photon_noise:   false                   # No photon noise
 #   readout_noise:  false                   # No read noise
 #   excess_noise:   false                   # No excess noise
 
+data_store_override:
+  store_dir:         '/raid1/mmenessini/calibration/XAO/frames'            # Data result directory: 'store_dir'/TN/
+  create_tn:           false
+  inputs:
+    input_list: ['pyr0.0_24x24_pc500modes_frames-cred2.out_pixels',]
+
 # Remove closed-loop components (not needed for slope null)
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes','data_store', #'bootstrap', 'concat_wfs_modes', #'source_science',
-        'dm','dm_mode_res','filter','psf','prop','pyr_modalrec', 'zwfs_modalrec','coro_psf', 
-        'zwfs','zwfs_slopes','ocam2',]
+remove: ['atmo','seeing','wind_speed','wind_direction', #'bootstrap', 'concat_wfs_modes', #'source_science',
+        'dm1','dm1_mode_res','filter1','psf2','prop','pyr_modalrec','coro_psf1', 
+        'dm2','dm2_mode_res','filter2','coro_psf2', 'atmo_modes', 'cmd1_to_cmd2', 'pyr0_modalrec',
+        'pyr','pyr_slopes','dcao_cmd2','first_stage_prop','cred1']

@@ -305,7 +305,7 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
     # compute_and_save_influence_functions(root_dir,tag='dm241_vlt', pupil_pixels=Npix, n_acts=17,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
-    # compute_and_save_dcao_matrix(root_dir,first_stage_tag='bmc2k_vlt',second_stage_tag='dm468_vlt',N1_modes=1300,N2_modes=300)
+    compute_and_save_dcao_matrix(xao_dir,first_stage_tag='bmc2k_vlt',second_stage_tag='dm468_vlt',N1_modes=1300,N2_modes=150)
 
     # Npix = 160
     # compute_and_save_influence_functions(root_dir,tag='asm', pupil_pixels=Npix, n_acts=30,
@@ -313,10 +313,10 @@ if __name__ == "__main__":
 
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
-    Npix = 120
-    compute_and_save_influence_functions(ekarus_dir,tag='dm820', pupil_pixels=Npix, n_acts=32, #shrink_coords=0.9,
-                                          geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
-    compute_and_save_influence_functions(ekarus_dir,tag='dm241', pupil_pixels=Npix, n_acts=17, #shrink_coords=0.9,
-                                          geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
+    # Npix = 120
+    # compute_and_save_influence_functions(ekarus_dir,tag='dm820', pupil_pixels=Npix, n_acts=32, #shrink_coords=0.9,
+    #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
+    # compute_and_save_influence_functions(ekarus_dir,tag='dm241', pupil_pixels=Npix, n_acts=17, #shrink_coords=0.9,
+    #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
