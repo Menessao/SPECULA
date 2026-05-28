@@ -64,23 +64,42 @@ prop:
     common_layer_list: ['pupilstop']       
   outputs:           ['out_source_ngs_ef'] 
 
-perf_prop:
+perf_prop1:
   class: 'ElectricFieldCombinator'
   inputs:
     in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
-    in_ef2: 'perfect_dm.out_layer'          # DM1 correction
+    in_ef2: 'perfect_dm1.out_layer'          # DM1 correction
   outputs: ['out_ef']
 
 
-perfect_dm:
+perfect_dm1:
   class:             'DM'
   simul_params_ref:  'main'
   ifunc_object:      'dm468_ifunc'    # Influence functions
   m2c_object:        'dm468_m2c'       # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
+  nmodes:            430
+  inputs:
+    in_command:      'dm1_mode_res.out_modes'
+  outputs:           ['out_layer']
+
+perf_prop2:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'perf_prop1.out_ef'    # Turbulence
+    in_ef2: 'perfect_dm2.out_layer'          # DM1 correction
+  outputs: ['out_ef']
+
+
+perfect_dm2:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'dm241_ifunc'    # Influence functions
+  m2c_object:        'dm241_m2c'       # Modal-to-command matrix
+  height:            0                # Ground-conjugated DM
   nmodes:            0
   inputs:
-    in_command:      'dm_mode_res.out_modes'
+    in_command:      'dm2_mode_res.out_modes'
   outputs:           ['out_layer']
 
 
@@ -97,14 +116,22 @@ coro_psf:
   use_average_field: true
   compute_profile_metrics: true
   inputs:
-    in_ef:           'perf_prop.out_ef' 
+    in_ef:           'perf_prop2.out_ef' 
 
-dm_mode_res:
+dm1_mode_res:
   class:            'ModalAnalysis'
   ifunc_inv_object: 'dm468_kl_inv'
-  nmodes:            0
+  nmodes:            430
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
+  outputs: ['out_modes']
+
+dm2_mode_res:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'dm241_kl_inv'
+  nmodes:            0
+  inputs:
+    in_ef: ['perf_prop1.out_ef']
   outputs: ['out_modes']
 
 # Data store for results

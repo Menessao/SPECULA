@@ -106,7 +106,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'           
-  sn_object:              'pyr5.0_40x40_sn' # Commented during calibration
+  # sn_object:              'pyr5.0_40x40_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
     in_pixels:        'ocam.out_pixels'

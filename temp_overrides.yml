@@ -1,5 +1,20 @@
+pyr_override:
+  pup_diam: 40.0
+  pup_dist: 60.0
+  mod_amp: 4.0
+seeing_override:
+  constant: 1.5
+pyr_slopes_override:
+  sn_object: pyr4.0_40x40_sn
+pyr_modalrec_override:
+  recmat_object: 'pyr4.0_40x40_400modes_rec'
+source_ngs_override:
+  magnitude: 3.0
+ocam_override:
+  dt: 0.004
 filter_override:
-  int_gain: [0.8]
+  int_gain: [0.7]
+  delay: 0.38
 data_store_override:
-  store_dir: /raid1/mmenessini/results/EKARUS/gain_opt/sao_pyr3_250Hz_s1.5_mag7/gain_0.8
+  store_dir: /raid1/mmenessini/results/EKARUS/gain_opt/sao_pyr4_250Hz_s1.5_mag3/gain_0.7
   create_tn: false

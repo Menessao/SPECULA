@@ -12,8 +12,8 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    443                         # Number of modes to calibrate
-  im_tag:    'pyr5.0_40x40_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  im_tag:    'pyr3.0_40x40_im'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -38,6 +38,9 @@ dm_override:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
+  pup_diam:          40.                     # Pupil diameter in subaps.
+  pup_dist:          60.    
+  mod_amp: 3.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
