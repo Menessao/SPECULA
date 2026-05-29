@@ -13,7 +13,7 @@ main:
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          2.0                  # [arcsec]
+  constant:          1.5                  # [arcsec]
 
 wind_speed:
   class:             'WaveGenerator'
@@ -78,10 +78,10 @@ ef_prop:
 pyr:
   class:             'ModulatedPyramid'
   simul_params_ref:  'main'
-  pup_diam:          42.                     # Pupil diameter in subaps.
+  pup_diam:          40.                     # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   fov:               4.0                     # Requested field-of-view [arcsec]
-  mod_amp:           5.0                     # Modulation radius (in lambda/D units)
+  mod_amp:           6.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    750                     # [nm] Pyramid wavelength
   inputs:
@@ -106,7 +106,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'           
-  # sn_object:              'pyr5.0_40x40_sn' # Commented during calibration
+  sn_object:              'pyr6.0_40x40_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
     in_pixels:        'ocam.out_pixels'
@@ -114,40 +114,40 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr5.0_40x40_400modes_rec'        
+  recmat_object:     'pyr6.0_40x40_400modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-filter: 
-  class:             'Integrator'
-  simul_params_ref:  'main'
-  delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [0.5] #[0.7,0.6,0.0] #
-  ff:                [1.0]
-  n_modes:           [400] #
-  inputs:
-      delta_comm: 'pyr_modalrec.out_modes'
-
-# filter:
-#   class:                'IirFilter'
-#   simul_params_ref:     'main'
-#   delay:                1 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_400modes'
+# filter: 
+#   class:             'Integrator'
+#   simul_params_ref:  'main'
+#   delay:             1.5                     # Temporal delay in time steps
+#   int_gain:          [0.5] #[0.7,0.6,0.0] #
+#   ff:                [1.0]
+#   n_modes:           [400] #
 #   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
-#     gain_mod: 'gain_ramp.output'
-#   outputs:  ['out_comm']
+#       delta_comm: 'pyr_modalrec.out_modes'
+
+filter:
+  class:                'IirFilter'
+  simul_params_ref:     'main'
+  delay:                0.7 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object: 'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+    gain_mod: 'gain_ramp.output'
+  outputs:  ['out_comm']
+
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
+  modes_per_group: [150,150,100]
+  scheduled_times: [0.01]
 
 # gain_ramp:
 #   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
-#   modes_per_group: [150,150,100]
-#   scheduled_times: [0.01]
-
-# gain_ramp:
-#   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.2],[1.0]]
+#   scheduled_values: [[0.1],[0.9]]
 #   modes_per_group: [400]
 #   scheduled_times: [0.01]
 
@@ -171,7 +171,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        0.5                  # Start PSF integration after 500ms
-  verbose: false
+  verbose: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']

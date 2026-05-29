@@ -1,13 +1,13 @@
 main_override:
   total_time: 1.0
 bootstrap1_override:
-  scheduled_values: [[0.05], [0.3]]
+  scheduled_values: [[0.05], [0.1]]
 bootstrap2_override:
   scheduled_values: [[0.0], [0.0]]
 filter1_override:
   iir_filter_data_object: iirfilter_1300modes_exc1_pow1.5
 data_store_override:
-  store_dir: /raid1/mmenessini/results/Cascading/dcao_gain_opt/dcao_f2_1kHz/int1gain0.30_iirfilter_1300modes_exc1_pow1.5
+  store_dir: /raid1/mmenessini/results/Cascading/dcao_gain_opt/dcao_f2_2kHz/int1gain0.10_iirfilter_1300modes_exc1_pow1.5
   create_tn: false
   inputs:
     input_list: ['sr1-coro_psf1.out_sr', 'sr2-coro_psf2.out_sr']

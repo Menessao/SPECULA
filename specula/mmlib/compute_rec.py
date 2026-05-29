@@ -87,18 +87,22 @@ if __name__ == "__main__":
     # rec_tag = f'pyr3.0_20x20_{Nmodes}modes'
     # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    # Nmodes = 54
-    # root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    Nmodes = 400
+    rMod = 8
+    root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    im_tag = f'pyr{rMod:1.1f}_40x40_im'
+    rec_tag = f'pyr{rMod:1.1f}_40x40_{Nmodes}modes'
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
     # for rMod in np.array([3.0,4.0,5.0,6.0]):
     #     im_tag = f'pyr{rMod:1.1f}_10x10_im'
     #     rec_tag = f'pyr{rMod:1.1f}_10x10_{Nmodes}modes'
     #     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    Nmodes = 150
-    root_dir = '/raid1/mmenessini/calibration/XAO'
-    im_tag = 'pyr0.0_16x16_bmc2k_463modes_im'
-    rec_tag = 'pyr0.0_16x16_150modes_dm468'
-    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    # Nmodes = 150
+    # root_dir = '/raid1/mmenessini/calibration/XAO'
+    # im_tag = 'pyr0.0_16x16_bmc2k_463modes_im'
+    # rec_tag = 'pyr0.0_16x16_150modes_dm468'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
 #     Nmodes = 1300
 #     rMods = np.array([0,0.5,1,2,3])

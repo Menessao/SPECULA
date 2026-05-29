@@ -140,7 +140,7 @@ cred2:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.0005               # [s] Integration time (2000 fps)
+  dt:                0.00025               # [s] Integration time (2000 fps)
   bandw:             150                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -171,14 +171,14 @@ pyr0_modalrec:
 ############################ Control ################################
 bootstrap2:
   class:              'ScheduleGenerator'
-  scheduled_values:   [[0.0],[0.0]] # Nrows x Ncols, times x gains
+  scheduled_values:   [[0.1],[0.2]] # Nrows x Ncols, times x gains
   modes_per_group:    [150] # Ncols
   scheduled_times:    [0.01] # Nrows-1
 
 filter2:
   class:                'IirFilter'
   simul_params_ref:     'main'
-  delay:                0.5 # Total temporal delay in time steps is this value +1
+  delay:                1 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_150modes_exc2_pow1.0' #'cascading_iirfilter_300modes'
   inputs:
     delta_comm: 'pyr0_modalrec.out_modes'
@@ -193,7 +193,7 @@ dm2:
   nmodes:            150             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'filter2.out_comm' #'dcao_cmd2.out_value' #
+    in_command:      'dcao_cmd2.out_value' #'filter2.out_comm' #
   outputs:           ['out_layer']
 
 bootstrap1:
@@ -257,16 +257,16 @@ coro_psf1:
   inputs:
     in_ef:           'first_stage_prop.out_ef' 
 
-# psf2:
-#   class:             'PSF'
-#   simul_params_ref:  'main'
-#   wavelengthInNm:    750                 # [nm] visible
-#   nd:                4                   # 4x padding for PSF
-#   start_time:        1.0                 # Start PSF integration after 500ms
-#   verbose: true
-#   inputs:
-#     in_ef:           'second_stage_prop.out_ef'
-#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+psf2:
+  class:             'PSF'
+  simul_params_ref:  'main'
+  wavelengthInNm:    750                 # [nm] visible
+  nd:                4                   # 4x padding for PSF
+  start_time:        1.0                 # Start PSF integration after 500ms
+  verbose: true
+  inputs:
+    in_ef:           'second_stage_prop.out_ef'
+  outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 coro_psf2:
   class:             'PsfCoronagraph'

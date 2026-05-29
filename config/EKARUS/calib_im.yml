@@ -5,14 +5,14 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       443                        # Number of DM actuators
-  amp:          20
+  amp:          30
   outputs:   ['output']
 
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    443                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_10x10_im'            # Output IM filename
+  im_tag:    'pyr8.0_40x40_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -31,7 +31,7 @@ prop_override:
   outputs:           ['out_source_ngs_ef']
 
 pyr_slopes_override:
-  pupdata_object:         'pyr_pupdata_10x10'  
+  pupdata_object:         'pyr_pupdata_40x40'  
 
 # Override DM to use calibration commands
 dm_override:
@@ -41,9 +41,9 @@ dm_override:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
-  pup_diam:          10.                     # Pupil diameter in subaps.
-  pup_dist:          15.    
-  mod_amp: 3.0
+  pup_diam:          40.                     # Pupil diameter in subaps.
+  pup_dist:          60.    
+  mod_amp: 8.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
