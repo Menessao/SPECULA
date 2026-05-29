@@ -169,29 +169,29 @@ pyr0_modalrec:
   outputs:           ['out_modes']
 
 ############################ Control ################################
-bootstrap:
-  class:              'ScheduleGenerator'
-  scheduled_values:   [[0.0],[0.0]] # Nrows x Ncols, times x gains
-  modes_per_group:    [150] # Ncols
-  scheduled_times:    [0.01] # Nrows-1
+# bootstrap:
+#   class:              'ScheduleGenerator'
+#   scheduled_values:   [[0.0],[0.0]] # Nrows x Ncols, times x gains
+#   modes_per_group:    [150] # Ncols
+#   scheduled_times:    [0.01] # Nrows-1
 
 filter2:
-  # class:             'Integrator'
-  # simul_params_ref:  'main'
-  # delay:             1                     # 1 frame delay (realistic)
-  # int_gain:          [0.1]
-  # n_modes:           [150]                 # Number of modes to control
-  # inputs:
-  #   delta_comm:      'pyr0_modalrec.out_modes' #
-  # outputs:           ['out_comm']
-  class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                0.5 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_150modes_exc0_pow2.0' #'cascading_iirfilter_300modes'
+  class:             'Integrator'
+  simul_params_ref:  'main'
+  delay:             1                     # 1 frame delay (realistic)
+  int_gain:          [0.1]
+  n_modes:           [150]                 # Number of modes to control
   inputs:
-    delta_comm: 'pyr0_modalrec.out_modes'
-    gain_mod: 'bootstrap.output'
-  outputs:  ['out_comm']
+    delta_comm:      'pyr0_modalrec.out_modes' #
+  outputs:           ['out_comm']
+  # class:                'IirFilter'
+  # simul_params_ref:     'main'
+  # delay:                0.5 # Total temporal delay in time steps is this value +1
+  # iir_filter_data_object:  'iirfilter_150modes_exc0_pow2.0' #'cascading_iirfilter_300modes'
+  # inputs:
+  #   delta_comm: 'pyr0_modalrec.out_modes'
+  #   gain_mod: 'bootstrap.output'
+  # outputs:  ['out_comm']
 
 dm2:
   class:             'DM'
@@ -204,25 +204,25 @@ dm2:
     in_command:      'filter2.out_comm' #'dcao_cmd2.out_value' #
   outputs:           ['out_layer']
 
-bootstrap1:
-  class:              'ScheduleGenerator'
-  scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
-  modes_per_group:    [2,148,650,500] # Ncols
-  scheduled_times:    [0.01] # Nrows-1
+# bootstrap1:
+#   class:              'ScheduleGenerator'
+#   scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
+#   modes_per_group:    [2,148,650,500] # Ncols
+#   scheduled_times:    [0.01] # Nrows-1
 
 filter1:
   class:             'Integrator'
-  # simul_params_ref:  'main'
-  # delay:             0.25                     # 1 frame delay (realistic)
-  # int_gain:          [1.0]
-  # n_modes:           [1300]                 # Number of modes to control
-  class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                0.25 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5' #'cascading_iirfilter_1300modes'
+  simul_params_ref:  'main'
+  delay:             0.25                     # 1 frame delay (realistic)
+  int_gain:          [1.0]
+  n_modes:           [1300]                 # Number of modes to control
+  # class:                'IirFilter'
+  # simul_params_ref:     'main'
+  # delay:                0.25 # Total temporal delay in time steps is this value +1
+  # iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5' #'cascading_iirfilter_1300modes'
   inputs:
-    delta_comm: 'pyr_modalrec.out_modes' #'ogc_modes.out_value' 
-    gain_mod: 'bootstrap1.output'
+    delta_comm: 'pyr_modalrec.out_modes'
+  #   gain_mod: 'bootstrap1.output'
   outputs:  ['out_comm']
 
 dm1:
@@ -235,23 +235,6 @@ dm1:
   inputs:
     in_command:      'filter1.out_comm'
   outputs:           ['out_layer']
-
-
-######################### dCAO compensation #########################
-cmd1_to_cmd2:
-  class: 'MVM'
-  recmat_object: 'bmc2k_vlt_1300modes_to_dm468_vlt_150modes' #'bmc2k_vlt_1300modes_to_bmc2k_vlt_300modes' #'bmc2k_vlt_1300modes_to_dm468_vlt_300modes' #'bmc2k_vlt_1300modes_to_dm241_vlt_150modes'
-  inputs:
-    in_vector: 'filter1.out_comm'
-  outputs: ['out_vector']
-
-dcao_cmd2:
-  class: 'BaseOperation'
-  sub: true
-  inputs:
-    in_value1: 'filter2.out_comm'
-    in_value2: 'cmd1_to_cmd2.out_vector'
-  outputs:  ['out_value']
 
 
 ###########################################################
@@ -269,16 +252,16 @@ coro_psf1:
   inputs:
     in_ef:           'first_stage_prop.out_ef' 
 
-psf2:
-  class:             'PSF'
-  simul_params_ref:  'main'
-  wavelengthInNm:    750                 # [nm] visible
-  nd:                4                   # 4x padding for PSF
-  start_time:        1.0                 # Start PSF integration after 500ms
-  verbose: true
-  inputs:
-    in_ef:           'second_stage_prop.out_ef'
-  outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+# psf2:
+#   class:             'PSF'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    750                 # [nm] visible
+#   nd:                4                   # 4x padding for PSF
+#   start_time:        1.0                 # Start PSF integration after 500ms
+#   verbose: true
+#   inputs:
+#     in_ef:           'second_stage_prop.out_ef'
+#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 coro_psf2:
   class:             'PsfCoronagraph'

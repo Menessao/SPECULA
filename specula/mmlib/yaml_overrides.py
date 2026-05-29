@@ -5,7 +5,7 @@ import ast
 class QuotedStr(str): pass
 class InlineList(list): pass
 
-def write_yaml_overrides(input_string):
+def write_yaml_overrides(input_string, temp_name:str='temp_overrides'):
     def quoted_presenter(dumper, data):
         return dumper.represent_scalar('tag:yaml.org,2002:str', data, style="'")
 
@@ -64,5 +64,5 @@ def write_yaml_overrides(input_string):
         set_nested_value(data_dict, key_path.split('.'), parse_value(val_raw))
 
     # Write file: default_flow_style=False keeps objects as blocks
-    with open('temp_overrides.yml', 'w') as f:
+    with open(temp_name+'.yml', 'w') as f:
         yaml.dump(data_dict, f, Dumper=yaml.SafeDumper, default_flow_style=False, sort_keys=False)
