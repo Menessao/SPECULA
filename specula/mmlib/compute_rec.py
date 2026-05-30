@@ -7,21 +7,21 @@ from specula.mmlib.utils import von_karman_power, radial_order
 from specula.lib.mmse_reconstructor import compute_mmse_reconstructor
 
 
-def compute_and_save_rec(root_dir:str, im_tag:str, rec_tag:str, Nmodes:int, 
+def compute_and_save_rec(root_dir:str, im_tag:str, rec_tag:str, Nmodes:int, startMode:int=0,
                 ml:bool=False, slope_null=None, RON:float=0.0, r0=None, L0=25,
                 mmse:bool=False, diam:float=None, overwrite:bool=False):
     print(rec_tag,im_tag)
-    rec = compute_rec(root_dir, im_tag, Nmodes, ml=ml, slope_null=slope_null, RON=RON, mmse=mmse, diam=diam, r0=r0, L0=L0)
+    rec = compute_rec(root_dir, im_tag, Nmodes, ml=ml, startMode=startMode, slope_null=slope_null, RON=RON, mmse=mmse, diam=diam, r0=r0, L0=L0)
     save_rec(root_dir, rec, rec_tag, overwrite=overwrite)
     return rec
 
 
-def compute_rec(root_dir:str, im_tag:str, Nmodes:int, 
+def compute_rec(root_dir:str, im_tag:str, Nmodes:int, startMode:int=0,
                 ml:bool=False, slope_null=None, RON:float=0.0, 
                 mmse:bool=False, diam:float=None, r0=None, L0=None):    
     im_hdul = fits.open(os.path.join(root_dir,'im',im_tag+'.fits'))
     intmat = im_hdul[1].data.copy()
-    D = intmat[:,:Nmodes]
+    D = intmat[:,startMode:Nmodes]
     if ml or mmse:
         noise_cov = np.diag((slope_null + RON))
         if mmse:
@@ -87,22 +87,22 @@ if __name__ == "__main__":
     # rec_tag = f'pyr3.0_20x20_{Nmodes}modes'
     # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    Nmodes = 400
-    rMod = 8
-    root_dir = '/raid1/mmenessini/calibration/EKARUS'
-    im_tag = f'pyr{rMod:1.1f}_40x40_im'
-    rec_tag = f'pyr{rMod:1.1f}_40x40_{Nmodes}modes'
-    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    # Nmodes = 400
+    # rMod = 8
+    # root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    # im_tag = f'pyr{rMod:1.1f}_40x40_im'
+    # rec_tag = f'pyr{rMod:1.1f}_40x40_{Nmodes}modes'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
     # for rMod in np.array([3.0,4.0,5.0,6.0]):
     #     im_tag = f'pyr{rMod:1.1f}_10x10_im'
     #     rec_tag = f'pyr{rMod:1.1f}_10x10_{Nmodes}modes'
     #     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    # Nmodes = 150
-    # root_dir = '/raid1/mmenessini/calibration/XAO'
-    # im_tag = 'pyr0.0_16x16_bmc2k_463modes_im'
-    # rec_tag = 'pyr0.0_16x16_150modes_dm468'
-    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
+    Nmodes = 54
+    root_dir = '/raid1/mmenessini/calibration/XAO'
+    im_tag = 'pyr0.0_16x16_bmc2k_463modes_im'
+    rec_tag = 'pyr0.0_16x16_54modes_dm468'
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
 
 #     Nmodes = 1300
 #     rMods = np.array([0,0.5,1,2,3])

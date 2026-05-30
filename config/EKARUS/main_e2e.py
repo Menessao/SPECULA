@@ -15,7 +15,7 @@ max_pup_dist = 60
 min_pup_dist = 14
 
 seeings = np.array([1.5,2.0,2.5])
-freqs = np.array([200,500,1000]) #250,
+freqs = np.array([200,250,500,1000]) #250,
 starMags = np.array([1,3,5,7,9,11,13])
 gvec = np.arange(1,11)*0.1
 

@@ -3,12 +3,12 @@ main_override:
 cred2_override:
   dt: 0.00025
 filter1_override:
-  int_gain: [0.4]
+  int_gain: [1.0]
 filter2_override:
-  int_gain: [0.1]
+  int_gain: [1.0]
   delay: 1.0
 data_store_override:
-  store_dir: /raid1/mmenessini/results/Cascading/cao_gain_opt/cao_f2_4kHz/int1gain0.40_int2gain0.10
+  store_dir: /raid1/mmenessini/results/Cascading/cao_gain_opt/cao_f2_4kHz/int1gain1.00_int2gain1.00
   create_tn: false
   inputs:
     input_list: ['sr1-coro_psf1.out_sr', 'sr2-coro_psf2.out_sr']
