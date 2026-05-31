@@ -305,7 +305,7 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
     # compute_and_save_influence_functions(root_dir,tag='dm241_vlt', pupil_pixels=Npix, n_acts=17,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
-    compute_and_save_dcao_matrix(xao_dir,first_stage_tag='bmc2k_vlt',second_stage_tag='dm468_vlt',N1_modes=1300,N2_modes=150)
+    compute_and_save_dcao_matrix(xao_dir,first_stage_tag='bmc2k_vlt',second_stage_tag='bmc2k_vlt',N1_modes=1300,N2_modes=150)
 
     # Npix = 160
     # compute_and_save_influence_functions(root_dir,tag='asm', pupil_pixels=Npix, n_acts=30,
