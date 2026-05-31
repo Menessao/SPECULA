@@ -122,8 +122,8 @@ pyr_modalrec:
 filter: 
   class:             'Integrator'
   simul_params_ref:  'main'
-  delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [0.5] #[0.7,0.6,0.0] #
+  delay:             1.0                     # Temporal delay in time steps
+  int_gain:          [0.8] #[0.7,0.6,0.0] #
   ff:                [1.0]
   n_modes:           [400] #
   inputs:
@@ -132,8 +132,8 @@ filter:
 # filter:
 #   class:                'IirFilter'
 #   simul_params_ref:     'main'
-#   delay:                0.5 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object: 'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
+#   delay:                1.0 # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object: 'ekarusiir_400modes_exc0_pow1.0' #'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
 #   inputs:
 #     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
 #     gain_mod: 'gain_ramp.output'

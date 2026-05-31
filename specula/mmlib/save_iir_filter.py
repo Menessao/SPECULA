@@ -34,6 +34,35 @@ def create_stepped_t(n_filters:int, excluded_filters:int=None):
     t = t[:n_filters]  # Ensure we only have n_filters elements
     return t
 
+def mattes_iir(n_filters:int, excluded_filters:int,
+                        start_pole = [1.0, 0.995, 0.95],
+                        end_pole = [0.9, 0.75, 0.55],
+                        start_zero = [0.75, 0.55, 0.45],
+                        end_zero = [0.45, 0.3, 0.15],
+                        power_exponent = 2.0, iir_gain=1.0):
+    t = create_stepped_t(n_filters,excluded_filters=excluded_filters)
+    t_powered = t**power_exponent 
+
+    zero_values = start_zero[0] + (end_zero[0] - start_zero[0]) * t_powered
+    zero2_values = start_zero[1] + (end_zero[1] - start_zero[1]) * t_powered
+    pole_values = start_pole[0] + (end_pole[0] - start_pole[0]) * t_powered
+    pole2_values = start_pole[1] + (end_pole[1] - start_pole[1]) * t_powered
+
+    num_list = []
+    den_list = []
+    for i in range(n_filters):
+        num_list.append([zero_values[i]*zero2_values[i],
+                         -1*(zero_values[i]+zero2_values[i]), 
+                         1.0])
+        den_list.append([pole_values[i]*pole2_values[i], 
+                         -pole_values[i]-pole2_values[i], 1.0])
+
+    num_array = np.array(num_list)
+    den_array = np.array(den_list)
+
+    num_array *= iir_gain
+    return num_array, den_array
+
 
 def guidos_standard_iir(n_filters:int, excluded_filters:int,
                         start_pole = [1.0, 0.995],
@@ -93,6 +122,7 @@ def plot_iir_tfs(filter_data_complex:IirFilterData, fs:float, n_filters:int, del
     plt.legend()
     plt.grid(which='both',alpha=0.3)
     plt.xlim([1e-1,fs/2])
+    plt.ylim([1e-3,20])
     plt.xlabel('Frequency [Hz]')
     plt.title('NTF')
 
@@ -108,21 +138,27 @@ if __name__ == "__main__":
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 150
-    excluded_filters = 2
-    power = 2.0 # used 0.8 for EKARUS
+    n_filters = 1300
+    excluded_filters = 0
+    power = 1.5 # used 0.8 for EKARUS
     make_tiled = False
     file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
+    # file_name = os.path.join(path,f'ekarusiir_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
 
     num_array,den_array=guidos_standard_iir(n_filters=n_filters,
                                             excluded_filters=excluded_filters,
                                             power_exponent=power)
     
-    # b,a=design_f3_controller(fs=2000,f1=10,f2=300,N=2)
+    # num_array,den_array=mattes_iir(n_filters=n_filters,
+    #                                         excluded_filters=excluded_filters,
+    #                                         power_exponent=power)
+    
+    ordn = int(len(num_array)/n_filters)
+    ordd = int(len(den_array)/n_filters)
 
     filter_data_complex = IirFilterData(
-        ordnum=[3] * n_filters,
-        ordden=[3] * n_filters,
+        ordnum=[ordn] * n_filters,
+        ordden=[ordd] * n_filters,
         num=num_array,
         den=den_array
     )
@@ -131,8 +167,8 @@ if __name__ == "__main__":
     if make_tiled:
         tiled_file_name = path + f'tiled_iirfilter_{n_filters}modes.fits'
         tiled_filter_data_complex = IirFilterData(
-            ordnum=[3] * n_filters*2,
-            ordden=[3] * n_filters*2,
+            ordnum=[ordn] * n_filters*2,
+            ordden=[ordd] * n_filters*2,
             num=np.tile(num_array,[2,1]),
             den=np.tile(den_array,[2,1])
         )

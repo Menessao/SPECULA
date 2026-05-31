@@ -141,7 +141,7 @@ cred2:
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
   dt:                0.00025               # [s] Integration time (2000 fps)
-  bandw:             150                   # [nm]
+  bandw:             200                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
   excess_noise:      true                  # Enable excess noise
@@ -171,7 +171,7 @@ pyr0_modalrec:
 ############################ Control ################################
 bootstrap2:
   class:              'ScheduleGenerator'
-  scheduled_values:   [[0.2],[0.6]] # Nrows x Ncols, times x gains
+  scheduled_values:   [[0.05],[0.1]] # Nrows x Ncols, times x gains
   modes_per_group:    [150] # Ncols
   scheduled_times:    [0.01] # Nrows-1
 
@@ -179,7 +179,7 @@ filter2:
   class:                'IirFilter'
   simul_params_ref:     'main'
   delay:                1 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_150modes_exc2_pow2.0' #'cascading_iirfilter_300modes'
+  iir_filter_data_object:  'iirfilter_150modes_exc0_pow2.0' #'cascading_iirfilter_300modes'
   inputs:
     delta_comm: 'pyr0_modalrec.out_modes'
     gain_mod: 'bootstrap2.output'
@@ -198,7 +198,7 @@ dm2:
 
 bootstrap1:
   class:              'ScheduleGenerator'
-  scheduled_values:   [[0.05],[0.2]] #[[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
+  scheduled_values:   [[0.05],[0.1]] #[[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
   modes_per_group:    [1300] #[2,148,650,500] # Ncols
   scheduled_times:    [0.01] # Nrows-1
 
@@ -207,7 +207,7 @@ filter1:
   class:                'IirFilter'
   simul_params_ref:     'main'
   delay:                0.25 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'cascading_iirfilter_1300modes' #'iirfilter_1300modes_exc2_pow2.0' #
+  iir_filter_data_object:  'iirfilter_1300modes_exc0_pow1.5' #'cascading_iirfilter_1300modes' #
   inputs:
     delta_comm: 'pyr_modalrec.out_modes' #'ogc_modes.out_value' 
     gain_mod: 'bootstrap1.output'
@@ -312,6 +312,8 @@ data_store:
                   # 'dm1_cmd-filter1.out_comm',
                   'sr1-coro_psf1.out_sr',
                   'sr2-coro_psf2.out_sr',
+                  'coro_psf1_int-coro_psf1.out_int_coronagraph_psf_profile',
+                  'coro_psf2_int-coro_psf2.out_int_coronagraph_psf_profile',
                   'coro_psf1-coro_psf1.out_std_coronagraph_psf_profile',
                   'coro_psf2-coro_psf2.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
