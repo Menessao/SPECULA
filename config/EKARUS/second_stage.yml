@@ -65,7 +65,7 @@ filter2:
   class:             'Integrator'
   simul_params_ref:  'main'
   delay:             1.0                     # Temporal delay in time steps
-  int_gain:          [0.4] #[0.7,0.6,0.0] #
+  int_gain:          [0.5] #[0.7,0.6,0.0] #
   ff:                [1.0]
   n_modes:           [220] #
   # class:                'IirFilter'
@@ -105,7 +105,7 @@ coro_psf:
   verbose: false
   compute_profile_metrics: true
   inputs:
-    in_ef:           'ef_prop.out_ef' 
+    in_ef:           'ef_prop2.out_ef' 
 
 
 # psf2:

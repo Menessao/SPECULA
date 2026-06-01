@@ -1,0 +1,8 @@
+pyr_override:
+  pup_diam: 48.0
+  pup_dist: 60.0
+  mod_amp: 2.0
+pyr_slopes_override:
+  pupdata_object: 'pyr_pupdata_48x48'
+pyr_im_calibrator_override:
+  im_tag: 'pyr2.0_48x48_im'

@@ -20,7 +20,7 @@ min_pup_dist = 16
 npix = 120
 
 main_config = 'ristretto_main.yml'
-root_dir='/raid1/mmenessini/calibration/XAO'
+root_dir='/raid1/mmenessini/calibration/RISTRETTO'
 
 
 # 1. Calibrate pupdata vs n_subaps
