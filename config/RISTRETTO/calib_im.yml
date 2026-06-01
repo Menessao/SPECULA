@@ -4,15 +4,15 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       220                        # Number of DM actuators
-  amp:          20
+  nmodes:       1821                         # Number of DM actuators
+  amp:          15 
   outputs:   ['output']
 
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    220                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_20x20_im'            # Output IM filename
+  nmodes:    1821                         # Number of modes to calibrate
+  im_tag:    'pyr0.5_1821modes_40x40_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -20,8 +20,8 @@ pyr_im_calibrator:
 
 # Override main simulation parameters
 main_override:
-  time_step: 0.001
-  total_time: 0.44                 # 400 modes × 2 (push+pull) × 0.001s
+  time_step: 0.0005
+  total_time: 1.821                 # 1821 modes × 2 (push+pull) × 0.0005s
 
 # Disable atmosphere for clean calibration
 prop_override:
@@ -30,32 +30,26 @@ prop_override:
     common_layer_list: ['pupilstop', 'dm.out_layer']  # Only pupil + DM
   outputs:           ['out_source_ngs_ef']
 
-pyr_slopes_override:
-  pupdata_object:         'pyr_pupdata_20x20'  
-
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 220                            # Use all modes for calibration
+  nmodes: 1821                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
-  pup_diam:          20.                     # Pupil diameter in subaps.
-  pup_dist:          30.    
-  mod_amp: 0.0
+  mod_amp: 0.5
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
-# pyr_slopes_override:
-#   slopes_from_intensity: false
-
 # Disable noise for clean measurements
-ocam_override:
+cred1_override:
+  dt: 0.0005
   photon_noise:   false                   # No photon noise
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
+
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes',
-        'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec',] 
+remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', #'source_science','zwfs_modalrec'
+        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop','pyr_modalrec', ] #, 'bootstrap', 'concat_wfs_modes'

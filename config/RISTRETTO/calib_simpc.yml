@@ -1,0 +1,106 @@
+# Synthetic interaction matrix in partial correction
+# ================================================
+
+# Push-pull command generator
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       1821                         # Number of DM actuators
+  amp:          40  
+  ncycles:       40
+  repeat_full_sequence: true
+  outputs:   ['output']
+
+# Interaction matrix calibrator
+pyr_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    1821                         # Number of modes to calibrate
+  im_tag:    'pyr0.5_1821modes_c0.9_im'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
+  inputs:
+    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
+    in_commands: 'pushpull.output'        # Push-pull commands
+
+# Override main simulation parameters
+main_override:
+  time_step: 0.0005
+  total_time: 72.44                 # 1821 modes × 2 (push+pull) × 0.0005s x 40 cycles
+
+################################## ATMO RESIDUAL #####################################
+seeing_random:
+  class:             'RandomGenerator'
+  amp:               0.0                 # Variation amplitude [arcsec]
+  constant:          1.0                 # Mean seeing [arcsec]
+  distribution:      'UNIFORM'           # 
+  outputs: ['output']
+
+# Random atmospheric phase generator
+atmo_random:
+  class:                'AtmoRandomPhase'
+  simul_params_ref:     'main'
+  L0:                   25               # [m] Outer scale
+  source_dict_ref:      ['source_ngs']
+  update_interval:      3642                 # Update after IM calibration
+  inputs:
+    seeing:             'seeing_random.output'
+    pupilstop:          'pupilstop'
+  outputs:              ['out_source_ngs_ef']
+
+# Modal decomposition of atmospheric phase
+modal_analysis:
+  class: 'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  inputs:
+    in_ef: 'atmo_random.out_source_ngs_ef'
+  outputs: ['out_modes']
+
+# DM applying partial correction
+dm_perfect:
+  class: 'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
+  m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
+  nmodes:            1300             # Number of controlled modes
+  height:            0.0                # Ground-conjugated DM
+  inputs:
+    in_command: 'modal_analysis.out_modes'
+  outputs: ['out_layer']
+
+atmo_pc:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm_random.out_layer'              # Partial correction
+  outputs: ['out_ef']
+
+ef_mode:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_pc.out_ef'    # Partially corrected turbulence
+    in_ef2: 'dm.out_layer'      # Mode amplitudes
+  outputs: ['out_ef']
+
+######################################################################################
+
+# Override DM to use calibration commands
+dm_override:
+  sign: 1                                 # Use positive sign for calibration (default is -1)
+  nmodes: 1821                            # Use all modes for calibration
+  inputs:
+    in_command: 'pushpull.output'         # Connect to push-pull generator
+
+pyr_override:
+  mod_amp: 0.5
+  inputs: 
+    in_ef: 'ef_mode.out_ef'
+
+
+# Disable noise for clean measurements
+cred1_override:
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+
+# Remove unnecessary objects during calibration
+remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', #'source_science',
+        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop', 'prop','pyr_modalrec',] #, 'bootstrap', 'concat_wfs_modes'

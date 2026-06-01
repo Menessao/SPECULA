@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/EKARUS/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       120                   # Must match influence function computation
   pixel_pitch:       0.015167              # [m] Pitch of the pupil phase array (1.82m/120pix)
-  total_time:        2.0                   # [s] Total simulation running time
+  total_time:        4.0                   # [s] Total simulation running time
   time_step:         0.001                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -81,7 +81,7 @@ pyr:
   pup_diam:          40.                     # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   fov:               4.0                     # Requested field-of-view [arcsec]
-  mod_amp:           6.0                     # Modulation radius (in lambda/D units)
+  mod_amp:           7.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    750                     # [nm] Pyramid wavelength
   inputs:
@@ -106,7 +106,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'           
-  sn_object:              'pyr6.0_40x40_sn' # Commented during calibration
+  # sn_object:              'pyr7.0_40x40_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
     in_pixels:        'ocam.out_pixels'
@@ -114,7 +114,7 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr6.0_40x40_400modes_rec'        
+  recmat_object:     'pyr7.0_40x40_400modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -122,8 +122,8 @@ pyr_modalrec:
 filter: 
   class:             'Integrator'
   simul_params_ref:  'main'
-  delay:             1.0                     # Temporal delay in time steps
-  int_gain:          [0.8] #[0.7,0.6,0.0] #
+  delay:             1.5                     # Temporal delay in time steps
+  int_gain:          [0.6] #[0.7,0.6,0.0] #
   ff:                [1.0]
   n_modes:           [400] #
   inputs:
@@ -132,8 +132,8 @@ filter:
 # filter:
 #   class:                'IirFilter'
 #   simul_params_ref:     'main'
-#   delay:                1.0 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object: 'ekarusiir_400modes_exc0_pow1.0' #'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
+#   delay:                0.5 # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object: 'ekarusiir_400modes_exc0_pow1.5' #'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
 #   inputs:
 #     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
 #     gain_mod: 'gain_ramp.output'
@@ -141,8 +141,8 @@ filter:
 
 # gain_ramp:
 #   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
-#   modes_per_group: [150,150,100]
+#   scheduled_values: [[0.6,0.4,0.2,0.1], [1.4,1.1,0.85,0.7]] #[1.15,0.975,0.775]]
+#   modes_per_group: [150,150,50,50]
 #   scheduled_times: [0.01]
 
 # gain_ramp:
@@ -209,7 +209,7 @@ data_store:
   store_dir:         '/raid1/mmenessini/results/EKARUS'             # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
-                  # 'atmo_phase-ef_prop.out_ef',
+                  'atmo_phase-ef_prop.out_ef',
                   'sr-psf.out_sr',
                   # 'coro_psf-coro_psf.out_std_coronagraph_psf_profile',
                   # 'psf-psf.out_psf',

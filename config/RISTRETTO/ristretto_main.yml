@@ -2,11 +2,11 @@
 # Main simulation parameters
 main:
   class:             'SimulParams'
-  root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
+  root_dir:          '/raid1/mmenessini/calibration/RISTRETTO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
   total_time:        4.000                 # [s] 1 second simulation
-  time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
+  time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
@@ -63,18 +63,11 @@ prop:
     common_layer_list: ['pupilstop']       # Pupil
   outputs:           ['out_source_ngs_ef'] 
 
-first_stage_prop:
+ef_prop:
   class: 'ElectricFieldCombinator'
   inputs:
     in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
-    in_ef2: 'dm1.out_layer:-1'          # DM1 correction
-  outputs: ['out_ef']
-
-second_stage_prop:
-  class: 'ElectricFieldCombinator'
-  inputs:
-    in_ef1: 'first_stage_prop.out_ef'    # DM1 corrected turbulence
-    in_ef2: 'dm2.out_layer:-1'           # DM2 correction
+    in_ef2: 'dm.out_layer:-1'          # DM1 correction
   outputs: ['out_ef']
 
 
@@ -95,7 +88,7 @@ cred1:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.001                # [s] Integration time (3000 fps)
+  dt:                0.0005               # [s] Integration time (3000 fps)
   bandw:             400                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -110,8 +103,8 @@ cred1:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_48x48'           
-  slopes_from_intensity:  true
-  sn_object:            'pyr3.0_48x48_sn' 
+  # slopes_from_intensity:  true
+  # sn_object:            'pyr3.0_48x48_sn' 
   inputs:
     in_pixels:        'cred1.out_pixels'
   outputs:           ['out_slopes']
@@ -123,96 +116,29 @@ pyr_modalrec:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-# ######################### 2nd stage ##############################
-pyr0:
-  class:             'ModulatedPyramid'
-  simul_params_ref:  'main'
-  pup_diam:          16.                     # Pupil diameter in subaps.
-  pup_dist:          20.                     # Separation between pupil centers in subaps.
-  fov:               2.0                     # Requested field-of-view [arcsec]
-  mod_amp:           1.0                     # Modulation radius (in lambda/D units)
-  output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    900                     # [nm] Pyramid wavelength
-  inputs:
-    in_ef: 'second_stage_prop.out_ef' 
-
-cred2:
-  class:             'CCD'
-  simul_params_ref:  'main'
-  size:              [120,120]            # Total detector size
-  dt:                0.00025               # [s] Integration time (2000 fps)
-  bandw:             200                   # [nm]
-  photon_noise:      true                  # Enable photon noise
-  readout_noise:     true                  # Enable read noise
-  excess_noise:      true                  # Enable excess noise
-  readout_level:     0.4                   # [e-/pix/frame] Read noise level
-  emccd_gain:        400                   # EMCCD gain factor
-  quantum_eff:       0.2                   # QE x transmission
-  inputs:
-    in_i:            'pyr0.out_i' 
-  outputs:           ['out_pixels']
-
-pyr0_slopes:
-  class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata_16x16'           
-  slopes_from_intensity:  true
-  sn_object:            'pyr1.0_16x16_sn' #'pyr0.0_16x16_pc1300modes_sn' #
-  inputs:
-    in_pixels:        'cred2.out_pixels'
-  outputs:           ['out_slopes']
-
-pyr0_modalrec:
-  class:             'Modalrec'
-  recmat_object:     'pyr1.0_16x16_150modes_rec'        
-  inputs:
-    in_slopes:       'pyr0_slopes.out_slopes'
-  outputs:           ['out_modes']
-
 ############################ Control ################################
-bootstrap2:
+bootstrap:
   class:              'ScheduleGenerator'
-  scheduled_values:   [[0.2],[0.1]] # Nrows x Ncols, times x gains
-  modes_per_group:    [150] # Ncols
+  scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
+  modes_per_group:    [2,148,650,500] # Ncols
   scheduled_times:    [0.01] # Nrows-1
 
-filter2:
-  class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                1 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.0' #'cascading_iirfilter_300modes'
-  inputs:
-    delta_comm: 'pyr0_modalrec.out_modes'
-    gain_mod: 'bootstrap2.output'
-  outputs:  ['out_comm']
-
-dm2:
-  class:             'DM'
-  simul_params_ref:  'main'
-  ifunc_object:      'bmc2k_vlt_ifunc' #'bmc2k_vlt_ifunc' #
-  m2c_object:        'bmc2k_vlt_m2c'  # 'bmc2k_vlt_m2c'  #
-  nmodes:            150             # Number of controlled modes
-  height:            0                # Ground-conjugated DM
-  inputs:
-    in_command:      'dcao_cmd2.out_value' #
-  outputs:           ['out_layer']
-
-bootstrap1:
-  class:              'ScheduleGenerator'
-  scheduled_values:   [[0.05],[0.1]] #[[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
-  modes_per_group:    [1300] #[2,148,650,500] # Ncols
-  scheduled_times:    [0.01] # Nrows-1
-
-filter1:
+filter:
+  class:             'Integrator'
+  # simul_params_ref:  'main'
+  # delay:             0.25                     # 1 frame delay (realistic)
+  # int_gain:          [1.0]
+  # n_modes:           [1300]                 # Number of modes to control
   class:                'IirFilter'
   simul_params_ref:     'main'
   delay:                0.25 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes_exc0_pow1.5' #'cascading_iirfilter_1300modes' #
+  iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5' #'cascading_iirfilter_1300modes'
   inputs:
     delta_comm: 'pyr_modalrec.out_modes' #'ogc_modes.out_value' 
     gain_mod: 'bootstrap1.output'
   outputs:  ['out_comm']
 
-dm1:
+dm:
   class:             'DM'
   simul_params_ref:  'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
@@ -220,31 +146,14 @@ dm1:
   nmodes:            1300             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'filter1.out_comm'
+    in_command:      'filter.out_comm'
   outputs:           ['out_layer']
-
-
-######################### dCAO compensation #########################
-cmd1_to_cmd2:
-  class: 'MVM'
-  recmat_object: 'bmc2k_vlt_1300modes_to_bmc2k_vlt_150modes' #'bmc2k_vlt_1300modes_to_bmc2k_vlt_300modes' #'bmc2k_vlt_1300modes_to_dm468_vlt_300modes' #'bmc2k_vlt_1300modes_to_dm241_vlt_150modes'
-  inputs:
-    in_vector: 'filter1.out_comm'
-  outputs: ['out_vector']
-
-dcao_cmd2:
-  class: 'BaseOperation'
-  sub: true
-  inputs:
-    in_value1: 'filter2.out_comm'
-    in_value2: 'cmd1_to_cmd2.out_vector'
-  outputs:  ['out_value']
 
 
 ###########################################################
 ##################### POST-PROCESSING #####################
 # Coronagraphic and non-coronagraphic PSFs
-coro_psf1:
+coro_psf:
   class:             'PsfCoronagraph'
   simul_params_ref:  'main'
   wavelengthInNm:    750                 # [nm] visible
@@ -254,9 +163,9 @@ coro_psf1:
   # use_average_field: false
   compute_profile_metrics: true
   inputs:
-    in_ef:           'first_stage_prop.out_ef' 
+    in_ef:           'ef_prop.out_ef' 
 
-psf2:
+psf:
   class:             'PSF'
   simul_params_ref:  'main'
   wavelengthInNm:    750                 # [nm] visible
@@ -264,34 +173,14 @@ psf2:
   start_time:        1.0                 # Start PSF integration after 500ms
   verbose: true
   inputs:
-    in_ef:           'second_stage_prop.out_ef'
+    in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
-coro_psf2:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    750                 # [nm] visible
-  nd:                4                   # 4x padding for PSF
-  start_time:        0.5                 # Start PSF integration after 500ms
-  verbose: false
-  # use_average_field: false
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'second_stage_prop.out_ef' 
-  # outputs:           ['out_int_coronagraph_psf_profile']
-
-dm2_mode_res:
+dm_mode_res:
   class:            'ModalAnalysis'
   ifunc_inv_object: 'bmc2k_vlt_kl_inv'
   inputs:
-    in_ef: ['second_stage_prop.out_ef']
-  outputs: ['out_modes']
-
-dm1_mode_res:
-  class:            'ModalAnalysis'
-  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
-  inputs:
-    in_ef: ['first_stage_prop.out_ef']
+    in_ef: ['ef_prop.out_ef']
   outputs: ['out_modes']
 
 atmo_modes:
@@ -304,20 +193,16 @@ atmo_modes:
 # Data store for results
 data_store:
   class:             'DataStore'
-  store_dir:         '/raid1/mmenessini/results/Cascading'            # Data result directory: 'store_dir'/TN/
+  store_dir:         '/raid1/mmenessini/results/RISTRETTO'            # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
                   # 'atmo_phase-first_stage_prop.out_ef',
                   # 'dm1_cmd-filter1.out_comm',
-                  'sr1-coro_psf1.out_sr',
-                  'sr2-coro_psf2.out_sr',
-                  'coro_psf1_int-coro_psf1.out_int_coronagraph_psf_profile',
-                  'coro_psf2_int-coro_psf2.out_int_coronagraph_psf_profile',
-                  'coro_psf1-coro_psf1.out_std_coronagraph_psf_profile',
-                  'coro_psf2-coro_psf2.out_std_coronagraph_psf_profile',
+                  'sr-coro_psf.out_sr',
+                  'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
+                  'coro_psf_std-coro_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
-                  'dm1_res-dm1_mode_res.out_modes',
-                  'dm2_res-dm2_mode_res.out_modes',
+                  'dm_res-dm_mode_res.out_modes',
                   ]
 
 # remove: ['']

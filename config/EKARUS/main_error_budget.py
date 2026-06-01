@@ -12,9 +12,9 @@ from specula.mmlib.compute_rec import compute_and_save_rec
 # from specula.mmlib.save_correction_vector import save_correction_vector
 
 
-rMods = np.array([3,4,5,6,7])
-n_subaps = np.array([10,20,40])
-n_modes = np.array([54,220,400])
+rMods = np.array([0]) #[3,4,5,6,7])
+n_subaps = np.array([20]) #[10,20,40])
+n_modes = np.array([220]) #[54,220,400])
 seeings = np.array([1.8,2.0,2.2,2.4,2.6])
 
 max_pup_dist = 60

@@ -6,7 +6,6 @@ from specula.mmlib.utils import radial_order
 from specula.data_objects.iir_filter_data import IirFilterData
 
 import matplotlib.pyplot as plt
-import scipy.signal as signal
 
 def save_and_test_restore(filter_data_complex:IirFilterData, file_name:str):
     filter_data_complex.save(file_name)
@@ -42,6 +41,14 @@ def mattes_iir(n_filters:int, excluded_filters:int,
                         power_exponent = 2.0, iir_gain=1.0):
     t = create_stepped_t(n_filters,excluded_filters=excluded_filters)
     t_powered = t**power_exponent 
+
+    end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
+    end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
+    end_pole[2] = start_pole[2] - 0.4 * n_filters/1000
+
+    end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
+    end_zero[1] = start_zero[1] - 0.25 * n_filters/1000
+    end_zero[2] = start_zero[2] - 0.3 * n_filters/1000
 
     zero_values = start_zero[0] + (end_zero[0] - start_zero[0]) * t_powered
     zero2_values = start_zero[1] + (end_zero[1] - start_zero[1]) * t_powered
@@ -122,7 +129,7 @@ def plot_iir_tfs(filter_data_complex:IirFilterData, fs:float, n_filters:int, del
     plt.legend()
     plt.grid(which='both',alpha=0.3)
     plt.xlim([1e-1,fs/2])
-    plt.ylim([1e-3,20])
+    # plt.ylim([1e-3,20])
     plt.xlabel('Frequency [Hz]')
     plt.title('NTF')
 
@@ -133,25 +140,25 @@ if __name__ == "__main__":
 
     root_dir = '/raid1/mmenessini/calibration/XAO'
     # root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
-    # root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    root_dir = '/raid1/mmenessini/calibration/EKARUS'
     path = os.path.join(root_dir,'filter')
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 1300
+    n_filters = 220
     excluded_filters = 0
     power = 1.5 # used 0.8 for EKARUS
-    make_tiled = False
-    file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
-    # file_name = os.path.join(path,f'ekarusiir_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
+    # make_tiled = False
 
-    num_array,den_array=guidos_standard_iir(n_filters=n_filters,
-                                            excluded_filters=excluded_filters,
-                                            power_exponent=power)
-    
-    # num_array,den_array=mattes_iir(n_filters=n_filters,
+    # file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
+    # num_array,den_array=guidos_standard_iir(n_filters=n_filters,
     #                                         excluded_filters=excluded_filters,
     #                                         power_exponent=power)
+    
+    file_name = os.path.join(path,f'ekarusiir_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')    
+    num_array,den_array=mattes_iir(n_filters=n_filters,
+                                            excluded_filters=excluded_filters,
+                                            power_exponent=power)
     
     ordn = int(len(num_array)/n_filters)
     ordd = int(len(den_array)/n_filters)
@@ -164,12 +171,12 @@ if __name__ == "__main__":
     )
     save_and_test_restore(filter_data_complex,file_name)
 
-    if make_tiled:
-        tiled_file_name = path + f'tiled_iirfilter_{n_filters}modes.fits'
-        tiled_filter_data_complex = IirFilterData(
-            ordnum=[ordn] * n_filters*2,
-            ordden=[ordd] * n_filters*2,
-            num=np.tile(num_array,[2,1]),
-            den=np.tile(den_array,[2,1])
-        )
-        save_and_test_restore(tiled_filter_data_complex,tiled_file_name)
+    # if make_tiled:
+    #     tiled_file_name = path + f'tiled_iirfilter_{n_filters}modes.fits'
+    #     tiled_filter_data_complex = IirFilterData(
+    #         ordnum=[ordn] * n_filters*2,
+    #         ordden=[ordd] * n_filters*2,
+    #         num=np.tile(num_array,[2,1]),
+    #         den=np.tile(den_array,[2,1])
+    #     )
+    #     save_and_test_restore(tiled_filter_data_complex,tiled_file_name)

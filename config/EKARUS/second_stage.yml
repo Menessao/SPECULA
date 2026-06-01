@@ -1,12 +1,12 @@
 
 # Main simulation parameters
 main_override:
-  total_time:        1.0                   # [s] Total simulation running time
+  total_time:        4.0                   # [s] Total simulation running time
   time_step:         0.0005                 # [s] Simulation time step
 
 # Atmospheric conditions
 seeing_override:
-  constant:          1.0                  # [arcsec]
+  constant:          1.5                  # [arcsec]
 
 ef_prop2:
   class: 'ElectricFieldCombinator'
@@ -15,25 +15,19 @@ ef_prop2:
     in_ef2: 'dm2.out_layer:-1'          # DM1 correction
   outputs: ['out_ef']
 
-perf_prop:
-  class: 'ElectricFieldCombinator'
-  inputs:
-    in_ef1: 'ef_prop.out_ef'    # Turbulence
-    in_ef2: 'perfect_dm.out_layer'          # DM1 correction
-  outputs: ['out_ef']
 
 ########################### PWFS ##############################
 pyr2:
   class:             'ModulatedPyramid'
   simul_params_ref:  'main'
-  pup_diam:          21.                     # Pupil diameter in subaps.
+  pup_diam:          20.                     # Pupil diameter in subaps.
   pup_dist:          30.                     # Separation between pupil centers in subaps.
   fov:               8.0                     # Requested field-of-view [arcsec]
   mod_amp:           0.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    1450                     # [nm] Pyramid wavelength
   inputs:
-    in_ef: 'ef_prop.out_ef' #'prop.out_source_ngs_ef'
+    in_ef: 'ef_prop2.out_ef' #'prop.out_source_ngs_ef'
 
 ocam2:
   class:             'CCD'
@@ -44,7 +38,7 @@ ocam2:
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
   excess_noise:      true                  # Enable excess noise
-  readout_level:     0.4                   # [e-/pix/frame] Read noise level
+  readout_level:     0.5                   # [e-/pix/frame] Read noise level
   emccd_gain:        600                   # EMCCD gain factor
   quantum_eff:       0.06                   # QE x transmission
   inputs:
@@ -57,55 +51,48 @@ pyr_slopes2:
   sn_object:              'pyr0.0_20x20_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
-    in_pixels:        'ocam.out_pixels'
+    in_pixels:        'ocam2.out_pixels'
   outputs:           ['out_slopes']
 
 pyr_modalrec2:
   class:             'Modalrec'
-  recmat_object:     'pyr0.0_20x20_200modes_rec'        
+  recmat_object:     'pyr0.0_20x20_220modes_rec'        
   inputs:
-    in_slopes:       'pyr_slopes.out_slopes'
+    in_slopes:       'pyr_slopes2.out_slopes'
   outputs:           ['out_modes']
 
-filter2:
-  class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                1 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_200modes'
+filter2:  
+  class:             'Integrator'
+  simul_params_ref:  'main'
+  delay:             1.0                     # Temporal delay in time steps
+  int_gain:          [0.4] #[0.7,0.6,0.0] #
+  ff:                [1.0]
+  n_modes:           [220] #
+  # class:                'IirFilter'
+  # simul_params_ref:     'main'
+  # delay:                1 # Total temporal delay in time steps is this value +1
+  # iir_filter_data_object:  'ekarusiir_220modes_exc0_pow1.5'
   inputs:
-    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
-    gain_mod: 'gain_ramp.output'
-  outputs:  ['out_comm']
+    delta_comm: 'pyr_modalrec2.out_modes' #'concat_wfs_modes.out_value' 
+  #   gain_mod: 'gain_ramp.output'
+  # outputs:  ['out_comm']
 
 # gain_ramp:
 #   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.6,0.4,0.2],[1.15,0.975,0.775]]
-#   modes_per_group: [150,150,100]
+#   scheduled_values: [[0.2],[0.1]]
+#   modes_per_group: [220]
 #   scheduled_times: [0.01]
 
 dm2:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'DM241_ifunc' #'dm468_ifunc'      # Influence functions
-  m2c_object:        'DM241_m2c' #'dm468_m2c'        # Modal-to-command matrix
-  height:            0                # Ground-conjugated DM
-  nmodes:            200
-  inputs:
-    in_command:      'filter2.out_comm'
-  outputs:           ['out_layer']
-
-
-perfect_dm:
-  class:             'DM'
-  simul_params_ref:  'main'
   ifunc_object:      'DM468_ifunc' #'dm468_ifunc'      # Influence functions
   m2c_object:        'DM468_m2c' #'dm468_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            400
+  nmodes:            220
   inputs:
-    in_command:      'dm_mode_res.out_modes'
+    in_command:      'filter2.out_comm'
   outputs:           ['out_layer']
-
 
 ###########################################################
 ##################### POST-PROCESSING #####################
@@ -120,27 +107,17 @@ coro_psf:
   inputs:
     in_ef:           'ef_prop.out_ef' 
 
-coro_psf2:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    1450                 # [nm] visible
-  nd:                4                   # 4x padding for PSF
-  start_time:        0.5                 # Start PSF integration after 500ms
-  verbose: false
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'ef_prop2.out_ef' 
 
-perf_coro_psf:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    1450                 # [nm] visible
-  nd:                4                   # 4x padding for PSF
-  start_time:        0.5                 # Start PSF integration after 500ms
-  verbose: false
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'perf_prop.out_ef' 
+# psf2:
+#   class:             'PSF'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    750                 # [nm] visible
+#   nd:                4                    # 4x padding for PSF
+#   start_time:        0.5                  # Start PSF integration after 500ms
+#   verbose: true
+#   inputs:
+#     in_ef:           'ef_prop2.out_ef'
+#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 dm2_mode_res:
   class:            'ModalAnalysis'
@@ -153,11 +130,15 @@ dm2_mode_res:
 # Data store for results
 data_store_override:
   inputs:
-    input_list: [
+    input_list: [                 
+                  'atmo_phase-ef_prop2.out_ef',
                   'sr-psf.out_sr',
+                  'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
+                  'coro_psf-coro_psf.out_std_coronagraph_psf_profile',
                   # 'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
                   'atmo_res-atmo_modes.out_modes',
+                  'dm2_res-dm2_mode_res.out_modes',
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',
                   'pyr_modes-pyr_modalrec.out_modes',
