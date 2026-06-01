@@ -133,7 +133,7 @@ omgi:
   class: 'CloseGainOptimizer'
   nmodes: 400
   p: 0.3
-  r: -0.1
+  r: -0.05
   dt: 3                # Time-shift (\Delta t) in frames
   q_plus: 0.01        # Tracking gain increase factor
   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)

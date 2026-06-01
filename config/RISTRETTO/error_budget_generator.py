@@ -23,92 +23,91 @@ main_config = 'ristretto_main.yml'
 root_dir='/raid1/mmenessini/calibration/RISTRETTO'
 
 
-# 1. Calibrate pupdata vs n_subaps
-for n_subap in n_subaps:
-    pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
-    overrides = ("{"
-                f"pyr.pup_diam: {n_subap:.1f}, "
-                f"pyr.pup_dist: {pup_dist:.1f}, "
-                f"pyr_pupdata.output_tag: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                "}")
-    write_yaml_overrides(input_string=overrides)
-    try:
-        os.system(f"specula {main_config} calib_pupdata.yml temp_overrides.yml")
-    except FileExistsError: #OSError:
-        pass
+# # 1. Calibrate pupdata vs n_subaps
+# for n_subap in n_subaps:
+#     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
+#     overrides = ("{"
+#                 f"pyr.pup_diam: {n_subap:.1f}, "
+#                 f"pyr.pup_dist: {pup_dist:.1f}, "
+#                 f"pyr_pupdata.output_tag: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
+#                 "}")
+#     write_yaml_overrides(input_string=overrides)
+#     try:
+#         os.system(f"specula {main_config} calib_pupdata.yml temp_overrides.yml")
+#     except FileExistsError: #OSError:
+#         pass
 
 
-# 2. Calibrate IM vs n_subaps, rMods
-for i,n_subap in enumerate(n_subaps):
-    pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
-    for rMod in rMods:
-        pyr_tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
-        pyr_im_tag = pyr_tag+'_im'        
-        overrides = ("{"
-                    f"pyr.pup_diam: {n_subap:.1f}, "
-                    f"pyr.pup_dist: {pup_dist:.1f}, "
-                    f"pyr.mod_amp: {rMod:.1f}, "
-                    f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                    f"pyr_im_calibrator.im_tag: '{pyr_im_tag}', "
-                    "}")
-        write_yaml_overrides(input_string=overrides)
-        try:
-            os.system(f"specula {main_config} calib_im.yml temp_overrides.yml")
-        except FileExistsError: #OSError:
-            pass
-        for N in n_modes[:i+1]:
-            rec_tag = pyr_tag+f'_{N:1.0f}modes_rec'
-            compute_and_save_rec(root_dir, im_tag=pyr_im_tag, rec_tag=rec_tag, Nmodes=N, overwrite=True)
+# # 2. Calibrate IM vs n_subaps, rMods
+# for i,n_subap in enumerate(n_subaps):
+#     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
+#     for rMod in rMods:
+#         pyr_tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
+#         pyr_im_tag = pyr_tag+'_im'        
+#         overrides = ("{"
+#                     f"pyr.pup_diam: {n_subap:.1f}, "
+#                     f"pyr.pup_dist: {pup_dist:.1f}, "
+#                     f"pyr.mod_amp: {rMod:.1f}, "
+#                     f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
+#                     f"pyr_im_calibrator.im_tag: '{pyr_im_tag}', "
+#                     "}")
+#         write_yaml_overrides(input_string=overrides)
+#         try:
+#             os.system(f"specula {main_config} calib_im.yml temp_overrides.yml")
+#         except FileExistsError: #OSError:
+#             pass
+#         for N in n_modes[:i+1]:
+#             rec_tag = pyr_tag+f'_{N:1.0f}modes'
+#             compute_and_save_rec(root_dir, im_tag=pyr_im_tag, rec_tag=rec_tag, Nmodes=N, overwrite=True)
 
 
-# 3. Calibrate aliasing vs n_subaps, n_modes, r0
-aliaspath = os.path.join(root_dir,'aliasing')
-framespath = os.path.join(root_dir,'frames')
-os.makedirs(aliaspath,exist_ok=True)
-os.makedirs(framespath,exist_ok=True)
-for i,n_subap in enumerate(n_subaps):
-    pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
-    for rMod in rMods:
-        for seeing in seeings:
-            for N in n_modes:
-                tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
-                rec_tag = tag+f'_{N:1.0f}modes_rec'   
-                rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
-                overrides = ("{"
-                            f"pyr.pup_diam: {n_subap:.1f}, "
-                            f"pyr.pup_dist: {pup_dist:.1f}, "
-                            f"pyr.mod_amp: {rMod:.1f}, "
-                            f"pyr_modalrec.recmat_object: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_{N:1.0f}modes_rec', "
-                            f"pyr_pc_modalrec.recmat_object: '{rec_tag}', "
-                            f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                            f"seeing.constant: {seeing:1.1f}, "
-                            f"dm_perfect.nmodes: {N:1.0f}, "
-                            f"modal_analysis.nmodes: {N:1.0f}, "
-                            f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                            f"pyr_sn.output_tag: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_sn', "
-                            f"data_store.store_dir:         {os.path.join(root_dir,'scratch_aliasing')}, "  
-                            f"data_store.create_tn: false, "
-                            f"data_store.inputs.input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes'], "
-                            "}")
-                write_yaml_overrides(input_string=overrides)
-                tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_s{seeing:1.1f}_{N:1.0f}modes'
-                try:
-                    alias_rms = fits.getdata(os.path.join(aliaspath,tag+'_alias.fits'))
-                    avg_frame = fits.getdata(os.path.join(framespath,tag+'_avg_frame.fits'))
-                    print('Aliasing power and avg frame files '+tag+' already exist: skipping computation')
-                except FileNotFoundError:
-                    os.system(f"specula {main_config} calib_sn_alias.yml temp_overrides.yml")
-                    alias_modes = fits.getdata(os.path.join(root_dir,'scratch_aliasing','pyr_modes.fits'))
-                    alias_rms = np.sqrt(np.mean(alias_modes**2,axis=0)) 
-                    fits.writeto(os.path.join(aliaspath,tag+'_alias.fits'),alias_rms,overwrite=True)
-                    print('Saved aliasing power as: '+tag+'_alias')
-                    frames = fits.getdata(os.path.join(root_dir,'scratch_aliasing','pyr_frams.fits'))
-                    frames_avg = np.mean(frames,axis=0) 
-                    fits.writeto(os.path.join(framespath,tag+'_avg_frame.fits'),frames_avg,overwrite=True)
-                    print('Saved average frame as: '+tag+'_avg_frame')
+# # 3. Calibrate aliasing vs n_subaps, n_modes, r0
+# aliaspath = os.path.join(root_dir,'aliasing')
+# framespath = os.path.join(root_dir,'frames')
+# os.makedirs(aliaspath,exist_ok=True)
+# os.makedirs(framespath,exist_ok=True)
+# for i,n_subap in enumerate(n_subaps):
+#     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
+#     for rMod in rMods:
+#         for seeing in seeings:
+#             for N in n_modes[:i]:
+#                 tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
+#                 rec_tag = tag+f'_{N:1.0f}modes_rec'   
+#                 rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
+#                 overrides = ("{"
+#                             f"pyr.pup_diam: {n_subap:.1f}, "
+#                             f"pyr.pup_dist: {pup_dist:.1f}, "
+#                             f"pyr.mod_amp: {rMod:.1f}, "
+#                             f"pyr_modalrec.recmat_object: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_{N:1.0f}modes_rec', "
+#                             f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
+#                             f"seeing_random.constant: {seeing:1.2f}, "
+#                             f"dm_perfect.nmodes: {N:1.0f}, "
+#                             f"modal_analysis.nmodes: {N:1.0f}, "
+#                             f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
+#                             f"pyr_sn.output_tag: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_sn', "
+#                             f"data_store.store_dir:         {os.path.join(root_dir,'scratch_aliasing')}, "  
+#                             f"data_store.create_tn: false, "
+#                             f"data_store.inputs.input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes'], "
+#                             "}")
+#                 write_yaml_overrides(input_string=overrides)
+#                 tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_s{seeing:1.2f}_{N:1.0f}modes'
+#                 try:
+#                     alias_rms = fits.getdata(os.path.join(aliaspath,tag+'_alias.fits'))
+#                     avg_frame = fits.getdata(os.path.join(framespath,tag+'_avg_frame.fits'))
+#                     print('Aliasing power and avg frame files '+tag+' already exist: skipping computation')
+#                 except FileNotFoundError:
+#                     os.system(f"specula {main_config} calib_pc_sn_alias.yml temp_overrides.yml")
+#                     alias_modes = fits.getdata(os.path.join(root_dir,'scratch_aliasing','pyr_modes.fits'))
+#                     alias_rms = np.std(alias_modes,axis=0) #np.sqrt(np.mean(alias_modes**2,axis=0)) 
+#                     fits.writeto(os.path.join(aliaspath,tag+'_alias.fits'),alias_rms,overwrite=True)
+#                     print('Saved aliasing power as: '+tag+'_alias')
+#                     frames = fits.getdata(os.path.join(root_dir,'scratch_aliasing','pyr_frames.fits'))
+#                     frames_avg = np.mean(frames,axis=0) 
+#                     fits.writeto(os.path.join(framespath,tag+'_avg_frame.fits'),frames_avg,overwrite=True)
+#                     print('Saved average frame as: '+tag+'_avg_frame')
 
 
-# 4 Calibrate SIMPC vs n_subap, rMods, seeing for PERFECT correction
+# 4. Calibrate SIMPC vs n_subap, rMods, seeing for PERFECT correction
 ncycles = 50
 fs = 2000
 for i,n_subap in enumerate(n_subaps):
@@ -116,7 +115,7 @@ for i,n_subap in enumerate(n_subaps):
     N = n_modes[i]
     for rMod in rMods:
         for seeing in seeings:
-            tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_s{seeing:1.1f}_{N:1.0f}modes'
+            tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_s{seeing:1.2f}_{N:1.0f}modes'
             simpc_tag = tag+'_simpc'
             overrides = ("{"
                         f"main.total_time: {N*2*ncycles/fs}, "
@@ -127,10 +126,10 @@ for i,n_subap in enumerate(n_subaps):
                         f"pushpull.nmodes: {N:1.0f}, "
                         f"pushpull.ncycles: {ncycles:1.0f}, "
                         f"pyr_im_calibrator.nmodes: {N:1.0f}, "
-                        f"dm_random.nmodes: {N:1.0f}, "
+                        f"dm_perfect.nmodes: {N:1.0f}, "
                         f"dm.nmodes: {N:1.0f}, "
                         f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                        f"seeing_random.constant: {seeing:1.1f}, "
+                        f"seeing_random.constant: {seeing:1.2f}, "
                         f"pyr_im_calibrator.im_tag: '{simpc_tag}', "
                         # f"data_store.store_dir:         '{os.path.join(root_dir,'scratch_simpc')}', "  
                         # f"data_store.create_tn: false, "

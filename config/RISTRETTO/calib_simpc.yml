@@ -69,7 +69,7 @@ atmo_pc:
   class: 'ElectricFieldCombinator'
   inputs:
     in_ef1: 'atmo_random.out_source_ngs_ef'    # Turbulence
-    in_ef2: 'dm_random.out_layer'              # Partial correction
+    in_ef2: 'dm_perfect.out_layer'              # Partial correction
   outputs: ['out_ef']
 
 ef_mode:

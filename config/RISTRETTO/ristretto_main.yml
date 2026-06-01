@@ -82,7 +82,7 @@ pyr:
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    1200                     # [nm] Pyramid wavelength
   inputs:
-    in_ef: 'first_stage_prop.out_ef' 
+    in_ef: 'ef_prop.out_ef' 
 
 cred1:
   class:             'CCD'
@@ -102,8 +102,7 @@ cred1:
 
 pyr_slopes:
   class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata_48x48'           
-  # slopes_from_intensity:  true
+  pupdata_object:         'pyr_pupdata_48x48'      
   # sn_object:            'pyr3.0_48x48_sn' 
   inputs:
     in_pixels:        'cred1.out_pixels'
