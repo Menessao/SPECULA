@@ -16,7 +16,7 @@ class CloseGainOptimizer(BaseProcessingObj):
                  nmodes: int,
                  p: float = 0.3,
                  r: float = -0.1,
-                 dt: int = 3,                 # Time-shift (\Delta t) in frames
+                 dt: float = 3,                 # Time-shift in frames
                  q_plus: float = 1e-2,        # Tracking gain increase factor
                  q_minus_ratio: float = 5.0,  # Ratio of q- to q+ (for overshoots)
                  initial_gain: float = 0.5,
@@ -28,7 +28,8 @@ class CloseGainOptimizer(BaseProcessingObj):
         self.nmodes = nmodes
         self.p = p
         self.r = r
-        self.dt = dt
+        self.dt = int(np.ceil(dt))
+        self.dt_frac = self.dt - dt
         
         # Determine the asymmetric learning factors q+ and q-
         self.q_plus = q_plus
@@ -74,7 +75,8 @@ class CloseGainOptimizer(BaseProcessingObj):
         # 2. Wait until we have enough history to compute the dt-shifted correlation
         if len(self.m_history) == self.dt + 1:
             m_k = self.current_m_i
-            m_k_dt = self.m_history[0]  # The measurement from \Delta t frames ago
+            m_k_dt = (1.0 - self.dt_frac) * self.m_history[0] + self.dt_frac * self.m_history[1] 
+            # m_k_dt = self.m_history[0]  # The measurement from \Delta t frames ago
 
             # 3. Equation 3 (Deo et al. 2019): Autocorrelation estimators
             self.N_0 = self.p * (m_k ** 2) + (1 - self.p) * self.N_0

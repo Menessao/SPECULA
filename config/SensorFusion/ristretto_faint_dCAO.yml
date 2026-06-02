@@ -140,7 +140,7 @@ cred2:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.00025               # [s] Integration time (2000 fps)
+  dt:                0.0005               # [s] Integration time (2000 fps)
   bandw:             200                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -169,21 +169,52 @@ pyr0_modalrec:
   outputs:           ['out_modes']
 
 ############################ Control ################################
-bootstrap2:
-  class:              'ScheduleGenerator'
-  scheduled_values:   [[0.2],[0.1]] # Nrows x Ncols, times x gains
-  modes_per_group:    [150] # Ncols
-  scheduled_times:    [0.01] # Nrows-1
+# bootstrap2:
+#   class:              'ScheduleGenerator'
+#   scheduled_values:   [[0.2],[0.1]] # Nrows x Ncols, times x gains
+#   modes_per_group:    [150] # Ncols
+#   scheduled_times:    [0.01] # Nrows-1
+
+# filter2:
+#   class:                'IirFilter'
+#   simul_params_ref:     'main'
+#   delay:                1 # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.0' #'cascading_iirfilter_300modes'
+#   inputs:
+#     delta_comm: 'pyr0_modalrec.out_modes'
+#     gain_mod: 'bootstrap2.output'
+#   outputs:  ['out_comm']
 
 filter2:
-  class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                1 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.0' #'cascading_iirfilter_300modes'
+  class:             'Integrator'
+  simul_params_ref:  'main'
+  delay:             0.0                     # 1 frame delay (realistic)
+  int_gain:          [1.0]
+  n_modes:           [150]                 # Number of modes to control
   inputs:
-    delta_comm: 'pyr0_modalrec.out_modes'
-    gain_mod: 'bootstrap2.output'
-  outputs:  ['out_comm']
+    delta_comm:      'scaled_modes_lo.out_value' #'pyr0_modalrec.out_modes' #
+  outputs:           ['out_comm']
+
+omgi_lo:
+  class: 'CloseGainOptimizer'
+  nmodes: 150
+  p: 0.3
+  r: -0.2
+  dt: 3                # Time-shift (\Delta t) in frames
+  q_plus: 0.01        # Tracking gain increase factor
+  q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+  initial_gain: 0.4
+  inputs:
+    in_modes:  'pyr0_modalrec.out_modes'
+  outputs: ['out_gains']
+
+scaled_modes_lo:
+  class: 'BaseOperation'
+  mul: true
+  inputs:
+    in_value1: 'pyr0_modalrec.out_modes'
+    in_value2: 'omgi_lo.out_gains'
+  outputs: ['out_value']
 
 dm2:
   class:             'DM'
@@ -211,6 +242,37 @@ filter1:
     delta_comm: 'pyr_modalrec.out_modes' #'ogc_modes.out_value' 
     gain_mod: 'bootstrap1.output'
   outputs:  ['out_comm']
+
+# filter1:
+#   class:             'Integrator'
+#   simul_params_ref:  'main'
+#   delay:             1.0                     # 1 frame delay (realistic)
+#   int_gain:          [1.0]
+#   n_modes:           [1300]                 # Number of modes to control
+#   inputs:
+#     delta_comm:      'scaled_modes_ho.out_value' #'pyr_modalrec.out_modes' #
+#   outputs:           ['out_comm']
+
+# omgi_ho:
+#   class: 'CloseGainOptimizer'
+#   nmodes: 1300
+#   p: 0.3
+#   r: -0.1
+#   dt: 3                # Time-shift (\Delta t) in frames
+#   q_plus: 0.01        # Tracking gain increase factor
+#   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+#   initial_gain: 0.4
+#   inputs:
+#     in_modes:  'pyr_modalrec.out_modes'
+#   outputs: ['out_gains']
+
+# scaled_modes_ho:
+#   class: 'BaseOperation'
+#   mul: true
+#   inputs:
+#     in_value1: 'pyr_modalrec.out_modes'
+#     in_value2: 'omgi_ho.out_gains'
+#   outputs: ['out_value']
 
 dm1:
   class:             'DM'
