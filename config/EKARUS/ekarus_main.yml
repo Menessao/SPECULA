@@ -123,32 +123,32 @@ filter:
   class:             'Integrator'
   simul_params_ref:  'main'
   delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [0.4,0.0] #[0.7,0.6,0.0] #
-  ff:                [1.0,0.0]
-  n_modes:           [300,100] #
+  int_gain:          [1.0] #[0.7,0.6,0.0] #
+  ff:                [1.0]
+  n_modes:           [400] #
   inputs:
-      delta_comm: 'pyr_modalrec.out_modes' #'scaled_modes.out_value' #
+      delta_comm: 'scaled_modes.out_value' # 'pyr_modalrec.out_modes'
 
-# omgi:
-#   class: 'CloseGainOptimizer'
-#   nmodes: 400
-#   p: 0.3
-#   r: -0.05
-#   dt: 3                # Time-shift (\Delta t) in frames
-#   q_plus: 0.01        # Tracking gain increase factor
-#   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
-#   initial_gain: 0.5
-#   inputs:
-#     in_modes:  'pyr_modalrec.out_modes'
-#   outputs: ['out_gains']
+omgi:
+   class: 'CloseGainOptimizer'
+   nmodes: 400
+   p: 0.2
+   r: -0.3
+   dt: 4                # Time-shift in frames: 2x(delay+1)-1
+   q_plus: 0.01        # Tracking gain increase factor
+   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+   initial_gain: 0.5
+   inputs:
+     in_modes:  'pyr_modalrec.out_modes'
+   outputs: ['out_gains']
 
-# scaled_modes:
-#   class: 'BaseOperation'
-#   mul: true
-#   inputs:
-#     in_value1: 'pyr_modalrec.out_modes'
-#     in_value2: 'omgi.out_gains'
-#   outputs: ['out_value']
+scaled_modes:
+  class: 'BaseOperation'
+  mul: true
+  inputs:
+    in_value1: 'pyr_modalrec.out_modes'
+    in_value2: 'omgi.out_gains'
+  outputs: ['out_value']
 
 
 # filter:
@@ -198,17 +198,17 @@ psf:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
-coro_psf:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    750                 # [nm] visible
-  nd:                4                   # 4x padding for PSF
-  start_time:        0.5                 # Start PSF integration after 500ms
-  verbose: false
-  # use_average_field: false
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'ef_prop.out_ef' 
+# coro_psf:
+#   class:             'PsfCoronagraph'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    750                 # [nm] visible
+#   nd:                4                   # 4x padding for PSF
+#   start_time:        0.5                 # Start PSF integration after 500ms
+#   verbose: false
+#   # use_average_field: false
+#   compute_profile_metrics: true
+#   inputs:
+#     in_ef:           'ef_prop.out_ef' 
  
 
 dm_mode_res:

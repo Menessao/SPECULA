@@ -1,0 +1,27 @@
+main_override:
+  total_time: 3.0
+pyr_override:
+  pup_diam: 40.0
+  pup_dist: 60.0
+  mod_amp: 7.0
+seeing_override:
+  constant: 1.5
+pyr_slopes_override:
+  sn_object: pyr7.0_40x40_sn
+pyr_modalrec_override:
+  recmat_object: 'pyr7.0_40x40_400modes_rec'
+source_ngs_override:
+  magnitude: 9.0
+ocam_override:
+  dt: 0.005
+filter_override:
+  int_gain: [1.0]
+  delay: 0.3
+omgi_override:
+  r: -0.15
+  dt: 1.6
+data_store_override:
+  store_dir: /raid1/mmenessini/results/EKARUS/gain_opt/sao_pyr7_200Hz_s1.5_mag9/r-0.15
+  create_tn: false
+  inputs:
+    input_list: ['sr-psf.out_sr', 'opt_gains-omgi.out_gains']
