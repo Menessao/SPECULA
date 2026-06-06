@@ -119,53 +119,54 @@ pyr_modalrec:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-filter: 
-  class:             'Integrator'
-  simul_params_ref:  'main'
-  delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [1.0] #[0.7,0.6,0.0] #
-  ff:                [1.0]
-  n_modes:           [400] #
-  inputs:
-      delta_comm: 'scaled_modes.out_value' # 'pyr_modalrec.out_modes'
-
-omgi:
-   class: 'CloseGainOptimizer'
-   nmodes: 400
-   p: 0.2
-   r: -0.3
-   dt: 4                # Time-shift in frames: 2x(delay+1)-1
-   q_plus: 0.01        # Tracking gain increase factor
-   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
-   initial_gain: 0.5
-   inputs:
-     in_modes:  'pyr_modalrec.out_modes'
-   outputs: ['out_gains']
-
-scaled_modes:
-  class: 'BaseOperation'
-  mul: true
-  inputs:
-    in_value1: 'pyr_modalrec.out_modes'
-    in_value2: 'omgi.out_gains'
-  outputs: ['out_value']
-
-
-# filter:
-#   class:                'IirFilter'
-#   simul_params_ref:     'main'
-#   delay:                1.5 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object: 'ekarusiir_400modes_exc0_pow1.5' #'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
+# filter: 
+#   class:             'Integrator'
+#   simul_params_ref:  'main'
+#   delay:             1.5                     # Temporal delay in time steps
+#   int_gain:          [0.7,0.6,0.0] #
+#   ff:                [1.0,0.99,0.95]
+#   n_modes:           [2,120,278] #
 #   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
-#     gain_mod: 'gain_ramp.output'
-#   outputs:  ['out_comm']
+#       delta_comm: 'pyr_modalrec.out_modes'
+      # delta_comm: 'scaled_modes.out_value' # 'pyr_modalrec.out_modes'
 
-# gain_ramp:
-#   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.6,0.4,0.2,0.1], [1.4,1.1,0.85,0.7]] #[1.15,0.975,0.775]]
-#   modes_per_group: [150,150,50,50]
-#   scheduled_times: [0.01]
+# omgi:
+#    class: 'CloseGainOptimizer'
+#    nmodes: 400
+#    p: 0.2
+#    r: -0.3
+#    dt: 4                # Time-shift in frames: 2x(delay+1)-1
+#    q_plus: 0.01        # Tracking gain increase factor
+#    q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+#    initial_gain: 0.5
+#    inputs:
+#      in_modes:  'pyr_modalrec.out_modes'
+#    outputs: ['out_gains']
+
+# scaled_modes:
+#   class: 'BaseOperation'
+#   mul: true
+#   inputs:
+#     in_value1: 'pyr_modalrec.out_modes'
+#     in_value2: 'omgi.out_gains'
+#   outputs: ['out_value']
+
+
+filter:
+  class:                'IirFilter'
+  simul_params_ref:     'main'
+  delay:                1.0 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object: 'ekarusiir_400modes_exc0_pow1.5' #'iirfilter_400modes' #'iirfilter_400modes_exc0_pow2.0' #  #'iirfilter_400modes_exc1_pow0.8'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes' #'concat_wfs_modes.out_value' 
+    gain_mod: 'gain_ramp.output'
+  outputs:  ['out_comm']
+
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.6,0.4,0.2,0.1], [1.2,1.1,0.85,0.7]] #[1.15,0.975,0.775]]
+  modes_per_group: [150,150,50,50]
+  scheduled_times: [0.01]
 
 # gain_ramp:
 #   class:             'ScheduleGenerator'
@@ -240,7 +241,7 @@ data_store:
                   'dm_res-dm_mode_res.out_modes',
                   'dm_cmd-filter.out_comm',
                   'pyr_modes-pyr_modalrec.out_modes',
-                  'opt_gains-omgi.out_gains',
+                  # 'opt_gains-omgi.out_gains',
                   # 'ccd-ocam.out_pixels',
                   ]
 

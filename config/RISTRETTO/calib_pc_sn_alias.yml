@@ -1,10 +1,16 @@
 # Slope null calibrator - averages WFS response over atmospheric realizations
 pyr_sn:
   class: 'SnCalibrator'
-  output_tag: 'pyr0.0_24x24_pc500modes_sn'           # Output filename
-  overwrite: true
+  output_tag: 'scratch_pyr1.0_48x48_pc1300modes_sn'           # Output filename
+  overwrite: false
   inputs:
     in_slopes: 'pyr_slopes.out_slopes'
+
+# clean_aperture:
+#   class:             'Pupilstop'
+#   simul_params_ref:   'main'
+#   mask_diam:         1.0                  # Full pupil diameter
+#   obs_diam:          0.14                  # no central obstruction
 
 # Random seeing generator - varies around nominal value (here 1.0 arcsec)
 seeing_random:
@@ -56,14 +62,16 @@ ef_prop_override:
 main_override:
   total_time: 1.000                    # 1000 frames at 1kHz
 
+pyr_override:
+  mod_amp: 1.0
 
 data_store_override:
   store_dir:         '/raid1/mmenessini/calibration/RISTRETTO/scratch_aliasing'            # Data result directory: 'store_dir'/TN/
   create_tn:           false
   inputs:
-    input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes']
+    input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes'] #, 'res_ef-ef_prop.out_ef']
 
 # Remove closed-loop components 
 remove: ['atmo','seeing','wind_speed','wind_direction', 
-        'psf','prop','coro_psf', 
+        'psf','prop','coro_psf', 'bootstrap',
         'dm','dm_mode_res','filter', 'atmo_modes',]
