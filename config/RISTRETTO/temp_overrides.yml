@@ -1,23 +1,8 @@
 pyr_override:
   pup_diam: 48.0
   pup_dist: 60.0
-  mod_amp: 3.0
-pyr_modalrec_override:
-  recmat_object: 'pyr3.0_48x48_1300modes_rec'
+  mod_amp: 0.0
 pyr_slopes_override:
   pupdata_object: 'pyr_pupdata_48x48'
-seeing_random_override:
-  constant: 1.1
-dm_perfect_override:
-  nmodes: 1300
-modal_analysis_override:
-  nmodes: 1300
-source_ngs_override:
-  magnitude: 5.0
-pyr_sn_override:
-  output_tag: 'pyr3.0_48x48_s1.10_1300modes_sn'
-data_store_override:
-  store_dir: /raid1/mmenessini/calibration/RISTRETTO/scratch_aliasing
-  create_tn: false
-  inputs:
-    input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes']
+pyr_im_calibrator_override:
+  im_tag: 'pyr0.0_48x48_im'
