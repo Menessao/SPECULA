@@ -34,6 +34,13 @@ def save_pupil_to_size(data_dir:str, destination_dir:str, tag:str, Npix:int, thr
     pupilstop.save(fname)
     return new_pupil
 
+# def save_lbt_pupil(destination_dir:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils', Npix:int=120, D:float=8.222):
+#     pupil = fits.getdata(os.path.join(destination_dir, 'lbt_pupmask.fits'))
+#     os.makedirs(destination_dir,exist_ok=True)
+#     fname = os.path.join(destination_dir, 'lbt_pupdata.fits')
+#     pupilstop = PupData(ind_pup,radius=40,cx=,cy=,framesize=(120,120))
+#     pupilstop.save(fname)
+
 if __name__ == "__main__":
 
     # data_dir = '/raid1/mmenessini/calibration/VLT'

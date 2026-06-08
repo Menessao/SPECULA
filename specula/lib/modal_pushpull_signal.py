@@ -54,8 +54,6 @@ def modal_pushpull_signal(
     repeat_ncycles : bool, optional
         If True, generates `ncycles` of push followed by `ncycles` of pull.
         Default is False.
-    nsamples : int, optional
-        Number of samples to hold in each position. Default is 1.
     repeat_full_sequence: bool, optional
         If true, generates 'ncycles' of the pushpull sequence for each mode.
         Default is False

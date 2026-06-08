@@ -1,8 +1,22 @@
+main_override:
+  total_time: 65.0
+atmo_random_override:
+  update_interval: 2600
 pyr_override:
   pup_diam: 48.0
   pup_dist: 60.0
-  mod_amp: 0.0
+  mod_amp: 3.0
+pushpull_override:
+  nmodes: 1300
+  ncycles: 50
+pyr_im_calibrator_override:
+  nmodes: 1300
+  im_tag: 'pyr3.0_48x48_s1.50_1300modes_simpc'
+dm_perfect_override:
+  nmodes: 1300
+dm_override:
+  nmodes: 1300
 pyr_slopes_override:
   pupdata_object: 'pyr_pupdata_48x48'
-pyr_im_calibrator_override:
-  im_tag: 'pyr0.0_48x48_im'
+seeing_random_override:
+  constant: 1.5

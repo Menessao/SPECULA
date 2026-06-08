@@ -1,0 +1,97 @@
+
+# Main simulation parameters
+main:
+  class:             'SimulParams'
+  root_dir:          '/raid1/mmenessini/calibration/SOUL/KLv30dx'       # CalibManager root directory (all the data are in subdirectories)
+  pixel_pupil:       197                   # Must match influence function computation
+  pixel_pitch:       0.041736           # [m] Pitch of the pupil phase array
+  total_time:        0.8               # [s] Total simulation running time
+  time_step:         0.001               # [s] Simulation time step
+  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  display_server:    false                 # Disable for batch runs
+
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       400                        # Number of DM actuators
+  amp:          50
+  outputs:   ['output']
+
+pyr_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    400                         # Number of modes to calibrate
+  im_tag:    'pyr3.0_40x40_lbt_synim'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
+  inputs:
+    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
+    in_commands: 'pushpull.output'        # Push-pull commands
+
+# Natural guide star for WFS
+source_ngs:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
+  height:            .inf                  # Infinite height (star)
+  magnitude:         9.5                   # R-band magnitude (bright NGS)
+  wavelengthInNm:    750                   # [nm] R-band for WFS
+
+# Telescope pupil geometry
+pupilstop:
+  class:             'Pupilstop'
+  tag:               'asm_v30dx_197pixels'
+
+# Atmospheric propagation
+prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs'] 
+  inputs:
+    common_layer_list: ['pupilstop', 'dm.out_layer']  # Only pupil + DM
+  outputs:           ['out_source_ngs_ef'] 
+
+########################### PWFS ##############################
+pyr:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          40.                     # Pupil diameter in subaps.
+  pup_dist:          48.                     # Separation between pupil centers in subaps.
+  fov:               2.0                     # Requested field-of-view [arcsec]
+  mod_amp:           3.0                     # Modulation radius (in lambda/D units)
+  output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    750                     # [nm] Pyramid wavelength
+  inputs:
+    in_ef: 'prop.out_source_ngs_ef'
+
+ocam:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]            # Total detector size
+  dt:                0.001            # [s] Integration time (1000 fps)
+  bandw:             300                   # [nm]
+  photon_noise:      false                  # Enable photon noise
+  readout_noise:     false                  # Enable read noise
+  excess_noise:      false                  # Enable excess noise
+  readout_level:     0.4                   # [e-/pix/frame] Read noise level
+  emccd_gain:        600                   # EMCCD gain factor
+  quantum_eff:       0.32                   # QE x transmission
+  inputs:
+    in_i:            'pyr.out_i' 
+  outputs:           ['out_pixels']
+
+pyr_slopes:
+  class:                  'PyrSlopec'
+  pupdata_object:         'lbt_pupdata'     
+  inputs:
+    in_pixels:        'ocam.out_pixels'
+  outputs:           ['out_slopes']
+
+dm:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'asm_v30dx_ifunc'      # Our computed influence functions
+  m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
+  height:            0                # Ground-conjugated DM
+  sign:              1
+  nmodes:            600
+  inputs:
+    in_command:      'pushpull.output'
+  outputs:           ['out_layer']
+

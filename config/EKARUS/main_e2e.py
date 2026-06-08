@@ -15,14 +15,14 @@ max_pup_dist = 60
 min_pup_dist = 14
 
 seeings = np.array([1.5,2.0,2.5])
-freqs = np.array([200,250,500,1000]) #250,
+freqs = np.array([200,1000]) #np.array([200,250,500,1000]) #250,
 starMags = np.array([1,3,5,7,9,11,13])
 gvec = np.arange(1,11)*0.1
-gvec = np.arange(5,14)*0.1
+gvec = np.arange(2,14)*0.1
 
 rMods = np.array([7]) #np.array([3,4,5,6,7,8])
 
-init = 200
+init = 400
 nSubap = 40
 nModes = 400
 pup_dist = np.max((min_pup_dist,max_pup_dist/max(nSubaps)*nSubap))
@@ -56,6 +56,7 @@ for rMod in rMods:
                 print(f'Testing gain {gain} for mag={starMag:1.1f}, {seeing:1.1f}", f={freq:1.0f}Hz, rMod={rMod:1.0f}')
                 if filtertype == 'INT':
                     overrides = ("{"
+                                f"main.total_time: 1.4, "
                                 f"pyr.pup_diam: {nSubap:.1f}, "
                                 f"pyr.pup_dist: {pup_dist:.1f}, "
                                 f"seeing.constant: {seeing:1.2f}, "
@@ -67,10 +68,12 @@ for rMod in rMods:
                                 f"filter.int_gain: [{gain:.1f}], "
                                 f"filter.delay: {delay*freq:1.2f}, "
                                 f"data_store.store_dir: {store_dir}, "
-                                f"data_store.create_tn: false"
+                                f"data_store.create_tn: false, "
+                                f"data_store.inputs.input_list: ['sr-psf.out_sr'], "
                                 "}")
                 else:
                     overrides = ("{"
+                                f"main.total_time: 1.4, "
                                 f"pyr.pup_diam: {nSubap:.1f}, "
                                 f"pyr.pup_dist: {pup_dist:.1f}, "
                                 f"seeing.constant: {seeing:1.2f}, "
@@ -83,7 +86,8 @@ for rMod in rMods:
                                 # f"filter.iir_filter_data_object: {filtertype}, "
                                 f"filter.delay: {delay*freq:1.2f}, "
                                 f"data_store.store_dir: {store_dir}, "
-                                f"data_store.create_tn: false"
+                                f"data_store.create_tn: false, "
+                                f"data_store.inputs.input_list: ['sr-psf.out_sr'], "
                                 "}")
                 write_yaml_overrides(input_string=overrides)
                 os.system(f"specula {main_config} temp_overrides.yml")
@@ -154,5 +158,5 @@ for rMod in rMods:
                     columns = ['seeing', 'freq', 'starMag', 'sr', 'gain', 'filter']
 
     results_df = pd.DataFrame(results, columns=columns) 
-    results_df.to_csv(os.path.join(result_dir, 'e2e_csv', f'rMod{rMod:1.0f}_{nSubap}x{nSubap}_{nModes}modes.csv'), index=False)
+    results_df.to_csv(os.path.join(result_dir, 'e2e_csv', f'rMod{rMod:1.0f}_IIR_{nSubap}x{nSubap}_{nModes}modes.csv'), index=False)
 
