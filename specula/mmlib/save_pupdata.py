@@ -93,7 +93,10 @@ def pupdata_from_boolean_mask(mask: np.ndarray, radius: float = None) -> PupData
 
 
 def save_lbt_pupil(destination_dir:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils'):
-    pupil = fits.getdata(os.path.join(destination_dir, 'lbt_pupmask.fits'))
+    img = fits.getdata(os.path.join(destination_dir, 'lbt_pupmask.fits'))
+    dx = -1
+    dy = 2
+    pupil = np.roll(img,(dx,dy),axis=(1,0))
     os.makedirs(destination_dir,exist_ok=True)
     fname = os.path.join(destination_dir, 'lbt_pupdata.fits')
     pupilstop = pupdata_from_boolean_mask(pupil,radius=20)
