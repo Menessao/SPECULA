@@ -13,7 +13,7 @@ main:
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       400                        # Number of DM actuators
-  amp:          50
+  amp:          200
   outputs:   ['output']
 
 pyr_im_calibrator:
@@ -86,7 +86,7 @@ pyr_slopes:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_v30dx_ifunc'      # Our computed influence functions
+  ifunc_object:      'asm_v30dx_ifunc_shift'      # Our computed influence functions
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
   sign:              1
@@ -94,4 +94,11 @@ dm:
   inputs:
     in_command:      'pushpull.output'
   outputs:           ['out_layer']
+
+data_store:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
+  create_tn: false
+  inputs:
+    input_list: ['ccd-ocam.out_pixels','dm_ef-dm.out_layer']
 

@@ -88,7 +88,10 @@ def pupdata_from_boolean_mask(mask: np.ndarray, radius: float = None) -> PupData
     cy_arr = np.array([c[1] for c in centers], dtype=float)
     radii_arr = np.array(radii, dtype=float)
 
-    pup = PupData(ind_pup=ind_pup, radius=radii_arr, cx=cx_arr, cy=cy_arr, framesize=(h, w))
+    pup_order = [1, 0, 2, 3]
+    # pup_order = [2,1,3,0]
+    # pup_order = [2, 3, 1, 0]
+    pup = PupData(ind_pup=ind_pup[:,pup_order], radius=radii_arr, cx=cx_arr[pup_order], cy=cy_arr[pup_order], framesize=(h, w))
     return pup
 
 
@@ -96,6 +99,8 @@ def save_lbt_pupil(destination_dir:str='/raid1/mmenessini/calibration/SOUL/KLv30
     img = fits.getdata(os.path.join(destination_dir, 'lbt_pupmask.fits'))
     dx = -1
     dy = 2
+    shiftimg = np.roll(img,(dx,dy),axis=(1,0))
+    fits.writeto(os.path.join(destination_dir, 'lbt_pupmask_shift.fits'),shiftimg,overwrite=True)
     pupil = np.roll(img,(dx,dy),axis=(1,0))
     os.makedirs(destination_dir,exist_ok=True)
     fname = os.path.join(destination_dir, 'lbt_pupdata.fits')
