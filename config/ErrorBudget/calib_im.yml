@@ -5,7 +5,7 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       648                        # Number of DM actuators
-  amp:          20
+  amp:          200
   # constant_amp: false
   outputs:   ['output']
 
@@ -13,7 +13,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    648                         # Number of modes to calibrate
-  im_tag:    'pyr5.0_40x40_im'            # Output IM filename
+  im_tag:    'pyr3.0_40x40_shift_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -35,18 +35,19 @@ prop_override:
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
   nmodes: 648                            # Use all modes for calibration
+  ifunc_object:      'asm_v30dx_ifunc_shift'      # Our computed influence functions
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
-  mod_amp: 5.0
+  mod_amp: 3.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
 # Super resolution testing
 pyr_slopes_override:
-  pupdata_object:         'pyr_pupdata_40x40'  
-  # slopes_from_intensity: true  
+  pupdata_object:         'lbt_pupdata'   
+  # pupdata_object:         'pyr_pupdata_40x40'  
 
 # Disable noise for clean measurements
 ocam_override:

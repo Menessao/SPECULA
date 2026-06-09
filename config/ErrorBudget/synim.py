@@ -2,7 +2,10 @@ from astropy.io import fits
 import numpy as np
 from scipy.ndimage import rotate
 from specula.data_objects.ifunc import IFunc
+from specula.data_objects.ifunc_inv import IFuncInv
 
+klinv = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_kl_inv.fits')
+kl = np.linalg.pinv(klinv)
 ifunc = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc.fits')
 lbtpup = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupilstop/asm_v30dx_197pixels.fits')
 im = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbt_refim.fits')
@@ -13,6 +16,7 @@ filepath=f'/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupdata.fits'
 
 def rotate_ifunc(rot_deg:float):
     ifunc_new = np.zeros_like(ifunc)
+    kl_new = np.zeros_like(kl)
     img = np.zeros(lbtpup.shape)
     for j in range(ifunc.shape[1]):
         img[lbtpup.astype(bool)] = ifunc[:,j]
@@ -20,6 +24,13 @@ def rotate_ifunc(rot_deg:float):
         ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift.fits', overwrite=True)
+    for j in range(kl.shape[1]):
+        img[lbtpup.astype(bool)] = kl[:,j]
+        rot_img = rotate(img,angle=rot,reshape=False)
+        kl_new[:,j] = rot_img[lbtpup.astype(bool)]
+    kl_inv_new = np.linalg.pinv(kl_new)
+    ifunc_inv_obj = IFuncInv(ifunc_inv=kl_inv_new, mask=lbtpup)
+    ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift_inv.fits', overwrite=True)
 
 Nslopes = 2512
 Nmodes = 400

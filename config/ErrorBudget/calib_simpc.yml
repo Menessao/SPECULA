@@ -4,26 +4,25 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       500                         # Number of DM actuators
-  amp:          50  
-  ncycles:       40
+  nmodes:       600                         # Number of DM actuators
+  amp:          200  
+  ncycles:       70
   repeat_full_sequence: true
-  # constant_amp: true
   outputs:   ['output']
 
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr5.0_s1.0_c20260506_092825_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  nmodes:    600                         # Number of modes to calibrate
+  im_tag:    'pyr3.0_s1.0_synim'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
 
 # Override main simulation parameters
 main_override:
-  total_time: 23.52                # 500 modes × 2 (push+pull) × 0.000588s x 40 cycles
+  total_time: 49.392                # 600 modes × 2 (push+pull) × 0.000588s x 70 cycles
 
 ################################## ATMO RESIDUAL #####################################
 seeing_random:
@@ -39,7 +38,7 @@ atmo_random:
   simul_params_ref:     'main'
   L0:                   25               # [m] Outer scale
   source_dict_ref:      ['source_ngs']
-  update_interval:      1000                 # Update after push-pull of all modes
+  update_interval:      100                 # Update after push-pull of all modes
   inputs:
     seeing:             'seeing_random.output'
     pupilstop:          'pupilstop'
@@ -48,15 +47,15 @@ atmo_random:
 # Modal decomposition of atmospheric phase
 modal_analysis_random:
   class: 'ModalAnalysis'
-  ifunc_inv_object: 'asm_v30dx_ifunc_inv'
-  nmodes: 648
+  ifunc_inv_object: 'asm_v30dx_ifunc_shift_inv'
+  nmodes: 649
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
 
 scale_random:
   class:  'BaseOperation'
-  constant_mul_data: 'correction_vector_20260506_092825' 
+  constant_mul_data: 'corr_vec_20260609_192600' #'correction_vector_20260506_092825' 
   inputs:
     in_value1: 'modal_analysis_random.out_modes'
   outputs: ['out_value']
@@ -65,7 +64,7 @@ scale_random:
 dm_random:
   class: 'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_v30dx_ifunc'      # Our computed influence functions
+  ifunc_object:      'asm_v30dx_ifunc_shift'      # Our computed influence functions
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
@@ -96,9 +95,12 @@ dm_override:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
-  mod_amp: 5.0
+  mod_amp: 3.0
   inputs: 
     in_ef: 'ef_mode.out_ef'
+
+pyr_slopes_override:
+  pupdata_object:         'lbt_pupdata'   
 
 # Disable noise for clean measurements
 ocam_override:
@@ -114,9 +116,12 @@ atmo_pc_modes:
   outputs: ['out_modes']
 
 data_store_override:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
+  create_tn: false
   inputs:
-    input_list: ['atmo_res-atmo_pc_modes.out_modes']
+    input_list: ['atmo_res-atmo_pc.out_ef','corr_modes-scale_random.out_value','meas_modes-modal_analysis_random.out_modes','res_modes-atmo_pc_modes.out_modes']
 
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store', #'source_science',
-        'dm_mode_res','filter','psf', 'ef_prop', 'prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'source_science',
+        'dm_mode_res','filter','psf', 'ef_prop', 'prop','pyr_modalrec', 'gain_ramp'] #, 'bootstrap', 'concat_wfs_modes'

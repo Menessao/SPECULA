@@ -4,7 +4,7 @@ main:
   class:             'SimulParams'
   root_dir:          '/raid1/mmenessini/calibration/SOUL/KLv30dx'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       197                   # Must match influence function computation
-  pixel_pitch:       0.042639            # [m] Pitch of the pupil phase array
+  pixel_pitch:       0.041736            # [m] Pitch of the pupil phase array
   total_time:        2.94 #10.9956                # [s] Total simulation running time
   time_step:         0.000588               # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)

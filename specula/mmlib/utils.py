@@ -31,7 +31,7 @@ def compute_modal_variance_von_karman(r0, L0, D, modes, mask):
     - r0: float, Fried parameter [m]
     - L0: float, Outer scale [m]
     - D: float, Telescope diameter [m]
-    - modes: 3D numpy array of shape (N_modes, N_valid_pixels) containing the modal basis
+    - modes: 2D numpy array of shape (N_modes, N_valid_pixels) containing the modal basis
     - mask: 2D numpy array of shape (N_pixels, N_pixels) representing the telescope pupil
     
     Returns:
