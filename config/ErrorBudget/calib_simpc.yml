@@ -15,14 +15,15 @@ pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    600                         # Number of modes to calibrate
   im_tag:    'pyr3.0_s1.0_synim'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
 
 # Override main simulation parameters
 main_override:
-  total_time: 49.392                # 600 modes × 2 (push+pull) × 0.000588s x 70 cycles
+  time_step: 0.001
+  total_time: 84.0                # 600 modes × 2 (push+pull) × 0.000588s x 70 cycles
 
 ################################## ATMO RESIDUAL #####################################
 seeing_random:
@@ -38,7 +39,7 @@ atmo_random:
   simul_params_ref:     'main'
   L0:                   25               # [m] Outer scale
   source_dict_ref:      ['source_ngs']
-  update_interval:      100                 # Update after push-pull of all modes
+  update_interval:      1200                 # Update after push-pull of all modes
   inputs:
     seeing:             'seeing_random.output'
     pupilstop:          'pupilstop'
@@ -90,7 +91,8 @@ ef_mode:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 648                            # Use all modes for calibration
+  ifunc_object:      'asm_v30dx_ifunc_shift'      # Our computed influence functions
+  nmodes: 600                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
@@ -104,23 +106,24 @@ pyr_slopes_override:
 
 # Disable noise for clean measurements
 ocam_override:
+  dt: 0.001
   photon_noise:   false                   # No photon noise
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
-atmo_pc_modes:
-  class: 'ModalAnalysis'
-  ifunc_inv_object: 'asm_v30dx_kl_inv'
-  inputs:
-    in_ef: 'atmo_pc.out_ef'
-  outputs: ['out_modes']
+# atmo_pc_modes:
+#   class: 'ModalAnalysis'
+#   ifunc_inv_object: 'asm_v30dx_kl_inv'
+#   inputs:
+#     in_ef: 'atmo_pc.out_ef'
+#   outputs: ['out_modes']
 
-data_store_override:
-  class:             'DataStore'
-  store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
-  create_tn: false
-  inputs:
-    input_list: ['atmo_res-atmo_pc.out_ef','corr_modes-scale_random.out_value','meas_modes-modal_analysis_random.out_modes','res_modes-atmo_pc_modes.out_modes']
+# data_store_override:
+#   class:             'DataStore'
+#   store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
+#   create_tn: false
+#   inputs:
+#     input_list: ['ef_field-ef_mode.out_ef']
 
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'source_science',
