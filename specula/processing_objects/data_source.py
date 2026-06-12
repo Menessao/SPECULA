@@ -3,7 +3,7 @@ import os
 import pickle
 from astropy.io import fits
 
-from specula.base_processing_obj import BaseProcessingObj, InputDesc, OutputDesc
+from specula.base_processing_obj import BaseProcessingObj
 from specula.base_value import BaseValue
 from specula.lib.utils import import_class
 
@@ -15,8 +15,8 @@ class DataSource(BaseProcessingObj):
     """
 
     def __init__(self,
-                outputs: list,         # TODO =[],
-                store_dir: str,        # TODO ="",
+                outputs: list,
+                store_dir: str,
                 data_format: str='fits',
                 global_precision: int=None):
         super().__init__()

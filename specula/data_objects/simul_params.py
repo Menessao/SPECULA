@@ -24,18 +24,22 @@ class SimulParams(BaseDataObj):
         ----------
         root_dir : str
             The root dir for the simulation
-        pixel_pupil : int
+        pixel_pupil : int [pixel]
             The diameter in pixels of the simulation pupil
-        pixel_pitch : float
+        pixel_pitch : float [m]
             The dimension in meters of a pixel (telescope diameter = pixel_pupil * pixel_pitch)
-        total_time : float
-            The total time duration of the simulation in seconds
-        time_step : float
+        total_time : float [s]
+            The total time duration of the simulation
+        time_step : float [s]
             The duration of a single timestep in seconds (number of timesteps = int(total_time/time_step) )
-        zenithAngleInDeg : float
-            The zenith angle of the telescope in degrees
+        zenithAngleInDeg : float [deg]
+            The zenith angle of the telescope
         display_server : bool
             Activate web server for simulation display
+        stepping: bool
+            Activate interactive single-stepping mode
+        add_modules: list of str
+            Optional additional modules to add to the search path when importing processing objects
         """
         super().__init__()
 
