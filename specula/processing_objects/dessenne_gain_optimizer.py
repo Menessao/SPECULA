@@ -77,7 +77,7 @@ class DessenneGainOptimizer(BaseProcessingObj):
         self.inputs['optical_gains'] = InputValue(type=BaseValue, optional=True)
         
         # Direct assignment of the data object to the outputs dictionary
-        self.outputs['iir_filter_data'] = self.iir_filter_data
+        self.outputs['out_iir_filter_data'] = self.iir_filter_data
 
     @classmethod
     def input_names(cls):

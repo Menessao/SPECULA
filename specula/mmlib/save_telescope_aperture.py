@@ -34,14 +34,21 @@ def save_pupil_to_size(data_dir:str, destination_dir:str, tag:str, Npix:int, thr
     pupilstop.save(fname)
     return new_pupil
 
-# def save_lbt_pupil(destination_dir:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils', Npix:int=120, D:float=8.222):
-#     pupil = fits.getdata(os.path.join(destination_dir, 'lbt_pupmask.fits'))
-#     os.makedirs(destination_dir,exist_ok=True)
-#     fname = os.path.join(destination_dir, 'lbt_pupdata.fits')
-#     pupilstop = PupData(ind_pup,radius=40,cx=,cy=,framesize=(120,120))
-#     pupilstop.save(fname)
+def save_lbt_pupil(destination_dir:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils', Npix:int=120, D:float=8.222):
+    pupil = fits.getdata('/raid1/mmenessini/LBTData/lbtpupilcrop.fits')
+    os.makedirs(destination_dir,exist_ok=True)
+    new_pupil = toccd(pupil,(Npix,Npix),xp=specula.xp)
+    new_pupil = new_pupil >= 0.5*new_pupil.max()
+    os.makedirs(destination_dir,exist_ok=True)
+    fname = os.path.join(destination_dir, f'lbt_pupil_{Npix:1.0f}pixels.fits')
+    simul_params = SimulParams(pixel_pupil=Npix,pixel_pitch=D/Npix)
+    pupilstop = Pupilstop(simul_params=simul_params, input_mask=new_pupil)
+    pupilstop.save(fname)
+    return new_pupil
 
 if __name__ == "__main__":
+
+    save_lbt_pupil(Npix=220)
 
     # data_dir = '/raid1/mmenessini/calibration/VLT'
     # destination_dir = '/raid1/mmenessini/calibration/XAO/pupilstop'
@@ -52,13 +59,13 @@ if __name__ == "__main__":
     # plt.imshow(aperture,origin='lower',cap='gray')
     # plt.show()
 
-    destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
-    tag = 'copernico_pupil'
-    Npix = 160
-    save_copernico_pupil(destination_dir, tag, overwrite=True)
-    aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
-    plt.figure()
-    plt.imshow(aperture,origin='lower',cmap='gray')
-    plt.show()
+    # destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
+    # tag = 'copernico_pupil'
+    # Npix = 160
+    # save_copernico_pupil(destination_dir, tag, overwrite=True)
+    # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
+    # plt.figure()
+    # plt.imshow(aperture,origin='lower',cmap='gray')
+    # plt.show()
 
 

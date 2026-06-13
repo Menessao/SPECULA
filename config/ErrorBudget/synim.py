@@ -71,23 +71,32 @@ def shift_image(image, shift, axis):
 #     ifunc_inv_obj = IFuncInv(ifunc_inv=kl_inv_new, mask=lbtpup)
 #     ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift_inv.fits', overwrite=True)
 
-def rotate_ifunc(rot_deg:float):
+def rotate_ifunc(ifunc,rot_deg:float):
     ifunc_new = np.zeros_like(ifunc)
     img = np.zeros(lbtpup.shape)
     for j in range(ifunc.shape[1]):
         img[lbtpup.astype(bool)] = ifunc[:,j]
         rot_img = rotate(img,angle=rot_deg,reshape=False)
         ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
-    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
-    ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift.fits', overwrite=True)
+    return ifunc_new
 
-def shift_ifunc(shift:float,ax_dir):
+def shift_ifunc(ifunc,shift:float,ax_dir):
     ifunc_new = np.zeros_like(ifunc)
     img = np.zeros(lbtpup.shape)
     for j in range(ifunc.shape[1]):
         img[lbtpup.astype(bool)] = ifunc[:,j]
         shift_img = shift_image(img,shift=shift,axis=ax_dir)
         ifunc_new[:,j] = shift_img[lbtpup.astype(bool)]
+    return ifunc_new
+
+def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None):
+    ifunc_new = ifunc.copy()
+    if rot is not None:
+        ifunc_new = rotate_ifunc(ifunc_new,rot_deg=rot)
+    if shiftX is not None:
+        ifunc_new = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
+    if shiftY is not None:
+        ifunc_new = shift_ifunc(ifunc_new,shift=shiftY,ax_dir=1)
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift.fits', overwrite=True)
 
@@ -127,53 +136,47 @@ def evaluate_metric(Nmodes):
     return metric
 
 
-
 if __name__ == "__main__":
 
     Nmodes = 500
 
-    rot0 = 52.5
-    shiftX0 = 0.0
-    shiftY0 = 0.0
+    rot0 = 55.5
+    shiftX0 = -0.625
+    shiftY0 = -0.8
 
-    rotvec = np.linspace(-2,2,15)
-    shiftvec = np.linspace(-1,1,21)
+    prefix = 'it2_'
+
+    rotvec = np.linspace(-2.5,2.5,21)
+    shiftvec = np.linspace(-0.5,0.5,21)
 
     result_dir = '/raid1/mmenessini/results/SOUL/KLv30dx/'
 
     columns = ['rotation','shiftX','shiftY','magnification','metric']
     result = []
 
-    print('Setting default parameters')
-    shift_ifunc(shiftX0,ax_dir=0)
-    shift_ifunc(shiftY0,ax_dir=1)
-
     for rot in rotvec:
         print(f'Testing rotation: {rot}')
-        rotate_ifunc(rot_deg=rot+rot0)
+        set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0)
         chi = evaluate_metric(Nmodes)
         result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
         print(f'Obtained metric: {chi}')
-    rotate_ifunc(rot_deg=rot0)
 
     for shft in shiftvec:
         print(f'Testing x-shift: {shft}')
-        shift_ifunc(shft+shiftX0,ax_dir=0)
+        set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0)
         chi = evaluate_metric(Nmodes)
         result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
         print(f'Obtained metric: {chi}')
-    shift_ifunc(shiftX0,ax_dir=0)
 
     for shft in shiftvec:
         print(f'Testing y-shift: {shft}')
-        shift_ifunc(shft+shiftY0,ax_dir=1)
+        set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0)
         chi = evaluate_metric(Nmodes)
         result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'magnification': 1.00, 'metric': chi})
         print(f'Obtained metric: {chi}')
-    shift_ifunc(shiftY0,ax_dir=1)
 
     results_df = pd.DataFrame(result, columns=columns) 
-    results_df.to_csv(os.path.join(result_dir, 'misreg_csv', f'deltaRot{np.max(abs(rotvec)):1.2f}_deltaShift{np.max(abs(shiftvec)):1.2f}_metric.csv'), index=False)
+    results_df.to_csv(os.path.join(result_dir, 'misreg_csv', prefix+'deltaRot{np.max(abs(rotvec)):1.2f}_deltaShift{np.max(abs(shiftvec)):1.2f}_metric.csv'), index=False)
         
 
 

@@ -201,8 +201,9 @@ class PsfCoronagraph(PSF):
             normalize=True
         )
         
-        self.logger.info(f'Coronagraph peak suppression: '
-                f'{self.coronagraph_psf.value.max()/self.psf.value.max():.2e}')
+        if self.verbose:
+            self.logger.info(f'Coronagraph peak suppression: '
+                    f'{self.coronagraph_psf.value.max()/self.psf.value.max():.2e}')
 
     def post_trigger(self):
         super().post_trigger()

@@ -1,0 +1,21 @@
+main_override:
+  total_time: 1.0
+cred2_override:
+  dt: 0.00025
+bootstrap1_override:
+  scheduled_values: [[0.05], [0.1]]
+bootstrap2_override:
+  scheduled_values: [[0.1], [0.95]]
+filter1_override:
+  iir_filter_data_object: iirfilter_1300modes_exc1_pow1.5
+filter2_override:
+  iir_filter_data_object: iirfilter_150modes_exc2_pow1.0
+  delay: 1.0
+dm2_override:
+  inputs:
+    in_command: 'dcao_cmd2.out_value'
+data_store_override:
+  store_dir: /raid1/mmenessini/results/Cascading/dcao_gain_opt/dcao_f2_4kHz/int2gain0.95_iirfilter_1300modes_exc1_pow1.5_iirfilter_150modes_exc2_pow1.0
+  create_tn: false
+  inputs:
+    input_list: ['sr1-coro_psf1.out_sr', 'sr2-coro_psf2.out_sr']

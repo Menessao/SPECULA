@@ -5,7 +5,7 @@ from astropy.io import fits
 import pandas as pd
 
 # Range of gains to test
-gains = np.linspace(0.1, 1.0, 10) 
+gains = np.linspace(0.05, 1.0, 20) 
 base_config = "config/SensorFusion/ristretto_faint_dCAO.yml"
 
 freqs = np.array([1000,2000,4000])

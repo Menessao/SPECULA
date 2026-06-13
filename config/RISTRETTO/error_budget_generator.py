@@ -11,15 +11,15 @@ from specula.mmlib.compute_rec import compute_and_save_rec
 
 
 rMods = np.array([0,1,2,3])
-n_subaps = np.array([16,24,48])
-n_modes = np.array([150,300,1300])
-seeings = np.array([0.5,1.3,1.5]) #np.array([0.7,0.9,1.1])
+n_subaps = np.array([12,16,24,48]) #np.array([16,24,48])
+n_modes = np.array([50,150,300,600,1200]) #np.array([150,300,1300])
+seeings = np.array([0.5,0.7,0.9,1.1,1.3,1.5]) #np.array([0.7,0.9,1.1])
 max_pup_dist = 60
 min_pup_dist = 16
 
 npix = 120
 
-main_config = 'ristretto_main.yml'
+main_config = 'ristretto_unobs.yml' #'ristretto_main.yml'
 root_dir='/raid1/mmenessini/calibration/RISTRETTO'
 
 
@@ -70,8 +70,12 @@ os.makedirs(framespath,exist_ok=True)
 for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
-        for seeing in seeings:
-            for N in n_modes[:np.minimum(i+1,len(n_modes))]:
+        for seeing in seeings:           
+            if i > len(n_modes)+1:
+                mode_vec = n_modes[:i]
+            else:
+                mode_vec = n_modes.copy()
+            for N in mode_vec:
                 tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
                 rec_tag = tag+f'_{N:1.0f}modes_rec'   
                 rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
@@ -117,7 +121,11 @@ for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
         for seeing in seeings:
-            for N in n_modes[:np.minimum(i+1,len(n_modes))]:
+            if i > len(n_modes)+1:
+                mode_vec = n_modes[:i]
+            else:
+                mode_vec = n_modes.copy()
+            for N in mode_vec:
                 tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_s{seeing:1.2f}_{N:1.0f}modes'
                 simpc_tag = tag+'_simpc'
                 overrides = ("{"
@@ -140,7 +148,7 @@ for i,n_subap in enumerate(n_subaps):
                             "}")
                 write_yaml_overrides(input_string=overrides)
                 try:
-                    os.system(f"specula {main_config} calib_simpc.yml temp_overrides.yml")
+                    os.system(f"specula {main_config} calib_perf_simpc.yml temp_overrides.yml")
                     # simpc = fits.getdata(os.path.join(root_dir,'im',simpc_tag+'.fits'))
                     # og = np.diag(simpc.T @ im)/im_norm
                     # cog = np.sqrt(np.diag(simpc.T @ simpc)/im_norm - og**2)

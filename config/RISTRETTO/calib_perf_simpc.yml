@@ -5,9 +5,9 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       1821                         # Number of DM actuators
-  amp:          10  
-  ntiles:       40
-  # constant_amp: true
+  amp:          40  
+  ncycles:       40
+  repeat_full_sequence: true
   outputs:   ['output']
 
 # Interaction matrix calibrator
@@ -18,15 +18,6 @@ pyr_im_calibrator:
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
-    in_commands: 'pushpull.output'        # Push-pull commands
-
-zwfs_im_calibrator:
-  class:     'ImCalibrator'
-  nmodes:    1821                         # Number of modes to calibrate
-  im_tag:    'z1.5wfs_1821modes_c0.9_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
-  inputs:
-    in_slopes:   'zwfs_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
 
 # Override main simulation parameters
@@ -55,23 +46,15 @@ atmo_random:
   outputs:              ['out_source_ngs_ef']
 
 # Modal decomposition of atmospheric phase
-modal_analysis_random:
+modal_analysis:
   class: 'ModalAnalysis'
   ifunc_inv_object: 'bmc2k_vlt_kl_inv'
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
 
-scale_random:
-  class:  'BaseOperation'
-  # constant_mul: 0.90                    # 90% correction level
-  constant_mul_data: 'correction_vector_1300modes_c0.9' 
-  inputs:
-    in_value1: 'modal_analysis_random.out_modes'
-  outputs: ['out_value']
-
 # DM applying partial correction
-dm_random:
+dm_perfect:
   class: 'DM'
   simul_params_ref:  'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
@@ -79,14 +62,14 @@ dm_random:
   nmodes:            1300             # Number of controlled modes
   height:            0.0                # Ground-conjugated DM
   inputs:
-    in_command: 'scale_random.out_value'
+    in_command: 'modal_analysis.out_modes'
   outputs: ['out_layer']
 
 atmo_pc:
   class: 'ElectricFieldCombinator'
   inputs:
     in_ef1: 'atmo_random.out_source_ngs_ef'    # Turbulence
-    in_ef2: 'dm_random.out_layer'              # Partial correction
+    in_ef2: 'dm_perfect.out_layer'              # Partial correction
   outputs: ['out_ef']
 
 ef_mode:
@@ -110,10 +93,6 @@ pyr_override:
   inputs: 
     in_ef: 'ef_mode.out_ef'
 
-zwfs_override:
-  spot_radius_lambda: 0.75                     # Spot RADIUS in λ/D units
-  inputs: 
-    in_ef: 'ef_mode.out_ef'
 
 # Disable noise for clean measurements
 cred1_override:
@@ -121,11 +100,7 @@ cred1_override:
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
-ocam2_override:
-  photon_noise:   false                   # No photon noise
-  readout_noise:  false                   # No read noise
-  excess_noise:   false                   # No excess noise
 
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', #'source_science',
-        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop', 'prop','pyr_modalrec', 'zwfs_modalrec'] #, 'bootstrap', 'concat_wfs_modes'
+        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop', 'prop','pyr_modalrec',] #, 'bootstrap', 'concat_wfs_modes'

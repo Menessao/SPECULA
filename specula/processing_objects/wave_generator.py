@@ -14,6 +14,8 @@ class WaveGenerator(BaseGenerator):
                  offset: List[float] = [0.0],
                  constant: List[float] = [0.0],
                  slope: List[float] = [0.0],
+                 mode_numbers = None,
+                 vsize = None,
                  output_size: int = None,
                  target_device_idx: int = None,
                  precision: int = None):

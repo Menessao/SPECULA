@@ -50,7 +50,7 @@ for freq1 in freqs1:
                     srvec = fits.getdata(os.path.join(store_dir,'sr2.fits'))
                 sr = np.mean(srvec[init:])                 
                 print(f'SR={sr:1.4f} for CAO: INT1 gain={gain1:1.1f}, f1={freq1:1.0f}Hz, f2={freq2/1000:1.0f}kHz')  
-                results.append({'freq1': freq1, 'gain1': gain1, 'gain2': 'CLOSE', 'sr': sr, 'r': r_val})
+                results.append({'freq1': freq1, 'freq2': freq2, 'gain1': gain1, 'gain2': 'CLOSE', 'sr': sr, 'r': r_val})
                 columns = ['freq1','freq2', 'sr', 'gain1', 'gain2','r']
 
 results_df = pd.DataFrame(results, columns=columns) 
