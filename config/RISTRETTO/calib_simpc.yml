@@ -4,7 +4,7 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       1821                         # Number of DM actuators
+  nmodes:       1400                         # Number of DM actuators
   amp:          10  
   ntiles:       40
   # constant_amp: true
@@ -13,26 +13,17 @@ pushpull:
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    1821                         # Number of modes to calibrate
+  nmodes:    1400                         # Number of modes to calibrate
   im_tag:    'pyr0.5_1821modes_c0.9_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
 
-zwfs_im_calibrator:
-  class:     'ImCalibrator'
-  nmodes:    1821                         # Number of modes to calibrate
-  im_tag:    'z1.5wfs_1821modes_c0.9_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
-  inputs:
-    in_slopes:   'zwfs_slopes.out_slopes'      # WFS slopes input
-    in_commands: 'pushpull.output'        # Push-pull commands
-
 # Override main simulation parameters
 main_override:
   time_step: 0.0005
-  total_time: 72.44                 # 1821 modes × 2 (push+pull) × 0.0005s x 40 cycles
+  total_time: 56.00                 # 1400 modes × 2 (push+pull) × 0.0005s x 40 cycles
 
 ################################## ATMO RESIDUAL #####################################
 seeing_random:
@@ -48,7 +39,7 @@ atmo_random:
   simul_params_ref:     'main'
   L0:                   25               # [m] Outer scale
   source_dict_ref:      ['source_ngs']
-  update_interval:      3642                 # Update after IM calibration
+  update_interval:      2800                 # Update after IM calibration
   inputs:
     seeing:             'seeing_random.output'
     pupilstop:          'pupilstop'
@@ -64,7 +55,6 @@ modal_analysis_random:
 
 scale_random:
   class:  'BaseOperation'
-  # constant_mul: 0.90                    # 90% correction level
   constant_mul_data: 'correction_vector_1300modes_c0.9' 
   inputs:
     in_value1: 'modal_analysis_random.out_modes'
@@ -101,17 +91,12 @@ ef_mode:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 1821                            # Use all modes for calibration
+  nmodes: 1400                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr_override:
   mod_amp: 0.5
-  inputs: 
-    in_ef: 'ef_mode.out_ef'
-
-zwfs_override:
-  spot_radius_lambda: 0.75                     # Spot RADIUS in λ/D units
   inputs: 
     in_ef: 'ef_mode.out_ef'
 
@@ -121,11 +106,6 @@ cred1_override:
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
-ocam2_override:
-  photon_noise:   false                   # No photon noise
-  readout_noise:  false                   # No read noise
-  excess_noise:   false                   # No excess noise
-
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', #'source_science',
-        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop', 'prop','pyr_modalrec', 'zwfs_modalrec'] #, 'bootstrap', 'concat_wfs_modes'
+        'dm_mode_res','filter','psf', 'coro_psf', 'ef_prop', 'prop','pyr_modalrec',] #, 'bootstrap', 'concat_wfs_modes'

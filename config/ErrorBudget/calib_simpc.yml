@@ -69,7 +69,7 @@ dm_random:
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
-    in_command: 'scale_random.out_value'
+    in_command: 'scale_random.out_value' # 'modal_analysis_random.out_modes'
   outputs: ['out_layer']
 
 atmo_pc:

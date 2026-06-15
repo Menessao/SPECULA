@@ -19,7 +19,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_40x40_lbt_optsynim'            # Output IM filename
+  im_tag:    'pyr3.0_40x40_lbt_synim'            # Output IM filename
   overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -36,7 +36,7 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'asm_v30dx_197pixels'
+  tag:               'asm_v30dx_197pixels_optshift'
 
 # Atmospheric propagation
 prop:

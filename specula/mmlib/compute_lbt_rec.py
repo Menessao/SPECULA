@@ -13,7 +13,7 @@ pup_hdu = fits.open(filepath)
 pup_ids = pup_hdu[1].data
 fimg = np.zeros(npix**2)
 
-def generate_rec(im,Nmodes:int,argos:bool,iir_path:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/data/iir_rows.fits'):
+def generate_rec(im,Nmodes:int,argos:bool): #,iir_path:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/data/iir_rows.fits'
     aux = np.zeros_like(im)
     IM = np.zeros_like(im)
     # Adjust slopes
@@ -29,11 +29,11 @@ def generate_rec(im,Nmodes:int,argos:bool,iir_path:str='/raid1/mmenessini/calibr
         f2d = fimg.reshape([npix,npix])
         img = f2d[:60,:]
         IM[pupids,i] = img.flatten()[half_mask.flatten()]
-    iir_rows = fits.getdata(iir_path)
-    pad_iir_rows = np.pad(iir_rows,pad_width=((600-Nmodes,0),(0,0)),mode='constant',constant_values=0.0)
     IMinv = np.linalg.pinv(IM[:2512,:Nmodes])
-    IMinv = np.pad(IMinv,pad_width=((0,0),(0,2848-2512)),mode='constant',constant_values=0.0)
-    Rec = np.vstack([IMinv,pad_iir_rows])
+    Rec = np.pad(IMinv,pad_width=((672-Nmodes,0),(0,2848-2512)),mode='constant',constant_values=0.0)
+    # Add IIR rows
+    Rec[661,:] = IMinv[0,:].copy()    
+    Rec[668,:] = IMinv[1,:].copy()
     Rec = Rec.astype('>f4')
     if argos:
         Rec /= 2
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     impath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/im'
     recpath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/rec'
     tag = 'pyr3.0_s1.0_synim' #'pyr3.0_40x40_shift_im' #'
-    Nmodes = np.array([100]) #np.array([100,200,300,400,500])
+    Nmodes = np.array([100,200,300,400,500,600])
     print(tag)
     IntMat = fits.getdata(op.join(impath,tag+'.fits'))
     for N in Nmodes:
