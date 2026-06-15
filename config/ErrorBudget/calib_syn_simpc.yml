@@ -23,7 +23,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    600                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_s1.0_synim_pcinf'            # Output IM filename
+  im_tag:    'pyr3.0_s1.0_synim_pcperf'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -71,12 +71,12 @@ modal_analysis_random:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
 
-scale_random:
-  class:  'BaseOperation'
-  constant_mul_data: 'corr_vec_20260609_192600' 
-  inputs:
-    in_value1: 'modal_analysis_random.out_modes'
-  outputs: ['out_value']
+# scale_random:
+#   class:  'BaseOperation'
+#   constant_mul_data: 'corr_vec_20260609_192600' 
+#   inputs:
+#     in_value1: 'modal_analysis_random.out_modes'
+#   outputs: ['out_value']
 
 # DM applying partial correction
 dm_random:
@@ -86,7 +86,7 @@ dm_random:
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
-    in_command: 'scale_random.out_value' # 'modal_analysis_random.out_modes'
+    in_command:  'modal_analysis_random.out_modes' #'scale_random.out_value' #
   outputs: ['out_layer']
 
 atmo_pc:
