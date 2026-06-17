@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        4.000                 # [s] 1 second simulation
+  total_time:        5.000                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -140,7 +140,7 @@ cred2:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.00025               # [s] Integration time (2000 fps)
+  dt:                0.0005               # [s] Integration time (2000 fps)
   bandw:             200                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -177,12 +177,11 @@ pyr0_modalrec:
 
 filter2:
   class:             'Integrator'
-  simul_params_ref:  'main'
-  delay:             1.0                     # 1 frame delay (realistic)
-  int_gain:          [1.0]
+  delay:             0.5                     # 1 frame delay (realistic)
+  int_gain:          [0.2]
   n_modes:           [150]                 # Number of modes to control
   inputs:
-    delta_comm:      'scaled_modes.out_value' #'pyr0_modalrec.out_modes' #
+    delta_comm:      'pyr0_modalrec.out_modes' #'scaled_modes.out_value' #
   outputs:           ['out_comm']
   # class:                'IirFilter'
   # simul_params_ref:     'main'
@@ -193,26 +192,26 @@ filter2:
   #   gain_mod: 'bootstrap.output'
   # outputs:  ['out_comm']
 
-omgi:
-  class: 'CloseGainOptimizer'
-  nmodes: 150
-  p: 0.3
-  r: -0.2
-  dt: 3                # Time-shift (\Delta t) in frames
-  q_plus: 0.01        # Tracking gain increase factor
-  q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
-  initial_gain: 0.4
-  inputs:
-    in_modes:  'pyr0_modalrec.out_modes'
-  outputs: ['out_gains']
+# omgi:
+#   class: 'CloseGainOptimizer'
+#   nmodes: 150
+#   p: 0.3
+#   r: -0.2
+#   dt: 2                # Time-shift (\Delta t) in frames
+#   q_plus: 0.01        # Tracking gain increase factor
+#   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+#   initial_gain: 0.4
+#   inputs:
+#     in_modes:  'pyr0_modalrec.out_modes'
+#   outputs: ['out_gains']
 
-scaled_modes:
-  class: 'BaseOperation'
-  mul: true
-  inputs:
-    in_value1: 'pyr0_modalrec.out_modes'
-    in_value2: 'omgi.out_gains'
-  outputs: ['out_value']
+# scaled_modes:
+#   class: 'BaseOperation'
+#   mul: true
+#   inputs:
+#     in_value1: 'pyr0_modalrec.out_modes'
+#     in_value2: 'omgi.out_gains'
+#   outputs: ['out_value']
 
 dm2:
   class:             'DM'
@@ -233,7 +232,6 @@ dm2:
 
 filter1:
   class:             'Integrator'
-  simul_params_ref:  'main'
   delay:             0.25                    # 1 frame delay (realistic)
   int_gain:          [0.5,0.2]
   n_modes:           [1000,300]                 # Number of modes to control

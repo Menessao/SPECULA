@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        4.000                 # [s] 1 second simulation
+  total_time:        5.000                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -140,7 +140,7 @@ cred2:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.00025               # [s] Integration time (2000 fps)
+  dt:                0.0005               # [s] Integration time (2000 fps)
   bandw:             200                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -171,13 +171,13 @@ pyr0_modalrec:
 ############################ Control ################################
 bootstrap2:
   class:              'ScheduleGenerator'
-  scheduled_values:   [[0.2],[0.1]] # Nrows x Ncols, times x gains
+  scheduled_values:   [[0.1],[0.15]] # Nrows x Ncols, times x gains
   modes_per_group:    [150] # Ncols
   scheduled_times:    [0.01] # Nrows-1
 
 filter2:
   class:                'IirFilter'
-  delay:                1 # Total temporal delay in time steps is this value +1
+  delay:                0.5 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.0' #'cascading_iirfilter_300modes'
   inputs:
     delta_comm: 'pyr0_modalrec.out_modes'

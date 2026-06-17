@@ -2,18 +2,19 @@
 from astropy.io import fits
 import numpy as np
 import os.path as op
+import datetime
 
 
 pyr_masks = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupmask_shift.fits').astype(bool)
 pupids = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/pup_ids.fits')
 filepath=f'/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupdata.fits'
-rec_hdr = fits.getheader('/raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits')
 npix = 120
 pup_hdu = fits.open(filepath)
 pup_ids = pup_hdu[1].data
 fimg = np.zeros(npix**2)
 
-def generate_rec(im,Nmodes:int,argos:bool): #,iir_path:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/data/iir_rows.fits'
+def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0): #,iir_path:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/data/iir_rows.fits'
+    rec_hdr = fits.getheader('/raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits').copy()
     aux = np.zeros_like(im)
     IM = np.zeros_like(im)
     # Adjust slopes
@@ -37,21 +38,32 @@ def generate_rec(im,Nmodes:int,argos:bool): #,iir_path:str='/raid1/mmenessini/ca
     Rec = Rec.astype('>f4')
     if argos:
         Rec /= 2
-    return Rec,IM
+    # Modify header
+    rec_hdr['BINNING'] = 1
+    rec_hdr['IM_MODES'] = Nmodes
+    rec_hdr['M2C'] = 'KL_v30'
+    rec_hdr['ORIG_REC'] = 'synth_rec'
+    rec_hdr['C_DIST_F'] = 'synth_pp'
+    rec_hdr['M_DIST_F'] = 'synth_pp'
+    rec_hdr['DATE'] = datetime.datetime.now().strftime("%Y-%m-%d")
+    rec_hdr['tt.LAMBDA_D'] = rMod
+    return Rec,IM,rec_hdr
 
 
 if __name__ == "__main__":
     impath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/im'
     recpath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/rec'
-    tag = 'pyr3.0_40x40_lbt_optsynim' # 'pyr3.0_s1.0_synim_pcinf' # 'pyr3.0_s1.0_synim_pcperf' # 
-    Nmodes = np.array([100,200,300,400,500,550,600])
+    rMod = 0.0
+    seeing = 1.0
+    tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcinf' #f'pyr{rMod:1.1f}_40x40_lbt_optsynim' #f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcperf' #   
+    Nmodes = np.array([100,500,550,600]) #200,300,400,
     print(tag)
     IntMat = fits.getdata(op.join(impath,tag+'.fits'))
-    imtag = 'pyr3.0_s1.0_dl_synth'
-    rectag = 'pyr3.0_s1.0_dl_synth'
+    # imtag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_dl_synth'
+    rectag = f'Rec_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}' #synthDL'#synthPCperf_s{seeing:1.1f}' # 
     for N in Nmodes:
-        Rec,IM = generate_rec(IntMat,N,argos=True)
-        fits.writeto(op.join(recpath,imtag+f'_lbtlike_im.fits'),IM,header=rec_hdr,overwrite=True)
-        print(f'Saved im as {imtag}_lbtlike_im.fits')
-        fits.writeto(op.join(recpath,rectag+f'_{N}modes_rec.fits'),Rec,header=rec_hdr,overwrite=True)
-        print(f'Saved rec as {rectag}_{N}modes_rec.fits')
+        Rec,_,rec_hdr = generate_rec(IntMat,N,argos=True,rMod=rMod)
+        # fits.writeto(op.join(recpath,imtag+f'_lbtlike_im.fits'),IM,overwrite=True)
+        # print(f'Saved im as {imtag}_lbtlike_im.fits')
+        fits.writeto(op.join(recpath,rectag+f'_{N}modes.fits'),Rec,header=rec_hdr,overwrite=True)
+        print(f'Saved rec as {rectag}_{N}modes.fits')

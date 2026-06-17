@@ -23,19 +23,19 @@ main_config = 'ristretto_unobs.yml' #'ristretto_main.yml'
 root_dir='/raid1/mmenessini/calibration/RISTRETTOunobs'
 
 
-# 1. Calibrate pupdata vs n_subaps
-for n_subap in n_subaps:
-    pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
-    overrides = ("{"
-                f"pyr.pup_diam: {n_subap:.1f}, "
-                f"pyr.pup_dist: {pup_dist:.1f}, "
-                f"pyr_pupdata.output_tag: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                "}")
-    write_yaml_overrides(input_string=overrides)
-    try:
-        os.system(f"specula {main_config} calib_pupdata.yml temp_overrides.yml")
-    except FileExistsError: #OSError:
-        pass
+# # 1. Calibrate pupdata vs n_subaps
+# for n_subap in n_subaps:
+#     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
+#     overrides = ("{"
+#                 f"pyr.pup_diam: {n_subap:.1f}, "
+#                 f"pyr.pup_dist: {pup_dist:.1f}, "
+#                 f"pyr_pupdata.output_tag: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
+#                 "}")
+#     write_yaml_overrides(input_string=overrides)
+#     try:
+#         os.system(f"specula {main_config} calib_pupdata.yml temp_overrides.yml")
+#     except FileExistsError: #OSError:
+#         pass
 
 
 # 2. Calibrate IM vs n_subaps, rMods
@@ -56,7 +56,11 @@ for i,n_subap in enumerate(n_subaps):
             os.system(f"specula {main_config} calib_im.yml temp_overrides.yml")
         except FileExistsError: #OSError:
             pass
-        for N in n_modes[:i+1]:
+        if i < len(n_subaps)-1:
+            mode_vec = n_modes[:i+1]
+        else:
+            mode_vec = n_modes.copy()
+        for N in mode_vec:
             rec_tag = pyr_tag+f'_{N:1.0f}modes'
             compute_and_save_rec(root_dir, im_tag=pyr_im_tag, rec_tag=rec_tag, Nmodes=N, overwrite=True)
 
@@ -70,20 +74,17 @@ os.makedirs(framespath,exist_ok=True)
 for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
-        for seeing in seeings:           
-            if i > len(n_modes)+1:
-                mode_vec = n_modes[:i]
-            else:
-                mode_vec = n_modes.copy()
-            for N in mode_vec:
+        for seeing in seeings:     
+            for N in n_modes: #mode_vec:
                 tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
-                rec_tag = tag+f'_{N:1.0f}modes_rec'   
+                Nrec = N if i == len(n_subaps)-1 else np.min((N,n_modes[i]))
+                rec_tag = tag+f'_{Nrec:1.0f}modes_rec'   
                 rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
                 overrides = ("{"
                             f"pyr.pup_diam: {n_subap:.1f}, "
                             f"pyr.pup_dist: {pup_dist:.1f}, "
                             f"pyr.mod_amp: {rMod:.1f}, "
-                            f"pyr_modalrec.recmat_object: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_{N:1.0f}modes_rec', "
+                            f"pyr_modalrec.recmat_object: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_{Nrec:1.0f}modes_rec', "
                             f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
                             f"seeing_random.constant: {seeing:1.2f}, "
                             f"dm_perfect.nmodes: {N:1.0f}, "
@@ -121,8 +122,8 @@ for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
         for seeing in seeings:
-            if i > len(n_modes)+1:
-                mode_vec = n_modes[:i]
+            if i < len(n_subaps)-1:
+                mode_vec = n_modes[:i+1]
             else:
                 mode_vec = n_modes.copy()
             for N in mode_vec:
@@ -166,8 +167,8 @@ for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
         for seeing in seeings:
-            if i > len(n_modes)+1:
-                mode_vec = n_modes[:i]
+            if i < len(n_subaps)-1:
+                mode_vec = n_modes[:i+1]
             else:
                 mode_vec = n_modes.copy()
             for N in mode_vec:
@@ -210,8 +211,8 @@ for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
         for seeing in seeings:
-            if i > len(n_modes)+1:
-                mode_vec = n_modes[:i]
+            if i < len(n_subaps)-1:
+                mode_vec = n_modes[i+1]
             else:
                 mode_vec = n_modes.copy()
             for N in mode_vec:

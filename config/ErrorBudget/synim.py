@@ -28,8 +28,9 @@ pyr_masks = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_
 filepath=f'/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupdata.fits'
 
 
+
 def change_magnification(image, factor):
-    scaled = zoom(image, factor, order=3)
+    scaled = zoom(image, factor, order=5)
     old_h, old_w = image.shape
     new_h, new_w = scaled.shape
     if factor >= 1.0:
@@ -101,12 +102,6 @@ def zoom_ifunc(ifunc,mag:float):
         img[lbtpup.astype(bool)] = ifunc[:,j]
         rot_img = change_magnification(img,factor=mag)
         ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
-    # fname='/raid1/mmenessini/calibration/SOUL/KLv30dx/pupilstop/asm_v30dx_197pixels_optshift.fits'
-    # pupilstop = Pupilstop.restore(fname)
-    # new_mask = change_magnification(cpuArray(pupilstop.A.copy()),factor=mag)
-    # # pupilstop.magnification = mag
-    # pupilstop.A = specula.xp.array(new_mask)
-    # pupilstop.save(fname)
     return ifunc_new
 
 def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None):
@@ -152,7 +147,7 @@ fimg = np.zeros(npix**2)
 
 def evaluate_error(Nmodes:int):
     refim = im[:Nslopes,:Nmodes]
-    aux = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbt_optsynim.fits')[:,:Nmodes]
+    aux = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbt_synim.fits')[:,:Nmodes]
     synim = aux.copy()
     synim[:Nslopes//2,:] = aux[Nslopes//2:,:]
     synim[Nslopes//2:,:] = aux[:Nslopes//2,:]*-1
@@ -170,27 +165,31 @@ def evaluate_error(Nmodes:int):
         err[j] = np.sqrt(np.sum(delta[half_mask]**2))
     return err
 
-def evaluate_metric(Nmodes):
+def evaluate_metric(Nmodes,return_err:bool=False):
     main_config = 'syn_soul_im.yml'
     os.system(f"specula {main_config}")
     err = evaluate_error(Nmodes)
     metric = np.sqrt(np.sum(err**2))
-    return metric
+    if return_err:
+        return metric,err
+    else:
+        return metric
 
 
 if __name__ == "__main__":
 
-    Nmodes = 500
+    Nmodes = 100
 
     rot0 = 55.38
     shiftX0 = -0.627
     shiftY0 = -0.848
 
-    prefix = 'it3_'
+    prefix = 'it0_'
+    overwrite = False
 
-    rotvec = np.linspace(-1.25,1.25,21)
-    shiftvec = np.linspace(-0.25,0.25,21)
-    mags = np.linspace(-0.02,0.02,11)+1.0
+    rotvec = np.linspace(-2.0,2.0,21)
+    shiftvec = np.linspace(-0.5,0.5,21)
+    mags = np.linspace(-0.05,0.05,11)+1.0
 
     result_dir = '/raid1/mmenessini/results/SOUL/KLv30dx/'
 
@@ -198,41 +197,46 @@ if __name__ == "__main__":
     result = []
 
     # save_ifunc_pars(ifunc,rot=rot0,shiftX=shiftX0,shiftY=shiftY0)
+    # print(ifunc.shape,lbtpup.shape)
 
-    # for rot in rotvec:
-    #     print(f'Testing rotation: {rot}')
-    #     set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0)
-    #     chi = evaluate_metric(Nmodes)
-    #     result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
-    #     print(f'Obtained metric: {chi}')
+    err_rot = np.zeros([len(rotvec),Nmodes])
+    for j,rot in enumerate(rotvec):
+        print(f'Testing rotation: {rot}')
+        set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0)
+        chi,err_rot[j] = evaluate_metric(Nmodes,return_err=True)
+        result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
+        print(f'Obtained metric: {chi}')
+    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_{Nmodes}modes_metrics.fits'),err_rot,overwrite=overwrite)
 
-    # for shft in shiftvec:
-    #     print(f'Testing x-shift: {shft}')
-    #     set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0)
-    #     chi = evaluate_metric(Nmodes)
-    #     result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
-    #     print(f'Obtained metric: {chi}')
+    err_shft = np.zeros([len(shiftvec),Nmodes])
+    for j,shft in enumerate(shiftvec):
+        print(f'Testing x-shift: {shft}')
+        set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0)
+        chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
+        result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
+        print(f'Obtained metric: {chi}')
+    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftX{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
-    # for shft in shiftvec:
-    #     print(f'Testing y-shift: {shft}')
-    #     set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0)
-    #     chi = evaluate_metric(Nmodes)
-    #     result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'magnification': 1.00, 'metric': chi})
-    #     print(f'Obtained metric: {chi}')
+    for j,shft in enumerate(shiftvec):
+        print(f'Testing y-shift: {shft}')
+        set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0)
+        chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
+        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'magnification': 1.00, 'metric': chi})
+        print(f'Obtained metric: {chi}')
+    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftY{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
-
-    # results_df = pd.DataFrame(result, columns=columns) 
-    # results_df.to_csv(os.path.join(result_dir, 'misreg_csv', prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_deltaShift{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_metric.csv'), index=False)
-
-    for mag in mags:
+    err_mag = np.zeros([len(mags),Nmodes])
+    for j,mag in enumerate(mags):
         print(f'Testing magnification: {mag*1e+2:1.1f}%')
         set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,mag=mag)
-        chi = evaluate_metric(Nmodes)
+        chi,err_mag[j] = evaluate_metric(Nmodes,return_err=True)
         result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'magnification': mag, 'metric': chi})
         print(f'Obtained metric: {chi}')
+    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
 
     results_df = pd.DataFrame(result, columns=columns) 
-    results_df.to_csv(os.path.join(result_dir, 'misreg_csv', prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_deltaShift{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_deltaMag{(np.max(mags)-np.min(mags))/len(mags):1.2f}_metric.csv'), index=False)
+    results_df.to_csv(os.path.join(result_dir, 'misreg_csv', 
+                                   prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_deltaShift{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_metric.csv'), index=False)
         
 
 
