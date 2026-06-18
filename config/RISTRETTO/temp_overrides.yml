@@ -5,13 +5,17 @@ atmo_random_override:
 pyr_override:
   pup_diam: 48.0
   pup_dist: 60.0
-  mod_amp: 0.0
+  mod_amp: 3.0
 pushpull_override:
   nmodes: 1200
   ncycles: 50
 pyr_im_calibrator_override:
   nmodes: 1200
-  im_tag: 'pyr0.0_48x48_s0.70_1200modes_simpc'
+  im_tag: 'pyr3.0_48x48_s1.50_1200modes_1Nm_simpc'
+modal_analysis_random_override:
+  nmodes: 1200
+scale_random_override:
+  constant_mul_data: 'cvec_s1.50_1200modes_1Nm'
 dm_perfect_override:
   nmodes: 1200
 dm_override:
@@ -19,4 +23,4 @@ dm_override:
 pyr_slopes_override:
   pupdata_object: 'pyr_pupdata_48x48'
 seeing_random_override:
-  constant: 0.7
+  constant: 1.5

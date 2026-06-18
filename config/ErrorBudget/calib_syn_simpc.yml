@@ -24,7 +24,7 @@ pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    600                         # Number of modes to calibrate
   im_tag:    'pyr2.0_s1.0_synim_pcinf'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -142,7 +142,7 @@ pyr_slopes:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_v30dx_ifunc_optshift'      # Our computed influence functions
+  ifunc_object:      'asm_v30dx_ifunc_shift'      # Our computed influence functions
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
   sign:              1
