@@ -11,11 +11,11 @@ pushpull_override:
   ncycles: 50
 pyr_im_calibrator_override:
   nmodes: 300
-  im_tag: 'pyr2.0_48x48_s1.10_300modes_1Nm_simpc'
+  im_tag: 'pyr2.0_48x48_s1.50_300modes_10Nm_simpc'
 modal_analysis_random_override:
   nmodes: 300
 scale_random_override:
-  constant_mul_data: 'cvec_s1.10_300modes_1Nm'
+  constant_mul_data: 'cvec_s1.50_300modes_10Nm'
 dm_random_override:
   nmodes: 300
 dm_override:
@@ -23,4 +23,4 @@ dm_override:
 pyr_slopes_override:
   pupdata_object: 'pyr_pupdata_48x48'
 seeing_random_override:
-  constant: 1.1
+  constant: 1.5

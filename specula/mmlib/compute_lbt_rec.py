@@ -53,20 +53,20 @@ def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0): #,iir_path:str='/raid1/mmen
 if __name__ == "__main__":
     impath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/im'
     recpath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/rec'
-    rMod = 2.0
+    rMod = 0.0
     seeing = 1.0
     types = ['DL','PCinf','PCperf']
     Nmodes = np.array([100,500,550,600]) #200,300,400,
     for tp in types:
         if tp == 'DL':
             tag = f'pyr{rMod:1.1f}_40x40_lbt_optsynim'
-            rectag = f'Rec_mod{rMod:1.1f}_synthDL' 
+            rectag = f'Rec_mod{rMod:1.1f}_synthDL' #_LowAmp
         elif tp == 'PCinf':
-            tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcinf'
-            rectag = f'Rec_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}'
+            tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcinf' #_LowAmp
+            rectag = f'Rec_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}' #_LowAmp
         elif tp == 'PCperf':
-            tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcperf' #   
-            rectag = f'Rec_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}' # 
+            tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcperf' #_LowAmp
+            rectag = f'Rec_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}' #_LowAmp
         print(tag)
         IntMat = fits.getdata(op.join(impath,tag+'.fits'))
         for N in Nmodes:
