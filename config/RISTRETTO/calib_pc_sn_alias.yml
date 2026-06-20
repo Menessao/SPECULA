@@ -2,7 +2,7 @@
 pyr_sn:
   class: 'SnCalibrator'
   output_tag: 'scratch_pyr1.0_48x48_pc1300modes_sn'           # Output filename
-  overwrite: false
+  overwrite: true
   inputs:
     in_slopes: 'pyr_slopes.out_slopes'
 
