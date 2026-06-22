@@ -5,8 +5,8 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/EKARUS/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       120                   # Must match influence function computation
   pixel_pitch:       0.015167              # [m] Pitch of the pupil phase array (1.82m/120pix)
-  total_time:        4.0                   # [s] Total simulation running time
-  time_step:         0.001                 # [s] Simulation time step
+  total_time:        5.0                   # [s] Total simulation running time
+  time_step:         0.0005                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
@@ -81,7 +81,7 @@ pyr:
   pup_diam:          40.                     # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   fov:               4.0                     # Requested field-of-view [arcsec]
-  mod_amp:           7.0                     # Modulation radius (in lambda/D units)
+  mod_amp:           5.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    750                     # [nm] Pyramid wavelength
   inputs:
@@ -91,7 +91,7 @@ ocam:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.001              # [s] Integration time (2000 fps)
+  dt:                0.0005              # [s] Integration time (2000 fps)
   bandw:             300                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -106,7 +106,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'           
-  sn_object:              'pyr7.0_40x40_sn' # Commented during calibration
+  sn_object:              'pyr5.0_40x40_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
     in_pixels:        'ocam.out_pixels'
@@ -114,19 +114,19 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr7.0_40x40_400modes_rec'        
+  recmat_object:     'pyr5.0_40x40_dm468_400modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-filter: 
-  class:             'Integrator'
-  delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [0.7,0.6,0.2] #[1.0] #
-  # ff:                [1.0,0.99,0.95]
-  n_modes:           [2,120,278] #[400] #
-  inputs:
-      delta_comm:  'pyr_modalrec.out_modes' #'scaled_modes.out_value' #
+# filter: 
+#   class:             'Integrator'
+#   delay:             1.5                     # Temporal delay in time steps
+#   int_gain:          [0.7,0.6,0.2] #[1.0] #
+#   # ff:                [1.0,0.99,0.95]
+#   n_modes:           [2,120,278] #[400] #
+#   inputs:
+#       delta_comm:  'pyr_modalrec.out_modes' #'scaled_modes.out_value' #
 
 # omgi:
 #    class: 'CloseGainOptimizer'
@@ -158,14 +158,14 @@ filter:
 #   n_modes:          [400]
 
 
-# filter:
-#   class:                'IirFilter'
-#   delay:                1.5 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'ekarusiir_400modes_exc0_pow1.5' #'temporal_filter'
-#   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes'  
-#     gain_mod: 'gain_ramp.output' #gain_optimizer.optimized_gain' #
-#   outputs:  ['out_comm']
+filter:
+  class:                'IirFilter'
+  delay:                1.0 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'ekarusiir_400modes_exc0_pow1.5' #'temporal_filter'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes'  
+    gain_mod: 'gain_ramp.output' #gain_optimizer.optimized_gain' #
+  outputs:  ['out_comm']
 
 # gain_optimizer:
 #   class:             'GainOptimizer'
@@ -197,7 +197,7 @@ filter:
 
 gain_ramp:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.6,0.4,0.2,0.1], [1.2,1.1,0.85,0.7]] #[1.15,0.975,0.775]]
+  scheduled_values: [[0.6,0.4,0.2,0.1], [1.0,0.9,0.85,0.7]] #[1.15,0.975,0.775]]
   modes_per_group: [150,150,50,50]
   scheduled_times: [0.01]
 
@@ -210,8 +210,8 @@ gain_ramp:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'DM468_ifunc' #'dm468_ifunc'      # Influence functions
-  m2c_object:        'DM468_m2c' #'dm468_m2c'        # Modal-to-command matrix
+  ifunc_object:      'dm468_ifunc'   #'DM468_ifunc' #    # Influence functions
+  m2c_object:        'dm468_m2c'     #'DM468_m2c' #   # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
   nmodes:            400
   inputs:
@@ -227,7 +227,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        0.0                  # Start PSF integration after 500ms
-  # verbose: true
+  verbose: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
@@ -267,7 +267,8 @@ data_store:
     input_list: [
                   # 'atmo_phase-ef_prop.out_ef',
                   'sr-psf.out_sr',
-                  # 'coro_psf-coro_psf.out_std_coronagraph_psf_profile',
+                  'coro_psf-coro_psf.out_std_coronagraph_psf_profile',
+                  'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
                   # 'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
                   'atmo_res-atmo_modes.out_modes',

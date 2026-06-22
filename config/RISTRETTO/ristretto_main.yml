@@ -31,7 +31,7 @@ source_ngs:
   class:             'Source'
   polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
   height:            .inf                  # Infinite height (star)
-  magnitude:         10.0                   # R-band magnitude (bright NGS)
+  magnitude:         7.0                   # R-band magnitude (bright NGS)
   wavelengthInNm:    750                   # [nm] R-band for WFS
 
 # Telescope pupil geometry

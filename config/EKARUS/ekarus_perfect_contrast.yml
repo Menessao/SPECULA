@@ -6,7 +6,7 @@ main:
   pixel_pupil:       120                   # Must match influence function computation
   pixel_pitch:       0.015167              # [m] Pitch of the pupil phase array (1.82m/120pix)
   total_time:        4.0                   # [s] Total simulation running time
-  time_step:         0.001                 # [s] Simulation time step
+  time_step:         0.0005                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
@@ -33,12 +33,12 @@ source_ngs:
   polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
   height:            .inf                  # Infinite height (star)
   magnitude:         1.0                   # R-band magnitude (bright NGS)
-  wavelengthInNm:    1450                   # [nm] R-band for WFS
+  wavelengthInNm:    750                   # [nm] R-band for WFS
 
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'copernico_pupil_120pixels' 
+  tag:               'DM468_120pixels' 
 
 # Multi-layer atmospheric model
 atmo:
@@ -113,7 +113,7 @@ perfect_dm2:
 coro_psf:
   class:             'PsfCoronagraph'
   simul_params_ref:  'main'
-  wavelengthInNm:    1450                 # [nm] visible
+  wavelengthInNm:    750                 # [nm] visible
   nd:                4                   # 4x padding for PSF
   start_time:        0.0                 # Start PSF integration after 500ms
   verbose: false

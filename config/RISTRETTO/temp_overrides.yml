@@ -1,24 +1,22 @@
+main_override:
+  total_time: 30.0
+atmo_random_override:
+  update_interval: 1200
 pyr_override:
-  pup_diam: 12.0
-  pup_dist: 16.0
+  pup_diam: 36.0
+  pup_dist: 45.0
   mod_amp: 0.0
-pyr_modalrec_override:
-  recmat_object: 'pyr0.0_12x12_50modes_rec'
-pyr_slopes_override:
-  pupdata_object: 'pyr_pupdata_12x12'
-seeing_random_override:
-  constant: 1.5
+pushpull_override:
+  nmodes: 600
+  ncycles: 50
+pyr_im_calibrator_override:
+  nmodes: 600
+  im_tag: 'pyr0.0_36x36_s0.70_600modes_simpc'
 dm_perfect_override:
-  nmodes: 1200
-modal_analysis_override:
-  nmodes: 1200
-source_ngs_override:
-  magnitude: 5.0
-pyr_sn_override:
-  output_tag: 'pyr0.0_12x12_s1.50_1200modes_sn'
-data_store_override:
-  store_dir: /raid1/mmenessini/calibration/RISTRETTOunobs/scratch_aliasing
-  create_tn: false
-  inputs:
-    input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes',
-      'slopes-pyr_slopes.out_slopes']
+  nmodes: 600
+dm_override:
+  nmodes: 600
+pyr_slopes_override:
+  pupdata_object: 'pyr_pupdata_36x36'
+seeing_random_override:
+  constant: 0.7

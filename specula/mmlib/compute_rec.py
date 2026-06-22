@@ -87,11 +87,11 @@ if __name__ == "__main__":
     # rec_tag = f'pyr3.0_20x20_{Nmodes}modes'
     # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    Nmodes = 220
-    rMod = 0
+    Nmodes = 400
+    rMod = 5
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
-    im_tag = f'pyr{rMod:1.1f}_20x20_im'
-    rec_tag = f'pyr{rMod:1.1f}_20x20_{Nmodes}modes'
+    im_tag = f'pyr{rMod:1.1f}_40x40_dm468_im'
+    rec_tag = f'pyr{rMod:1.1f}_40x40_dm468_{Nmodes}modes'
     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
     # for rMod in np.array([3.0,4.0,5.0,6.0]):
     #     im_tag = f'pyr{rMod:1.1f}_10x10_im'
