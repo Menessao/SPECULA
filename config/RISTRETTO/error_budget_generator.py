@@ -166,7 +166,7 @@ for i,n_subap in enumerate(n_subaps):
 # 5. Calibrate SIMPC vs n_subap, rMods, seeing for different correction levels
 ncycles = 50
 fs = 2000
-res = 2
+res = 1
 for i,n_subap in enumerate(n_subaps):
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
     for rMod in rMods:
