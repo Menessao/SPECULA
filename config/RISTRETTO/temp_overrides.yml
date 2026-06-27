@@ -1,26 +1,9 @@
 main_override:
-  total_time: 30.0
+  total_time: 2.5
 atmo_random_override:
-  update_interval: 1200
+  update_interval: 100
 pyr_override:
   pup_diam: 36.0
   pup_dist: 45.0
-  mod_amp: 2.0
-pushpull_override:
-  nmodes: 600
-  ncycles: 50
-pyr_im_calibrator_override:
-  nmodes: 600
-  im_tag: 'pyr2.0_36x36_s0.50_600modes_1Nm_simpc'
-modal_analysis_random_override:
-  nmodes: 600
-scale_random_override:
-  constant_mul_data: 'cvec_s0.50_600modes_1Nm'
-dm_random_override:
-  nmodes: 600
-dm_override:
-  nmodes: 600
-pyr_slopes_override:
-  pupdata_object: 'pyr_pupdata_36x36'
-seeing_random_override:
-  constant: 0.5
+  mod_amp: 3.0
+pushpull_override

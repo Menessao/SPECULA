@@ -62,28 +62,53 @@ def define_error_budget(rMod, seeing, VoverD, RON, delayInS, n_subaps, idx_modes
     fname = op.join(root_dir,'eb_csv','standard_INT_'+save_str)
     fname_ms = op.join(root_dir,'eb_csv',f'multistage{Nho_multistage}_INT_'+save_str)
 
-    results = []
-    results_ms = []
     columns =  ['Nsubaps', 'freqInHz', 'photPerMs', 'modeId', 'gain', 'filter', 'residual']
 
+    if op.exists(fname):
+        results_df = pd.read_csv(fname)
+    else:
+        results_df = pd.DataFrame(columns=columns)
+
+    if op.exists(fname_ms):
+        results_ms_df = pd.read_csv(fname_ms)
+    else:
+        results_ms_df = pd.DataFrame(columns=columns)
+
+    results = results_df.to_dict(orient='records')
+    results_ms = results_ms_df.to_dict(orient='records')
+    existing_keys = {
+        (float(row['Nsubaps']), float(row['freqInHz']), float(row['photPerMs']), float(row['modeId']), row['filter'])
+        for row in results
+    }
+    existing_keys_ms = {
+        (float(row['Nsubaps']), float(row['freqInHz']), float(row['photPerMs']), float(row['modeId']), row['filter'])
+        for row in results_ms
+    }
+
     for l,idx in enumerate(idx_modes):
+        print(f'Working on mode {idx:1.0f}')
         for i,flux in enumerate(fluxes):
             for j,fs in enumerate(freqs):
                 Nphot = flux/fs
                 delay = delayInS*fs+1.0
                 for k,n_subap in enumerate(n_subaps):
                     Nm = nModesPerSubaps[k]
-                    # Standard AO
-                    cov,og,_,alias = get_rec_covariance(rMod=rMod,n_subap=n_subap,N=Nm,seeing=seeing,Nphot=Nphot,RON=RON,res=res_str,Nho_multistage=None)
-                    res,g = optimize_int_controller(f_s=fs,turb_power=vkp[idx],noise_power=cov[idx]+alias[idx]**2,show=False,
-                                        n=radial_order(idx),cutoff=0.3*(radial_order(idx)+1)*VoverD,delay_steps=delay,og=og[idx])
-                    results.append({'Nsubaps': n_subap,'freqInHz': fs,'photPerMs': flux/1e+3, 'modeId': idx, 'filter': 'INT', 'gain': g, 'residual': res})
-
-                    # Multistage AO
-                    cov,og,_,alias = get_rec_covariance(rMod=rMod,n_subap=n_subap,N=Nm,seeing=seeing,Nphot=Nphot,RON=RON,res=res_str,Nho_multistage=Nho_multistage)
-                    res,g_ms = optimize_int_controller(f_s=fs,turb_power=vkp[idx],noise_power=cov[idx]+alias[idx]**2,show=False,
-                                        n=radial_order(idx),cutoff=0.3*(radial_order(idx)+1)*VoverD,delay_steps=delay,og=og[idx])
-                    results_ms.append({'Nsubaps': n_subap,'freqInHz': fs,'photPerMs': flux/1e+3, 'modeId': idx, 'filter': 'INT', 'gain': g_ms, 'residual': res})
+                    if idx < Nm:
+                        key = (float(n_subap), float(fs), float(flux/1e+3), float(idx), 'INT')
+                        # Standard AO
+                        if key not in existing_keys:
+                            cov,og,_,alias = get_rec_covariance(rMod=rMod,n_subap=n_subap,N=Nm,seeing=seeing,Nphot=Nphot,RON=RON,res=res_str,Nho_multistage=None)
+                            res,g = optimize_int_controller(f_s=fs,turb_power=vkp[idx],noise_power=cov[idx]+alias[idx]**2,show=False,
+                                                n=radial_order(idx),cutoff=0.3*(radial_order(idx)+1)*VoverD,delay_steps=delay,og=og[idx])
+                            results.append({'Nsubaps': n_subap,'freqInHz': fs,'photPerMs': flux/1e+3, 'modeId': idx, 'filter': 'INT', 'gain': g, 'residual': res})
+                            existing_keys.add(key)
+                        # Multistage AO
+                        if key not in existing_keys_ms:
+                            cov,og,_,alias = get_rec_covariance(rMod=rMod,n_subap=n_subap,N=Nm,seeing=seeing,Nphot=Nphot,RON=RON,res=res_str,Nho_multistage=Nho_multistage)
+                            res,g_ms = optimize_int_controller(f_s=fs,turb_power=vkp[idx],noise_power=cov[idx]+alias[idx]**2,show=False,
+                                                n=radial_order(idx),cutoff=0.3*(radial_order(idx)+1)*VoverD,delay_steps=delay,og=og[idx])
+                            results_ms.append({'Nsubaps': n_subap,'freqInHz': fs,'photPerMs': flux/1e+3, 'modeId': idx, 'filter': 'INT', 'gain': g_ms, 'residual': res})
+                            existing_keys_ms.add(key)
                     
     results_df = pd.DataFrame(results, columns=columns) 
     results_df.to_csv(fname, index=False)

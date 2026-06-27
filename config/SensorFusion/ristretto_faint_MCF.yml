@@ -133,7 +133,7 @@ cred2:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.0005               # [s] Integration time (4000 fps)
+  dt:                0.00025               # [s] Integration time (4000 fps)
   bandw:             150                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -171,11 +171,10 @@ lo_mod_pyr_modes:
 
 lo_filter:
   class:                    'MultirateComplementaryFilter'
-  simul_params_ref:         'main'
   delay:                    1             # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_150modes_exc2_pow2.0'  #'iir_opt_1300modes' #
   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
-  N_list:                   [2]           # fast/slow frequency ratio (list)
+  N_list:                   [4]           # fast/slow frequency ratio (list)
   g_track:                  0.7           # gain
   inputs:
     in_ys: 'lo_mod_pyr_modes.out_value'
@@ -197,8 +196,7 @@ gain_ramp_ho:
 
 ho_filter:
   class:                'IirFilter'
-  simul_params_ref:     'main'
-  delay:                1 # Total temporal delay in time steps is this value +1
+  delay:                0.5 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_1300modes'
   inputs:
     delta_comm: 'pyr_modalrec.out_modes'
