@@ -1,26 +1,26 @@
 main_override:
-  total_time: 7.5
+  total_time: 30.0
 atmo_random_override:
-  update_interval: 300
+  update_interval: 1200
 pyr_override:
   pup_diam: 36.0
   pup_dist: 45.0
-  mod_amp: 1.0
+  mod_amp: 2.0
 pushpull_override:
-  nmodes: 150
+  nmodes: 600
   ncycles: 50
 pyr_im_calibrator_override:
-  nmodes: 150
-  im_tag: 'pyr1.0_36x36_s0.90_150modes_1Nm_simpc'
+  nmodes: 600
+  im_tag: 'pyr2.0_36x36_s0.50_600modes_1Nm_simpc'
 modal_analysis_random_override:
-  nmodes: 150
+  nmodes: 600
 scale_random_override:
-  constant_mul_data: 'cvec_s0.90_150modes_1Nm'
+  constant_mul_data: 'cvec_s0.50_600modes_1Nm'
 dm_random_override:
-  nmodes: 150
+  nmodes: 600
 dm_override:
-  nmodes: 150
+  nmodes: 600
 pyr_slopes_override:
   pupdata_object: 'pyr_pupdata_36x36'
 seeing_random_override:
-  constant: 0.9
+  constant: 0.5
