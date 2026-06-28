@@ -8,6 +8,7 @@ from specula.mmlib.utils import get_pupil_mask, compute_modal_variance_von_karma
 from specula.mmlib.filter_optimizers import optimize_int_controller, optimize_higher_order_scao
 
 root_dir = '/raid1/mmenessini/calibration/RISTRETTOunobs'
+result_dir = '/raid1/mmenessini/results/RISTRETTOunobs'
 
 kl_inv = fits.getdata(op.join(root_dir,'ifunc','bmc2k_vlt_kl_inv.fits'))
 modal_basis = np.linalg.pinv(kl_inv)
@@ -58,9 +59,9 @@ def define_error_budget(rMod, seeing, VoverD, RON, delayInS, n_subaps, idx_modes
     # resfs_ms = np.zeros([len(fluxes),len(freqs),len(n_subaps),len(idx_modes)])
     vkp = get_vkp_for_seeing(seeing)
 
-    save_str = f'rMod{rMod:1.1f}_s{seeing:1.2f}_RON{RON:1.1f}_delay{delayInS*1e+6}us_VoverD{VoverD}Hz_CL{res_str}.csv'
-    fname = op.join(root_dir,'eb_csv','standard_INT_'+save_str)
-    fname_ms = op.join(root_dir,'eb_csv',f'multistage{Nho_multistage}_INT_'+save_str)
+    save_str = f'rMod{rMod:1.1f}_s{seeing:1.2f}_RON{RON:1.1f}_delay{delayInS*1e+6}us_VoverD{VoverD:1.2f}Hz_CL{res_str}.csv'
+    fname = op.join(result_dir,'eb_csv','standard_INT_'+save_str)
+    fname_ms = op.join(result_dir,'eb_csv',f'multistage{Nho_multistage}_INT_'+save_str)
 
     columns =  ['Nsubaps', 'freqInHz', 'photPerMs', 'modeId', 'gain', 'filter', 'residual']
 
@@ -85,8 +86,9 @@ def define_error_budget(rMod, seeing, VoverD, RON, delayInS, n_subaps, idx_modes
         for row in results_ms
     }
 
+    print(f'Testing seeing {seeing:1.2f}", rMod = {rMod:1.1f}')
     for l,idx in enumerate(idx_modes):
-        print(f'Working on mode {idx:1.0f}')
+        print(f'\rMode {l:1.0f}/{len(idx_modes)}',flush=True,end='\r')
         for i,flux in enumerate(fluxes):
             for j,fs in enumerate(freqs):
                 Nphot = flux/fs
@@ -110,11 +112,11 @@ def define_error_budget(rMod, seeing, VoverD, RON, delayInS, n_subaps, idx_modes
                             results_ms.append({'Nsubaps': n_subap,'freqInHz': fs,'photPerMs': flux/1e+3, 'modeId': idx, 'filter': 'INT', 'gain': g_ms, 'residual': res})
                             existing_keys_ms.add(key)
                     
-    results_df = pd.DataFrame(results, columns=columns) 
-    results_df.to_csv(fname, index=False)
+        results_df = pd.DataFrame(results, columns=columns) 
+        results_df.to_csv(fname, index=False)
 
-    results_ms_df = pd.DataFrame(results_ms, columns=columns) 
-    results_ms_df.to_csv(fname_ms, index=False)
+        results_ms_df = pd.DataFrame(results_ms, columns=columns) 
+        results_ms_df.to_csv(fname_ms, index=False)
 
                 
 
@@ -138,6 +140,5 @@ if __name__ == '__main__':
 
     for seeing in seeings:
         for rMod in rMods:
-            print(f'Testing seeing {seeing:1.2f}", rMod = {rMod:1.1f}')
             define_error_budget(rMod, seeing, VoverD=VoverD, RON=RON, delayInS=delayInS, n_subaps=n_subaps, nModesPerSubaps=nModesPerSubaps, idx_modes=idx_modes, Nho_multistage=Nmodes, res_str=res_str)
 
