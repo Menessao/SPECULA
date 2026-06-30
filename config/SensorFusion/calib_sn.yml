@@ -1,9 +1,9 @@
 pyr_sn:
   class: 'SnCalibrator'
-  output_tag: 'pyr0.5_48x48_sn'           # Output filename
+  output_tag: 'pyr0.5_16x16_l900_sn'           # Output filename
   overwrite: false
   inputs:
-    in_slopes: 'pyr_slopes.out_slopes'
+    in_slopes: 'pyr0_slopes.out_slopes'
 
 # zwfs_sn:
 #   class: 'SnCalibrator'
@@ -12,8 +12,15 @@ pyr_sn:
 #   inputs:
 #     in_slopes: 'zwfs_slopes.out_slopes'
 
-pyr_override:
-  # mod_amp: 0.5
+# pyr_override:
+#   # mod_amp: 0.5
+#   # pup_diam: 16.0
+#   # pup_dist: 20.0
+#   inputs:
+#     in_ef: 'prop.out_source_ngs_ef'
+
+pyr0_override:
+  mod_amp: 0.5
   # pup_diam: 16.0
   # pup_dist: 20.0
   inputs:
@@ -28,10 +35,10 @@ pyr_override:
 #     in_ef: 'prop.out_source_ngs_ef'
 
 main_override:
-  total_time: 0.0005
+  total_time: 0.00025
 
 # Disable noise for clean measurements
-cred1_override:
+cred2_override:
   photon_noise:   false                   # No photon noise
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
@@ -48,8 +55,9 @@ cred1_override:
 #     input_list: [ 'z2.0wfs_frame-ocam2.out_pixels','pyr0.5_frame-cred1.out_pixels',]
 
 # Remove closed-loop components (not needed for slope null)
-remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'bootstrap', 'concat_wfs_modes', #'source_science',
-        'dm','dm_mode_res','filter','psf','ef_prop','pyr_modalrec','coro_psf', ] # 'zwfs_modalrec',
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes','pyr','cred1','pyr_slopes', #'bootstrap', 'concat_wfs_modes', #'source_science',
+        'dm','dm_mode_res','lo_filter','ef_prop','pyr_modalrec','coro_psf', 'lo_mod_pyr_modes',
+        'ho_filter','ho_comm','concat_comms'] # 'zwfs_modalrec',
 # remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'dm1','dm2',
 #          'filter1',  'filter2','ef_prop','first_stage_prop', 'dm1_mode_res', 'dm2_mode_res', 
 #          'cred2', 'pyr0', 'pyr0_slopes', 'coro_psf',

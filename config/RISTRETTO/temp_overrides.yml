@@ -1,9 +1,0 @@
-main_override:
-  total_time: 2.5
-atmo_random_override:
-  update_interval: 100
-pyr_override:
-  pup_diam: 36.0
-  pup_dist: 45.0
-  mod_amp: 3.0
-pushpull_override

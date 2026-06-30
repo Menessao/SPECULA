@@ -12,7 +12,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    300                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_300modes_24x24_im'            # Output IM filename
+  im_tag:    'pyr0.5_300modes_16x16_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr0_slopes.out_slopes'      # WFS slopes input
@@ -21,7 +21,7 @@ pyr_im_calibrator:
 # Override main simulation parameters
 main_override:
   time_step: 0.00025
-  total_time: 0.150                 # 463 modes × 2 (push+pull) × 0.00025s
+  total_time: 0.15                 # 300 modes × 2 (push+pull) × 0.0005s
 
 # Disable atmosphere for clean calibration
 prop_override:
@@ -37,16 +37,17 @@ dm_override:
     in_command: 'pushpull.output'         # Connect to push-pull generator
 
 pyr0_override:
+  mod_amp: 0.5
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
 
 # Disable noise for clean measurements
-cred10_override:
+cred2_override:
   photon_noise:   false                   # No photon noise
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes', 'pyr', 'cred1', 'pyr_slopes', 'ho_comm', #'source_science',
-        'dm_mode_res','ho_filter','lo_filter','psf', 'coro_psf','concat_comms', 'ef_prop','pyr_modalrec', 'pyr0_modalrec', 'lo_mod_pyr_modes'] #, 'bootstrap', 'concat_wfs_modes'
+        'dm_mode_res','ho_filter','lo_filter', 'coro_psf','concat_comms', 'ef_prop','pyr_modalrec', 'pyr0_modalrec', 'lo_mod_pyr_modes'] #, 'bootstrap', 'concat_wfs_modes'

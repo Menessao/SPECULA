@@ -185,7 +185,6 @@ filter2:
   #   delta_comm:      'pyr0_modalrec.out_modes' #
   # outputs:           ['out_comm']
   class:                'IirFilter'
-  simul_params_ref:     'main'
   delay:                0.5 # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_150modes_exc0_pow2.0' #'cascading_iirfilter_300modes'
   inputs:
