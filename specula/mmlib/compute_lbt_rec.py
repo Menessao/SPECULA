@@ -13,7 +13,7 @@ pup_hdu = fits.open(filepath)
 pup_ids = pup_hdu[1].data
 fimg = np.zeros(npix**2)
 
-def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0): #,iir_path:str='/raid1/mmenessini/calibration/SOUL/KLv30dx/data/iir_rows.fits'
+def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0): 
     rec_hdr = fits.getheader('/raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits').copy()
     aux = np.zeros_like(im)
     IM = np.zeros_like(im)

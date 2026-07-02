@@ -1,8 +1,24 @@
+main_override:
+  total_time: 1.4
 pyr_override:
-  pup_diam: 12.0
-  pup_dist: 16.0
-  mod_amp: 0.0
+  pup_diam: 40.0
+  pup_dist: 60.0
+  mod_amp: 7.0
+seeing_override:
+  constant: 1.75
 pyr_slopes_override:
-  pupdata_object: 'pyr_pupdata_12x12'
-pyr_im_calibrator_override:
-  im_tag: 'pyr0.0_12x12_im'
+  sn_object: pyr7.0_40x40_sn
+pyr_modalrec_override:
+  recmat_object: 'pyr7.0_40x40_400modes_rec'
+source_ngs_override:
+  magnitude: 5.0
+ocam_override:
+  dt: 0.001
+filter_override:
+  int_gain: [1.0]
+  delay: 1.0
+data_store_override:
+  store_dir: /raid1/mmenessini/results/EKARUS/gain_opt/sao_pyr7_1000Hz_delay1.0ms_s1.8_mag5/gain_1.0
+  create_tn: false
+  inputs:
+    input_list: ['sr-psf.out_sr']

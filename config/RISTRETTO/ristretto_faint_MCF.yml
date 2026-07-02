@@ -172,7 +172,7 @@ lo_mod_pyr_modes:
 # lo_filter:
 #   class:                    'MultirateComplementaryFilter'
 #   delay:                    1             # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_150modes_exc2_pow2.0'  #'iir_opt_1300modes' #
+#   iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.5'  #'iir_opt_1300modes' #
 #   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
 #   N_list:                   [2]           # fast/slow frequency ratio (list)
 #   g_track:                  0.7           # gain
@@ -229,7 +229,7 @@ gain_ramp_lo:
 
 gain_ramp_ho:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.2],[0.4]]
+  scheduled_values: [[0.1],[0.2]]
   scheduled_times: [0.001]
   modes_per_group: [1300]
 
@@ -257,15 +257,6 @@ concat_comms:
     in_value2:  'ho_comm.out_value'
   outputs: ['out_value']
 
-# filter:
-#   class:                'IirFilter'
-#   delay:                1.0 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_1300modes_exc0_pow1.5' 
-#   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes' #'lo_mod_pyr_modes.out_value'
-#     gain_mod: 'gain_ramp_ho.output'
-#   outputs:  ['out_comm']
-
 dm:
   class:             'DM'
   simul_params_ref:  'main'
@@ -274,7 +265,7 @@ dm:
   nmodes:            1300             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'concat_comms.out_value' #'filter.out_comm' #
+    in_command:      'ho_filter.out_comm' #'concat_comms.out_value'
   outputs:           ['out_layer']
 
 

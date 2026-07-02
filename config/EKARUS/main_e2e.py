@@ -14,21 +14,21 @@ nSubaps = np.array([10,20,30,40])
 max_pup_dist = 60
 min_pup_dist = 14
 
-seeings = np.array([1.5,2.0,2.5])
-freqs = np.array([200,1000]) #np.array([200,250,500,1000]) #250,
+seeings = np.array([1.5,1.75,2.0])
+freqs = np.array([1000]) #np.array([200,250,500,1000]) #250,
 starMags = np.array([1,3,5,7,9,11,13])
 gvec = np.arange(1,11)*0.1
-gvec = np.arange(2,14)*0.1
+# gvec = np.arange(2,14)*0.1
 
-rMods = np.array([7]) #np.array([3,4,5,6,7,8])
+rMods = np.array([6,7,8]) #np.array([3,4,5,6,7,8])
 
 init = 400
 nSubap = 40
 nModes = 400
 pup_dist = np.max((min_pup_dist,max_pup_dist/max(nSubaps)*nSubap))
-delay = 1.5e-3
+delay = 1.0e-3
 savetn = False
-filtertype = 'IIR'
+filtertype = 'INT'
 
 # r_vals = np.array([0.0,-0.05,-0.1,-0.15,-0.2])
 
@@ -41,7 +41,7 @@ for rMod in rMods:
     results = []
 
     def optimize_gain(rMod,freq,starMag,seeing):
-        dir = f'sao_pyr{rMod:1.0f}_{freq:1.0f}Hz_s{seeing:1.1f}_mag{starMag:1.0f}'
+        dir = f'sao_pyr{rMod:1.0f}_{freq:1.0f}Hz_delay{delay*1e+3:1.1f}ms_s{seeing:1.1f}_mag{starMag:1.0f}'
         dirname = '/raid1/mmenessini/results/EKARUS/gain_opt/' + dir
         best_gain = 0.0
         best_sr = 0.0

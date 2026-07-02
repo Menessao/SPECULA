@@ -10,8 +10,8 @@ from scipy.ndimage import rotate
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
 
-from specula.data_objects.pupilstop import Pupilstop
-from specula import cpuArray
+# from specula.data_objects.pupilstop import Pupilstop
+# from specula import cpuArray
 
 from scipy.ndimage import zoom
 
