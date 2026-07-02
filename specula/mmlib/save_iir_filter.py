@@ -138,27 +138,28 @@ def plot_iir_tfs(filter_data_complex:IirFilterData, fs:float, n_filters:int, del
 
 if __name__ == "__main__":
 
-    root_dir = '/raid1/mmenessini/calibration/XAO'
+    # root_dir = '/raid1/mmenessini/calibration/XAO'
     # root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
-    root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    # root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    root_dir = '/raid1/mmenessini/calibration/RISTRETTO'
     path = os.path.join(root_dir,'filter')
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 400
+    n_filters = 150
     excluded_filters = 0
-    power = 0.5 # used 0.8 for EKARUS
+    power = 1.5 # used 0.8 for EKARUS
     # make_tiled = False
 
-    # file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
-    # num_array,den_array=guidos_standard_iir(n_filters=n_filters,
-    #                                         excluded_filters=excluded_filters,
-    #                                         power_exponent=power)
-    
-    file_name = os.path.join(path,f'ekarusiir_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')    
-    num_array,den_array=mattes_iir(n_filters=n_filters,
+    file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')
+    num_array,den_array=guidos_standard_iir(n_filters=n_filters,
                                             excluded_filters=excluded_filters,
                                             power_exponent=power)
+    
+    # file_name = os.path.join(path,f'ekarusiir_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')    
+    # num_array,den_array=mattes_iir(n_filters=n_filters,
+    #                                         excluded_filters=excluded_filters,
+    #                                         power_exponent=power)
     
     ordn = int(len(num_array)/n_filters)
     ordd = int(len(den_array)/n_filters)
