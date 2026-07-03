@@ -171,33 +171,33 @@ lo_mod_pyr_modes:
 
 # lo_filter:
 #   class:                    'MultirateComplementaryFilter'
-#   delay:                    1             # Total temporal delay in time steps is this value +1
+#   delay:                    0.25             # Total temporal delay in time steps is this value +1
 #   iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.5'  #'iir_opt_1300modes' #
 #   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
 #   N_list:                   [2]           # fast/slow frequency ratio (list)
-#   g_track:                  0.7           # gain
+#   g_track:                  0.9           # gain
 #   inputs:
 #     in_ys: 'lo_mod_pyr_modes.out_value'
 #     in_yf: 'pyr_modalrec2.out_modes'
 #     gain_mod:  'gain_ramp_lo.output'
 #   outputs:  ['out_comm']
 
-lo_filter:
-  class:                'IirFilter'
-  delay:                1.0 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.5' #'iirfilter_1300modes_exc0_pow1.5' #'iirfilter_1300modes'
-  inputs:
-    delta_comm: 'lo_mod_pyr_modes.out_value'
-    gain_mod: 'gain_ramp_lo.output'
-  outputs:  ['out_comm']
-
-# lo_filter: 
-#   class:             'Integrator'
-#   delay:             1.0                     # Temporal delay in time steps
-#   int_gain:          [0.4]
-#   n_modes:           [150]
+# lo_filter:
+#   class:                'IirFilter'
+#   delay:                1.0 # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.5' #'iirfilter_1300modes_exc0_pow1.5' #'iirfilter_1300modes'
 #   inputs:
-#       delta_comm:  'pyr_modalrec2.out_modes' #'scaled_modes.out_value' #
+#     delta_comm: 'pyr_modalrec2.out_modes' #'lo_mod_pyr_modes.out_value'
+#     gain_mod: 'gain_ramp_lo.output'
+#   outputs:  ['out_comm']
+
+lo_filter: 
+  class:             'Integrator'
+  delay:             1.0                     # Temporal delay in time steps
+  int_gain:          [0.6]
+  n_modes:           [150]
+  inputs:
+      delta_comm:  'pyr_modalrec2.out_modes' #'scaled_modes.out_value' #
 
 # omgi:
 #    class: 'CloseGainOptimizer'
@@ -229,7 +229,7 @@ gain_ramp_lo:
 
 gain_ramp_ho:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.1],[0.2]]
+  scheduled_values: [[0.0],[0.0]]
   scheduled_times: [0.001]
   modes_per_group: [1300]
 
@@ -262,10 +262,10 @@ dm:
   simul_params_ref:  'main'
   ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
   m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
-  nmodes:            1300             # Number of controlled modes
+  nmodes:            150             # Number of controlled modes
   height:            0                # Ground-conjugated DM
   inputs:
-    in_command:      'ho_filter.out_comm' #'concat_comms.out_value'
+    in_command:      'lo_filter.out_comm' #'concat_comms.out_value' #'ho_filter.out_comm' #
   outputs:           ['out_layer']
 
 

@@ -32,6 +32,7 @@ def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0):
         IM[pupids,i] = img.flatten()[half_mask.flatten()]
     IMinv = np.linalg.pinv(IM[:2512,:Nmodes])
     Rec = np.pad(IMinv,pad_width=((0,672-Nmodes),(0,2848-2512)),mode='constant',constant_values=0.0)
+    # print(IM.shape,Rec.shape,Nmodes)
     # Add IIR rows
     Rec[661,:] = np.pad(IMinv[0,:],pad_width=(0,2848-2512),mode='constant',constant_values=0.0)   
     Rec[668,:] = np.pad(IMinv[1,:],pad_width=(0,2848-2512),mode='constant',constant_values=0.0)  
@@ -53,25 +54,29 @@ def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0):
 if __name__ == "__main__":
     impath = '/raid1/mmenessini/calibration/SOUL/KLv32sx/im'
     recpath = '/raid1/mmenessini/calibration/SOUL/KLv32sx/rec'
-    rMod = 0.0
+    rMod = 3.0
     seeing = 1.0
-    Nmodes = np.array([100,200,300,400,500,550,600]) #200,300,400,
+    Nmodes = np.array([100,200,300,400,500,550,600]) #])# #200,300,400,
     types = ['DL','PCinf','PCperf']
+    prefix = '_LBTIsx'
     for tp in types:
         if tp == 'DL':
-            tag = f'pyr{rMod:1.1f}_40x40_lbt_optsynim'
-            rectag = f'Rec_mod{rMod:1.1f}_synthDL' #_LowAmp
+            tag = f'pyr{rMod:1.1f}_40x40_lbt_optsynim' #_LowAmp
+            rectag = f'Rec{prefix}_mod{rMod:1.1f}_synthDL' #_LowAmp
+            imtag = f'Intmat{prefix}_mod{rMod:1.1f}_synthDL' #_LowAmp
         elif tp == 'PCinf':
             tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcinf' #_LowAmp
-            rectag = f'Rec_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}' #_LowAmp
+            rectag = f'Rec{prefix}_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}' #_LowAmp
+            imtag = f'Intmat{prefix}_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}' #_LowAmp
         elif tp == 'PCperf':
             tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcperf' #_LowAmp
-            rectag = f'Rec_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}' #_LowAmp
+            rectag = f'Rec{prefix}_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}' #_LowAmp
+            imtag = f'Intmat{prefix}_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}' #_LowAmp
         print(tag)
         IntMat = fits.getdata(op.join(impath,tag+'.fits'))
         for N in Nmodes:
-            Rec,_,rec_hdr = generate_rec(IntMat,N,argos=True,rMod=rMod)
-            # fits.writeto(op.join(recpath,imtag+f'_lbtlike_im.fits'),IM,overwrite=True)
-            # print(f'Saved im as {imtag}_lbtlike_im.fits')
+            Rec,IM,rec_hdr = generate_rec(IntMat,N,argos=True,rMod=rMod)
+            fits.writeto(op.join(recpath,imtag+f'_lbtlike_im.fits'),IM,overwrite=True)
+            print(f'Saved im as {imtag}_lbtlike_im.fits')
             fits.writeto(op.join(recpath,rectag+f'_{N}modes.fits'),Rec,header=rec_hdr,overwrite=True)
             print(f'Saved rec as {rectag}_{N}modes.fits')

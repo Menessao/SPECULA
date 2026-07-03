@@ -158,5 +158,5 @@ for rMod in rMods:
                     columns = ['seeing', 'freq', 'starMag', 'sr', 'gain', 'filter']
 
     results_df = pd.DataFrame(results, columns=columns) 
-    results_df.to_csv(os.path.join(result_dir, 'e2e_csv', f'rMod{rMod:1.0f}_IIR_{nSubap}x{nSubap}_{nModes}modes.csv'), index=False)
+    results_df.to_csv(os.path.join(result_dir, 'e2e_csv', f'rMod{rMod:1.0f}_{filtertype}_{freq:1.0f}Hz_delay{delay*1e+3:1.1f}ms_{nSubap}x{nSubap}_{nModes}modes.csv'), index=False)
 
