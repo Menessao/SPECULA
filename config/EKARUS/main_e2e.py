@@ -15,7 +15,7 @@ max_pup_dist = 60
 min_pup_dist = 14
 
 seeings = np.array([1.5,1.75,2.0])
-freqs = np.array([1000]) #np.array([200,250,500,1000]) #250,
+freqs = np.array([2000]) #np.array([200,250,500,1000]) #250,
 starMags = np.array([1,3,5,7,9,11,13])
 gvec = np.arange(1,11)*0.1
 # gvec = np.arange(2,14)*0.1
@@ -26,7 +26,7 @@ init = 400
 nSubap = 40
 nModes = 400
 pup_dist = np.max((min_pup_dist,max_pup_dist/max(nSubaps)*nSubap))
-delay = 1.0e-3
+delay = 0.5e-3
 savetn = False
 filtertype = 'INT'
 
