@@ -126,28 +126,28 @@ filter:
   # ff:                [1.0,0.99,0.95]
   n_modes:           [400] #[2,120,278] #
   inputs:
-      delta_comm:  'pyr_modalrec.out_modes' #'scaled_modes.out_value' #
+      delta_comm:  'scaled_modes.out_value' #'pyr_modalrec.out_modes' #
 
-# omgi:
-#    class: 'CloseGainOptimizer'
-#    nmodes: 400
-#    p: 0.2
-#    r: -0.3
-#    dt: 4                # Time-shift in frames: 2x(delay+1)-1
-#    q_plus: 0.01        # Tracking gain increase factor
-#    q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
-#    initial_gain: 0.5
-#    inputs:
-#      in_modes:  'pyr_modalrec.out_modes'
-#    outputs: ['out_gains']
+omgi:
+   class: 'CloseGainOptimizer'
+   nmodes: 400
+   p: 0.2
+   r: -0.2
+   dt: 4                # Time-shift in frames: 2x(delay+1)-1
+   q_plus: 0.01        # Tracking gain increase factor
+   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+   initial_gain: 0.4
+   inputs:
+     in_modes:  'pyr_modalrec.out_modes'
+   outputs: ['out_gains']
 
-# scaled_modes:
-#   class: 'BaseOperation'
-#   mul: true
-#   inputs:
-#     in_value1: 'pyr_modalrec.out_modes'
-#     in_value2: 'omgi.out_gains'
-#   outputs: ['out_value']
+scaled_modes:
+  class: 'BaseOperation'
+  mul: true
+  inputs:
+    in_value1: 'pyr_modalrec.out_modes'
+    in_value2: 'omgi.out_gains'
+  outputs: ['out_value']
 
 # temporal_filter:
 #   class:            'IirFilterData'

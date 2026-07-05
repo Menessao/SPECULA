@@ -16,9 +16,10 @@ min_pup_dist = 14
 
 seeings = np.array([1.5,1.75,2.0])
 freqs = np.array([2000]) #np.array([200,250,500,1000]) #250,
+# starMags = np.arange(10) #np.array([1,3,5,7,9,11,13])
 starMags = np.array([1,3,5,7,9,11,13])
-gvec = np.arange(1,11)*0.1
-# gvec = np.arange(2,14)*0.1
+# gvec = np.arange(1,11)*0.1
+gvec = np.arange(1,12)*0.1
 
 rMods = np.array([6,7,8]) #np.array([3,4,5,6,7,8])
 
@@ -28,7 +29,7 @@ nModes = 400
 pup_dist = np.max((min_pup_dist,max_pup_dist/max(nSubaps)*nSubap))
 delay = 0.5e-3
 savetn = False
-filtertype = 'INT'
+filtertype = 'CLOSE'
 
 # r_vals = np.array([0.0,-0.05,-0.1,-0.15,-0.2])
 
@@ -106,7 +107,39 @@ for rMod in rMods:
         for freq in freqs:
             for starMag in starMags:
                 # Step 1: optimize gain
-                gain_opt,sr_opt,sr_std_opt = optimize_gain(rMod=rMod,freq=freq,seeing=seeing,starMag=starMag)
+                if filtertype == 'CLOSE':
+                    init = int(1.5*freq)
+                    sr_opt = np.inf
+                    for r_val in np.array([0.0,-0.1,-0.2,-0.3]):
+                        overrides = ("{"
+                                f"main.total_time: 4.0, "
+                                f"omgi.dt: {2*(delay*freq+1)-1}, "
+                                f"omgi.r: {r_val:1.2f}, "
+                                f"pyr.pup_diam: {nSubap:.1f}, "
+                                f"pyr.pup_dist: {pup_dist:.1f}, "
+                                f"seeing.constant: {seeing:1.2f}, "
+                                f"pyr.mod_amp: {rMod:1.1f}, "
+                                f"pyr_slopes.sn_object: pyr{rMod:1.1f}_{nSubap:1.0f}x{nSubap:1.0f}_sn, "
+                                f"pyr_modalrec.recmat_object: 'pyr{rMod:1.1f}_{nSubap:1.0f}x{nSubap:1.0f}_{nModes:1.0f}modes_rec', "
+                                f"source_ngs.magnitude: {starMag:1.1f},"
+                                f"ocam.dt: {1/freq:1.5f}, "
+                                f"filter.delay: {delay*freq:1.2f}, "
+                                f"data_store.inputs.input_list: ['sr-psf.out_sr'], "
+                                "}")
+                        write_yaml_overrides(input_string=overrides)
+                        os.system(f"specula {main_config} temp_overrides.yml")
+                        dirs = [d for d in glob.glob(os.path.join(result_dir,"20*")) if os.path.isdir(d)]
+                        last_dir = sorted(dirs)[-1]
+                        srvec = fits.getdata(os.path.join(last_dir,'sr.fits'))
+                        tn = last_dir.split('/')[-1]
+                        sr = np.mean(srvec[init:])
+                        print(f'CLOSE r={r_val:1.2f}: SR={sr:1.4f}')
+                        if sr < sr_opt:
+                            sr_opt = sr
+                            sr_std_opt = np.std(srvec[init:])
+                            gain_opt = f'CLOSE-r{r_val:1.2f}'
+                else:
+                    gain_opt,sr_opt,sr_std_opt = optimize_gain(rMod=rMod,freq=freq,seeing=seeing,starMag=starMag)
 
                 # Step 2: run simulation
                 if savetn:     
