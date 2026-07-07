@@ -10,4 +10,4 @@ python-socketio
 requests
 pytest
 scikit-image
-cupy-cuda12x==13.3.0
+imageio-ffmpeg

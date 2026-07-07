@@ -10,16 +10,51 @@ class CloseGainOptimizer(BaseProcessingObj):
     
     Implements a self-regulating tracker for modal integrator based AO loops, updating
     modal gains in real-time based on the temporal auto-correlation of modal measurements.
+    Implements the correlation-locking approach: see Equations (3) and (4) in "CLOSE: a
+    self-regulating, best-performance tracker for modal integrator based AO loops",
+    Deo et al. (2019).
+    
+    Parameters
+    ----------
+    nmodes : int [1]
+        Number of modes to optimize. Defines the dimensionality of the gain vector
+        and the size of the modal measurement vector.
+    initial_gain : float [1], optional
+        Initial value for all modal gains. Default: 0.5
+    dt : float [1], optional
+        Time-shift (in frames) at which correlation is evaluated. 
+        Should be 2xdelay + 1, where delay is the pure delay of the control
+        (total delay = delay + 1 frame). Default is 3.0 (delay = 1.0).
+    p : float [1], optional
+        Low-pass filter coefficient for autocorrelation estimators (Equation 3).
+        Should be in range (0, 1]. Default: 0.3.
+    r : float [1], optional
+        Target correlation ratio setpoint. Defines the desired normalized autocorrelation
+        value at lag dt. Theoretical value should be 0.0. Default: -0.1
+    q_plus : float [1], optional
+        Tracking gain increase factor. Learning rate for positive correlation error
+        (when correlation is above setpoint). Controls how aggressively gains increase
+        during normal operation. Should be small (typically 1e-2 to 1e-1). Default: 1e-2
+    q_minus_ratio : float [1], optional
+        Ratio of q_minus to q_plus for aggressive correction. When correlation is below
+        setpoint (indicating ringing/overshoot), gain adjustment uses q_minus = q_plus * q_minus_ratio.
+        Typically > 1 for faster damping. Default: 5.0
+    target_device_idx : int [1], optional
+        Target device index for computation (e.g., GPU device number).
+        If None, uses CPU or default device. Default: None
+    precision : int [1], optional
+        Numerical precision for computations (e.g., 32 for float32, 64 for float64).
+        If None, uses default precision. Default: None
     """
 
     def __init__(self,
                  nmodes: int,
+                 dt: float = 3,     
+                 initial_gain: float = 0.5, 
                  p: float = 0.3,
-                 r: float = -0.1,
-                 dt: float = 3,                 # Time-shift in frames
+                 r: float = -0.1,          
                  q_plus: float = 1e-2,        # Tracking gain increase factor
                  q_minus_ratio: float = 5.0,  # Ratio of q- to q+ (for overshoots)
-                 initial_gain: float = 0.5,
                  target_device_idx: int = None,
                  precision: int = None):
 

@@ -52,7 +52,7 @@ omgi:
    nmodes: 1
    p: 0.2
    r: -0.1
-   dt: 3                # Time-shift in frames: 2x(delay+1)-1
+   dt: 3                # Time-shift in frames: 2xdelay + 1
    q_plus: 0.01        # Tracking gain increase factor
    q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
    initial_gain: 0.4
