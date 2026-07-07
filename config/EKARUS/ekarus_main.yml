@@ -114,40 +114,40 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr5.0_40x40_dm468_400modes_rec'        
+  recmat_object:     'pyr5.0_40x40_400modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
-filter: 
-  class:             'Integrator'
-  delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [1.0] #[0.7,0.6,0.2] #
-  # ff:                [1.0,0.99,0.95]
-  n_modes:           [400] #[2,120,278] #
-  inputs:
-      delta_comm:  'scaled_modes.out_value' #'pyr_modalrec.out_modes' #
+# filter: 
+#   class:             'Integrator'
+#   delay:             1.5                     # Temporal delay in time steps
+#   int_gain:          [1.0] #[0.7,0.6,0.2] #
+#   # ff:                [1.0,0.99,0.95]
+#   n_modes:           [400] #[2,120,278] #
+#   inputs:
+#       delta_comm:  'scaled_modes.out_value' #'pyr_modalrec.out_modes' #
 
-omgi:
-   class: 'CloseGainOptimizer'
-   nmodes: 400
-   p: 0.2
-   r: -0.2
-   dt: 4                # Time-shift in frames: 2x(delay+1)-1
-   q_plus: 0.01        # Tracking gain increase factor
-   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
-   initial_gain: 0.4
-   inputs:
-     in_modes:  'pyr_modalrec.out_modes'
-   outputs: ['out_gains']
+# omgi:
+#    class: 'CloseGainOptimizer'
+#    nmodes: 400
+#    p: 0.2
+#    r: -0.2
+#    dt: 4                # Time-shift in frames: 2x(delay+1)-1
+#    q_plus: 0.01        # Tracking gain increase factor
+#    q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+#    initial_gain: 0.4
+#    inputs:
+#      in_modes:  'pyr_modalrec.out_modes'
+#    outputs: ['out_gains']
 
-scaled_modes:
-  class: 'BaseOperation'
-  mul: true
-  inputs:
-    in_value1: 'pyr_modalrec.out_modes'
-    in_value2: 'omgi.out_gains'
-  outputs: ['out_value']
+# scaled_modes:
+#   class: 'BaseOperation'
+#   mul: true
+#   inputs:
+#     in_value1: 'pyr_modalrec.out_modes'
+#     in_value2: 'omgi.out_gains'
+#   outputs: ['out_value']
 
 # temporal_filter:
 #   class:            'IirFilterData'
@@ -158,14 +158,14 @@ scaled_modes:
 #   n_modes:          [400]
 
 
-# filter:
-#   class:                'IirFilter'
-#   delay:                1.0 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'ekarusiir_400modes_exc0_pow1.5' #'temporal_filter'
-#   inputs:
-#     delta_comm: 'pyr_modalrec.out_modes'  
-#     gain_mod: 'gain_ramp.output' #gain_optimizer.optimized_gain' #
-#   outputs:  ['out_comm']
+filter:
+  class:                'IirFilter'
+  delay:                1.0 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'ekarusiir_400modes_exc2_pow2.0' #'temporal_filter'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes'  
+    gain_mod: 'gain_ramp.output' #gain_optimizer.optimized_gain' #
+  outputs:  ['out_comm']
 
 # gain_optimizer:
 #   class:             'GainOptimizer'
@@ -201,11 +201,11 @@ scaled_modes:
 #   modes_per_group: [150,150,50,50]
 #   scheduled_times: [0.01]
 
-# gain_ramp:
-#   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.1],[0.9]]
-#   modes_per_group: [400]
-#   scheduled_times: [0.01]
+gain_ramp:
+  class:             'ScheduleGenerator'
+  scheduled_values: [[0.1],[0.9]]
+  modes_per_group: [400]
+  scheduled_times: [0.01]
 
 dm:
   class:             'DM'
@@ -227,7 +227,7 @@ psf:
   wavelengthInNm:    750                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        0.0                  # Start PSF integration after 500ms
-  verbose: false
+  # verbose: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
@@ -267,8 +267,8 @@ data_store:
     input_list: [
                   # 'atmo_phase-ef_prop.out_ef',
                   'sr-psf.out_sr',
-                  'coro_psf-coro_psf.out_std_coronagraph_psf_profile',
-                  'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
+                  # 'coro_psf-coro_psf.out_std_coronagraph_psf_profile',
+                  # 'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
                   # 'psf-psf.out_psf',
                   # 'psf_std-psf.out_std_psf',
                   'atmo_res-atmo_modes.out_modes',

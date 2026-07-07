@@ -29,7 +29,7 @@ nModes = 400
 pup_dist = np.max((min_pup_dist,max_pup_dist/max(nSubaps)*nSubap))
 delay = 0.5e-3
 savetn = False
-filtertype = 'CLOSE'
+filtertype = 'IIR'
 
 # r_vals = np.array([0.0,-0.05,-0.1,-0.15,-0.2])
 
@@ -48,9 +48,9 @@ for rMod in rMods:
         best_sr = 0.0
         for gain in gvec:
             if filtertype == 'INT':
-                store_dir = f'{dirname}/gain_{gain:.1f}'
+                store_dir = f'{dirname}_int/gain_{gain:.1f}'
             else:
-                store_dir = f'{dirname}/iir_gain_{gain:.1f}'
+                store_dir = f'{dirname}_iir/gain_{gain:.1f}'
             try:
                 srvec = fits.getdata(os.path.join(store_dir,'sr.fits'))
             except FileNotFoundError:
