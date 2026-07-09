@@ -2,21 +2,21 @@ zwfs_override:
   pup_diam: 12.0
   fft_res: 12.0
   spot_radius_lambda: 1.0
-  phase_shift_pi: 0.1
+  phase_shift_pi: 0.15
 zwfs_slopes_override:
   pup_diam: 12.0
 zwfs_modalrec_override:
-  recmat_object: 'z2wfs_0.10delay_12x12_50modes_rec_rec'
+  recmat_object: 'z2wfs_0.15delay_12x12_50modes_rec_rec'
 seeing_random_override:
   constant: 1.3
 dm_perfect_override:
-  nmodes: 300
+  nmodes: 50
 modal_analysis_override:
-  nmodes: 300
+  nmodes: 50
 source_ngs_override:
   magnitude: 5.0
 zwfs_sn_override:
-  output_tag: 'z2wfs_0.10delay_12x12_s1.30_300modes_sn'
+  output_tag: 'z2wfs_0.15delay_12x12_s1.30_50modes_sn'
 data_store_override:
   store_dir: /raid1/mmenessini/calibration/RISTRETTOunobs/scratch_aliasing
   create_tn: false
