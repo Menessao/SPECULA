@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        4.000                 # [s] 1 second simulation
+  total_time:        2.000                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -123,7 +123,7 @@ pyr0:
   pup_diam:          16.                     # Pupil diameter in subaps.
   pup_dist:          20.                     # Separation between pupil centers in subaps.
   fov:               2.0                     # Requested field-of-view [arcsec]
-  mod_amp:           0.5                     # Modulation radius (in lambda/D units)
+  mod_amp:           0.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    900                     # [nm] Pyramid wavelength
   inputs:
@@ -133,8 +133,8 @@ cred2:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]            # Total detector size
-  dt:                0.00025               # [s] Integration time (4000 fps)
-  bandw:             150                   # [nm]
+  dt:                0.0005               # [s] Integration time (4000 fps)
+  bandw:             200                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
   excess_noise:      true                  # Enable excess noise
@@ -149,14 +149,14 @@ pyr0_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_16x16'           
   slopes_from_intensity:  true
-  sn_object:           'pyr0.5_16x16_l900_sn' #'pyr0.0_16x16_sn' #'pyr0.0_16x16_pc1300modes_sn' #
+  sn_object:           'pyr0.0_16x16_sn' #'pyr0.0_16x16_sn' #'pyr0.0_16x16_pc1300modes_sn' #
   inputs:
     in_pixels:        'cred2.out_pixels'
   outputs:           ['out_slopes']
 
 pyr0_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr0.5_16x16_150modes_rec'        
+  recmat_object:     'pyr0.0_16x16_150modes_rec'        
   inputs:
     in_slopes:       'pyr0_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -169,65 +169,65 @@ lo_mod_pyr_modes:
     in_value: 'pyr_modalrec.out_modes'
   outputs: ['out_value']
 
-# lo_filter:
-#   class:                    'MultirateComplementaryFilter'
-#   delay:                    1             # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'iirfilter_150modes_exc2_pow2.0'  #'iir_opt_1300modes' #
-#   weights:                  [0.5,0.5]     # weigths for fast and slow measurements
-#   N_list:                   [4]           # fast/slow frequency ratio (list)
-#   g_track:                  0.7           # gain
+lo_filter:
+  class:                    'MultirateComplementaryFilter'
+  delay:                    0.5             # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.5'  #'iir_opt_1300modes' #
+  weights:                  [0.55,0.45]     # [fast,slow] gains
+  N_list:                   [2]           # fast/slow frequency ratio (list)
+  g_track:                  0.9           # gain
+  inputs:
+    in_ys: 'lo_mod_pyr_modes.out_value'
+    in_yf: 'pyr0_modalrec.out_modes'
+    gain_mod:  'gain_ramp_lo.output'
+  outputs:  ['out_comm']
+
+# lo_filter: 
+#   class:             'Integrator'
+#   delay:             1.0                     # Temporal delay in time steps
+#   int_gain:          [1.0]
+#   n_modes:           [150]
 #   inputs:
-#     in_ys: 'lo_mod_pyr_modes.out_value'
-#     in_yf: 'pyr0_modalrec.out_modes'
-#     gain_mod:  'gain_ramp_lo.output'
-#   outputs:  ['out_comm']
+#       delta_comm:  'scaled_modes.out_value' #'pyr0_modalrec.out_modes' #
 
-lo_filter: 
-  class:             'Integrator'
-  delay:             1.0                     # Temporal delay in time steps
-  int_gain:          [1.0]
-  n_modes:           [150]
-  inputs:
-      delta_comm:  'scaled_modes.out_value' #'pyr0_modalrec.out_modes' #
+# omgi:
+#    class: 'CloseGainOptimizer'
+#    nmodes: 150
+#    p: 0.3
+#    r: -0.2
+#    dt: 3                # Time-shift in frames: 2x(delay+1)-1
+#    q_plus: 0.01        # Tracking gain increase factor
+#    q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+#    initial_gain: 0.5
+#    inputs:
+#      in_modes:  'pyr0_modalrec.out_modes'
+#    outputs: ['out_gains']
 
-omgi:
-   class: 'CloseGainOptimizer'
-   nmodes: 150
-   p: 0.3
-   r: -0.2
-   dt: 3                # Time-shift in frames: 2x(delay+1)-1
-   q_plus: 0.01        # Tracking gain increase factor
-   q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
-   initial_gain: 0.5
-   inputs:
-     in_modes:  'pyr0_modalrec.out_modes'
-   outputs: ['out_gains']
-
-scaled_modes:
-  class: 'BaseOperation'
-  mul: true
-  inputs:
-    in_value1: 'pyr0_modalrec.out_modes'
-    in_value2: 'omgi.out_gains'
-  outputs: ['out_value']
+# scaled_modes:
+#   class: 'BaseOperation'
+#   mul: true
+#   inputs:
+#     in_value1: 'pyr0_modalrec.out_modes'
+#     in_value2: 'omgi.out_gains'
+#   outputs: ['out_value']
 
 
 gain_ramp_lo:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.1],[0.2]]
-  scheduled_times: [0.001]
+  scheduled_values: [[0.1],[0.3]]
+  scheduled_times: [0.01]
   modes_per_group: [150]
 
 gain_ramp_ho:
   class:             'ScheduleGenerator'
-  scheduled_values: [[0.0],[0.01]]
-  scheduled_times: [0.001]
+  scheduled_values: [[0.0],[0.15]]
+  scheduled_times: [0.01]
   modes_per_group: [1300]
 
 ho_filter:
   class:                'IirFilter'
-  delay:                0.5 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes'
+  delay:                0.25 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_1300modes_exc0_pow1.5'
   inputs:
     delta_comm: 'pyr_modalrec.out_modes'
     gain_mod: 'gain_ramp_ho.output'
@@ -235,7 +235,7 @@ ho_filter:
 
 ho_comm:
   class: 'BaseSlicer'
-  slice_args: [151,1300]
+  slice_args: [150,1300]
   inputs:
     in_value: 'ho_filter.out_comm'
   outputs: ['out_value']

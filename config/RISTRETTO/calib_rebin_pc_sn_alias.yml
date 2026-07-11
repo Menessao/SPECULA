@@ -1,0 +1,83 @@
+# Slope null calibrator - averages WFS response over atmospheric realizations
+pyr_sn:
+  class: 'SnCalibrator'
+  output_tag: 'pyr0.0_16x16_l900_pc1.0_sn'           # Output filename
+  overwrite: true
+  inputs:
+    in_slopes: 'pyr_slopes.out_slopes'
+
+# Random seeing generator - varies around nominal value (here 1.0 arcsec)
+seeing_random:
+  class:             'RandomGenerator'
+  amp:               0.0                 # Variation amplitude [arcsec]
+  constant:          1.0                 # Mean seeing [arcsec]
+  distribution:      'UNIFORM'           # Uniform distribution in [0.9, 1.1]
+  outputs: ['output']
+
+# Random atmospheric phase generator
+atmo_random:
+  class:                'AtmoRandomPhase'
+  simul_params_ref:  'main'
+  L0:                   25               # [m] Outer scale
+  source_dict_ref:      ['source_ngs']
+  inputs:
+    seeing: 'seeing_random.output'
+    pupilstop: 'pupilstop'
+  outputs: ['out_source_ngs_ef']
+
+# Modal decomposition of atmospheric phase
+modal_analysis:
+  class: 'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  nmodes: 1300
+  inputs:
+    in_ef: 'atmo_random.out_source_ngs_ef'
+  outputs: ['out_modes']
+
+# DM applying partial correction
+dm_perfect:
+  class: 'DM'
+  simul_params_ref: 'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'      # Our computed influence functions
+  m2c_object:        'bmc2k_vlt_m2c'        # Modal-to-command matrix
+  nmodes:            1300             # Number of controlled modes
+  height:            0                # Ground-conjugated DM
+  inputs:
+    in_command: 'modal_analysis.out_modes' #'scale_random.out_value'
+  outputs: ['out_layer']
+
+# Combine atmospheric turbulence with DM correction
+ef_prop_override:
+  inputs:
+    in_ef1: 'atmo_random.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm_perfect.out_layer'                  # Partial correction
+
+# Override main parameters for sufficient statistical sampling
+main_override:
+  total_time: 1.000                    # 1000 frames at 1kHz
+
+cred1_override:
+  bandw:             200                   # [nm]
+  photon_noise:      false                  # Enable photon noise
+  readout_noise:     false                  # Enable read noise
+  excess_noise:      false                  # Enable excess noise
+
+pyr_slopes_override:
+  pupdata_object:         'pyr_pupdata_16x16'    
+
+pyr_override:
+  pup_diam:          16.
+  pup_dist:          20.
+  mod_amp:           0.0                     # Modulation radius (in lambda/D units)
+  wavelengthInNm:    900 
+
+data_store_override:
+  store_dir:         '/raid1/mmenessini/calibration/RISTRETTO/scratch_aliasing'            # Data result directory: 'store_dir'/TN/
+  create_tn:           false
+  inputs:
+    input_list: ['pyr_frames-cred1.out_pixels', 'pyr_modes-pyr_modalrec.out_modes'] #, 'res_ef-ef_prop.out_ef']
+
+# Remove closed-loop components 
+remove: ['atmo','seeing','wind_speed','wind_direction', 'lo_mod_pyr_modes',
+        'psf','prop','coro_psf', 'pyr_modalrec', 'pyr_modalrec2', 'concat_comms',
+        'dm','dm_mode_res','lo_filter', 'ho_filter', 'ho_comm', 'atmo_modes',]

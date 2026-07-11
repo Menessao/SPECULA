@@ -1,0 +1,61 @@
+# Interaction Matrix and Reconstructor Calibration
+# ================================================
+
+# Push-pull command generator
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       300                         # Number of DM actuators
+  amp:          15 
+  outputs:   ['output']
+
+# Interaction matrix calibrator
+pyr_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    3000                         # Number of modes to calibrate
+  im_tag:    'pyr0.0_16x16_l900_im'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
+  inputs:
+    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
+    in_commands: 'pushpull.output'        # Push-pull commands
+
+# Override main simulation parameters
+main_override:
+  time_step: 0.0005
+  total_time: 0.3                 # 1821 modes × 2 (push+pull) × 0.0005s
+
+# Disable atmosphere for clean calibration
+prop_override:
+  source_dict_ref:   ['source_ngs']
+  inputs:
+    common_layer_list: ['pupilstop', 'dm.out_layer']  # Only pupil + DM
+  outputs:           ['out_source_ngs_ef']
+
+# Override DM to use calibration commands
+dm_override:
+  sign: 1                                 # Use positive sign for calibration (default is -1)
+  nmodes: 300                            # Use all modes for calibration
+  inputs:
+    in_command: 'pushpull.output'         # Connect to push-pull generator
+
+pyr_override:
+  pup_diam:          16.
+  pup_dist:          20.
+  mod_amp:           0.0  
+  wavelengthInNm:    900 
+  inputs: 
+    in_ef: 'prop.out_source_ngs_ef'
+
+# Disable noise for clean measurements
+cred1_override:
+  dt: 0.0005
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+pyr_slopes_override:
+  pupdata_object:         'pyr_pupdata_16x16'  
+
+# Remove unnecessary objects during calibration
+remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes','pyr2', 'cred2', 'pyr_slopes2', #'source_science','zwfs_modalrec'
+        'dm_mode_res','lo_filter','ho_filter','psf', 'coro_psf', 'ef_prop','pyr_modalrec','pyr_modalrec2', 
+        'lo_mod_pyr_modes', 'concat_comms', 'ho_comm'] #, 'bootstrap', 'concat_wfs_modes'

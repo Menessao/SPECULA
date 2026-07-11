@@ -99,9 +99,9 @@ if __name__ == "__main__":
     #     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
     Nmodes = 150
-    root_dir = '/raid1/mmenessini/calibration/XAO'
-    im_tag = 'pyr0.5_300modes_16x16_im'
-    rec_tag = 'pyr0.5_16x16_150modes'
+    root_dir = '/raid1/mmenessini/calibration/RISTRETTO'
+    im_tag = 'pyr0.0_16x16_l900_im'
+    rec_tag = 'pyr0.0_16x16_l900_150modes'
     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
 
 #     Nmodes = 1300
