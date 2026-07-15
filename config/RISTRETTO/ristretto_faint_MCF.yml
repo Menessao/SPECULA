@@ -173,7 +173,7 @@ lo_filter:
   class:                    'MultirateComplementaryFilter'
   delay:                    0.5             # Total temporal delay in time steps is this value +1
   iir_filter_data_object:  'iirfilter_150modes_exc0_pow1.5'  #'iir_opt_1300modes' #
-  weights:                  [0.55,0.45]     # [fast,slow] gains
+  weights:                  [1.0,0.0] #[0.55,0.45]     # [fast,slow] gains
   N_list:                   [2]           # fast/slow frequency ratio (list)
   g_track:                  0.9          # gain
   inputs:
@@ -317,7 +317,7 @@ data_store:
     input_list: [
                   # 'atmo_phase-first_stage_prop.out_ef',
                   # 'dm1_cmd-filter1.out_comm',
-                  'sr-coro_psf.out_sr',
+                  'sr-psf.out_sr',
                   'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
                   'coro_psf_std-coro_psf.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_modes',
