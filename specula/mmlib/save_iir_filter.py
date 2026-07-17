@@ -80,11 +80,11 @@ def guidos_standard_iir(n_filters:int, excluded_filters:int,
     t = create_stepped_t(n_filters,excluded_filters=excluded_filters)
     t_powered = t**power_exponent 
 
-    end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
-    end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
+    # end_pole[0] = start_pole[0] - 0.1 * n_filters/1000
+    # end_pole[1] = start_pole[1] - 0.245 * n_filters/1000
 
-    end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
-    end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
+    # end_zero[0] = start_zero[0] - 0.3 * n_filters/1000
+    # end_zero[1] = start_zero[1] - 0.15 * n_filters/1000
 
     zero_values = start_zero[0] + (end_zero[0] - start_zero[0]) * t_powered
     zero2_values = start_zero[1] + (end_zero[1] - start_zero[1]) * t_powered
@@ -142,13 +142,14 @@ if __name__ == "__main__":
     # root_dir = '/raid1/mmenessini/calibration/SOUL/KLv30dx'
     # root_dir = '/raid1/mmenessini/calibration/EKARUS'
     root_dir = '/raid1/mmenessini/calibration/RISTRETTO'
+    root_dir = '/raid1/mmenessini/calibration/FSOC'
     path = os.path.join(root_dir,'filter')
     os.makedirs(path,exist_ok=True)
 
     fs = 1000  # sampling frequency
-    n_filters = 150
+    n_filters = 400
     excluded_filters = 1
-    power = 2.0 # used 0.8 for EKARUS
+    power = 0.8 # used 0.8 for EKARUS
     # make_tiled = False
 
     file_name = os.path.join(path,f'iirfilter_{n_filters}modes_exc{excluded_filters:1.0f}_pow{power:1.1f}.fits')

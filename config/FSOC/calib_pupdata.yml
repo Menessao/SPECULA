@@ -4,9 +4,9 @@ pyr_pupdata:
   class: 'PyrPupdataCalibrator'
   thr1: 0.04
   thr2: 0.05
-  display_debug: false
+  display_debug: true
   output_tag:        'pyr_pupdata_40x40'
-  overwrite: false
+  overwrite: true
   inputs:
     in_i: 'pyr.out_i'
 

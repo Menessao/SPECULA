@@ -61,7 +61,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     angleOffset = 0              # No rotation
 
     # Actuator slaving (disable edge actuators outside pupil)
-    doSlaving = True             # Enable slaving (very simple slaving)
+    doSlaving = False             # Enable slaving (very simple slaving)
     slavingThr = 0.1             # Threshold for master actuators
     oversampling = 4           # Minimum oversampling for FFT computations
 
@@ -322,5 +322,5 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
-    compute_and_save_influence_functions(fsoc_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
-                                          geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.0)
+    compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
+                                          geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)

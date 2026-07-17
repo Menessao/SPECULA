@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/FSOC/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       120                   # Must match influence function computation
   pixel_pitch:       0.00833              # [m] Pitch of the pupil phase array (1.82m/120pix)
-  total_time:        5.0                   # [s] Total simulation running time
+  total_time:        2.0                   # [s] Total simulation running time
   time_step:         0.0005                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -38,7 +38,9 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'copernico_pupil_120pixels' 
+  # tag:               'copernico_pupil_120pixels' 
+  simul_params_ref: 'main'
+  obs_diam: 0.3
 
 # Multi-layer atmospheric model
 atmo:
@@ -61,6 +63,8 @@ prop:
   class:             'AtmoPropagation'
   simul_params_ref:  'main'
   source_dict_ref:   ['source_ngs'] 
+  doFresnel: true
+  padding_factor: 4
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']       # Pupil
@@ -122,9 +126,9 @@ pyr_modalrec:
 filter: 
   class:             'Integrator'
   delay:             1.0                     # Temporal delay in time steps
-  int_gain:          [0.4] #[0.7,0.6,0.2] #
+  int_gain:          [0.7,0.6,0.5,0.2] #
   # ff:                [1.0,0.99,0.95]
-  n_modes:           [400] #[2,120,278] #
+  n_modes:           [2,120,80,198] #
   inputs:
       delta_comm:  'pyr_modalrec.out_modes' #
 
@@ -161,7 +165,7 @@ filter:
 # filter:
 #   class:                'IirFilter'
 #   delay:                1.0 # Total temporal delay in time steps is this value +1
-#   iir_filter_data_object:  'ekarusiir_400modes_exc2_pow2.0' #'temporal_filter'
+#   iir_filter_data_object:  'iirfilter_400modes_exc1_pow0.8' #'temporal_filter'
 #   inputs:
 #     delta_comm: 'pyr_modalrec.out_modes'  
 #     gain_mod: 'gain_ramp.output' #gain_optimizer.optimized_gain' #
@@ -169,15 +173,15 @@ filter:
 
 # gain_ramp:
 #   class:             'ScheduleGenerator'
-#   scheduled_values: [[0.1],[0.9]]
-#   modes_per_group: [400]
+#   scheduled_values: [[0.1,0.0],[0.75,0.0]]
+#   modes_per_group: [300,100]
 #   scheduled_times: [0.01]
 
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'dm468_ifunc'   #'DM468_ifunc' #    # Influence functions
-  m2c_object:        'dm468_m2c'     #'DM468_m2c' #   # Modal-to-command matrix
+  ifunc_object:      'obs30_ifunc' #'dm468_ifunc'    # Influence functions
+  m2c_object:        'obs30_m2c' #'dm468_m2c'      # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
   nmodes:            400
   inputs:
@@ -190,24 +194,24 @@ dm:
 psf:
   class:             'PSF'
   simul_params_ref:  'main'
-  wavelengthInNm:    1550                 # [nm] visible
+  wavelengthInNm:    1000                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        1.0  
-  # verbose: true
+  verbose: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 dm_mode_res:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'dm468_kl_inv'
+  ifunc_inv_object: 'obs30_kl_inv' #'dm468_kl_inv' #'unobs_kl_inv' #
   inputs:
     in_ef: ['ef_prop.out_ef']
   outputs: ['out_modes']
 
 atmo_modes:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'dm468_kl_inv'
+  ifunc_inv_object: 'obs30_kl_inv' #'dm468_kl_inv' #'unobs_kl_inv' #
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
   outputs: ['out_modes']

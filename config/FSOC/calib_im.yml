@@ -5,7 +5,7 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       440                        # Number of DM actuators
-  amp:          20
+  amp:          50
   outputs:   ['output']
 
 # Interaction matrix calibrator
@@ -39,8 +39,8 @@ dm_override:
   nmodes: 440                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
-  ifunc_object:      'dm468_ifunc'      # Influence functions
-  m2c_object:        'dm468_m2c'        # Modal-to-command matrix
+  # ifunc_object:      'obs30_ifunc'      # Influence functions
+  # m2c_object:        'obs30_m2c'        # Modal-to-command matrix
 
 pyr_override:
   pup_diam:          40.                     # Pupil diameter in subaps.
