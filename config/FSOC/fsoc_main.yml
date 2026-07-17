@@ -1,0 +1,226 @@
+
+# Main simulation parameters
+main:
+  class:             'SimulParams'
+  root_dir:          '/raid1/mmenessini/calibration/FSOC/'       # CalibManager root directory (all the data are in subdirectories)
+  pixel_pupil:       120                   # Must match influence function computation
+  pixel_pitch:       0.00833              # [m] Pitch of the pupil phase array (1.82m/120pix)
+  total_time:        5.0                   # [s] Total simulation running time
+  time_step:         0.0005                 # [s] Simulation time step
+  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  display_server:    false                 # Disable for batch runs
+
+# Atmospheric conditions
+seeing:
+  class:             'WaveGenerator'
+  constant:          2.0                  # [arcsec]
+
+wind_speed:
+  class:             'WaveGenerator'
+  constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
+  # constant:          [15.0, 13.0, 13.0, 9.0, 9.0, 15.0, 25.0, 40.0, 21.0]    # [m/s] Multi-layer wind speeds
+  # constant:          [2, 4, 6, 25]    # [m/s] Multi-layer wind speeds
+
+wind_direction:
+  class:             'WaveGenerator'
+  constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
+  # constant:          [38.0, 34.0, 54.0, 42.0, 57.0, 48.0, -102.0, -83.0, -77.0] # [deg] Wind directions for each layer
+  # constant:          [38, 162, -102, -45] # [deg] Wind directions for each layer
+
+# Natural guide star for WFS
+source_ngs:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
+  height:            .inf                  # Infinite height (star)
+  magnitude:         0.0                   # R-band magnitude (bright NGS)
+  wavelengthInNm:    1550                   # [nm] R-band for WFS
+
+# Telescope pupil geometry
+pupilstop:
+  class:             'Pupilstop'
+  tag:               'copernico_pupil_120pixels' 
+
+# Multi-layer atmospheric model
+atmo:
+  class:             'AtmoEvolution'
+  simul_params_ref:  'main'
+  L0:                25.0                   # [m] Outer scale
+  heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] Ground, mid, high layers at 0 zenith angle
+  Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
+  # heights:           [103, 725, 2637, 11068] # [m] Ground, mid, high layers at 0 zenith angle
+  # Cn2:               [0.70, 0.06, 0.14, 0.10]        # Cn2 fractions (sum = 1.0)
+  fov:               0.0                    # [arcsec] Field of view
+  inputs:
+    seeing:          'seeing.output'
+    wind_speed:      'wind_speed.output'
+    wind_direction:  'wind_direction.output'
+  outputs:           ['layer_list']
+
+# Atmospheric propagation
+prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs'] 
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']       # Pupil
+  outputs:           ['out_source_ngs_ef'] 
+
+ef_prop:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm.out_layer:-1'          # DM1 correction
+  outputs: ['out_ef']
+
+
+########################### PWFS ##############################
+pyr:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          40.                     # Pupil diameter in subaps.
+  pup_dist:          60.                     # Separation between pupil centers in subaps.
+  fov:               15.0                     # Requested field-of-view [arcsec]
+  mod_amp:           0.0                     # Modulation radius (in lambda/D units)
+  output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    1550                     # [nm] Pyramid wavelength
+  inputs:
+    in_ef: 'ef_prop.out_ef' #'prop.out_source_ngs_ef'
+
+ocam:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]            # Total detector size
+  dt:                0.0005              # [s] Integration time (2000 fps)
+  bandw:             300                   # [nm]
+  photon_noise:      true                  # Enable photon noise
+  readout_noise:     true                  # Enable read noise
+  excess_noise:      true                  # Enable excess noise
+  readout_level:     0.4                   # [e-/pix/frame] Read noise level
+  emccd_gain:        600                   # EMCCD gain factor
+  quantum_eff:       0.1                   # QE x transmission
+  inputs:
+    in_i:            'pyr.out_i' 
+  outputs:           ['out_pixels']
+
+pyr_slopes:
+  class:                  'PyrSlopec'
+  pupdata_object:         'pyr_pupdata_40x40'           
+  sn_object:              'pyr0.0_40x40_sn' # Commented during calibration
+  slopes_from_intensity:  true
+  inputs:
+    in_pixels:        'ocam.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modalrec:
+  class:             'Modalrec'
+  recmat_object:     'pyr0.0_40x40_400modes_rec'        
+  inputs:
+    in_slopes:       'pyr_slopes.out_slopes'
+  outputs:           ['out_modes']
+
+filter: 
+  class:             'Integrator'
+  delay:             1.0                     # Temporal delay in time steps
+  int_gain:          [0.4] #[0.7,0.6,0.2] #
+  # ff:                [1.0,0.99,0.95]
+  n_modes:           [400] #[2,120,278] #
+  inputs:
+      delta_comm:  'pyr_modalrec.out_modes' #
+
+# omgi:
+#    class: 'CloseGainOptimizer'
+#    nmodes: 400
+#    p: 0.2
+#    r: -0.2
+#    dt: 4                # Time-shift in frames: 2x(delay+1)-1
+#    q_plus: 0.01        # Tracking gain increase factor
+#    q_minus_ratio: 5.0  # Ratio of q- to q+ (for overshoots)
+#    initial_gain: 0.4
+#    inputs:
+#      in_modes:  'pyr_modalrec.out_modes'
+#    outputs: ['out_gains']
+
+# scaled_modes:
+#   class: 'BaseOperation'
+#   mul: true
+#   inputs:
+#     in_value1: 'pyr_modalrec.out_modes'
+#     in_value2: 'omgi.out_gains'
+#   outputs: ['out_value']
+
+# temporal_filter:
+#   class:            'IirFilterData'
+#   ordnum:           [3]
+#   ordden:           [3]
+#   num:              [[ 0.3825, -1.3, 1.0]]
+#   den:              [[0.995,   -1.995, 1.0]]
+#   n_modes:          [400]
+
+
+# filter:
+#   class:                'IirFilter'
+#   delay:                1.0 # Total temporal delay in time steps is this value +1
+#   iir_filter_data_object:  'ekarusiir_400modes_exc2_pow2.0' #'temporal_filter'
+#   inputs:
+#     delta_comm: 'pyr_modalrec.out_modes'  
+#     gain_mod: 'gain_ramp.output' #gain_optimizer.optimized_gain' #
+#   outputs:  ['out_comm']
+
+# gain_ramp:
+#   class:             'ScheduleGenerator'
+#   scheduled_values: [[0.1],[0.9]]
+#   modes_per_group: [400]
+#   scheduled_times: [0.01]
+
+dm:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'dm468_ifunc'   #'DM468_ifunc' #    # Influence functions
+  m2c_object:        'dm468_m2c'     #'DM468_m2c' #   # Modal-to-command matrix
+  height:            0                # Ground-conjugated DM
+  nmodes:            400
+  inputs:
+    in_command:      'filter.out_comm'
+  outputs:           ['out_layer']
+
+###########################################################
+##################### POST-PROCESSING #####################
+# Coronagraphic and non-coronagraphic PSFs
+psf:
+  class:             'PSF'
+  simul_params_ref:  'main'
+  wavelengthInNm:    1550                 # [nm] visible
+  nd:                4                    # 4x padding for PSF
+  start_time:        1.0  
+  # verbose: true
+  inputs:
+    in_ef:           'ef_prop.out_ef'
+  outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+
+dm_mode_res:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'dm468_kl_inv'
+  inputs:
+    in_ef: ['ef_prop.out_ef']
+  outputs: ['out_modes']
+
+atmo_modes:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'dm468_kl_inv'
+  inputs:
+    in_ef: ['prop.out_source_ngs_ef']
+  outputs: ['out_modes']
+
+# Data store for results
+data_store:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/FSOC'             # Data result directory: 'store_dir'/TN/
+  inputs:
+    input_list: [
+                  'sr-psf.out_sr',
+                  'atmo_res-atmo_modes.out_modes',
+                  'dm_res-dm_mode_res.out_modes',
+                  'dm_cmd-filter.out_comm',
+                  'pyr_modes-pyr_modalrec.out_modes',
+                  ]

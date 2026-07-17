@@ -179,7 +179,7 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
 
     x_c = (max(x)-min(x))/2
     y_c = (max(y)-min(y))/2
-    print(x_c,y_c)
+    print(f'Pupil pixel centers: {x_c},{y_c}')
     x = (x-x_c)*shrink + x_c
     y = (y-y_c)*shrink + y_c
     coordinates = xp.vstack((x, y))

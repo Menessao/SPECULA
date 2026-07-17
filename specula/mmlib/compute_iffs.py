@@ -83,7 +83,12 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     else:
         pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0, obsratio=obsratio)
         
-    unobs_pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0)
+    # unobs_pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0)
+
+
+    # Step 3: Create output directory
+    os.makedirs(os.path.join(root_dir, 'ifunc'), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, 'm2c'), exist_ok=True)
 
     # Step 1: Generate zonal influence functions
     influence_functions,mask,coords,slaveMat = compute_zonal_ifunc(
@@ -141,10 +146,6 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     print(f"Number of KL modes: {kl_basis.shape[0]}")
 
     kl_basis_inv = np.linalg.pinv(kl_basis)
-
-    # Step 3: Create output directory
-    os.makedirs(os.path.join(root_dir, 'ifunc'), exist_ok=True)
-    os.makedirs(os.path.join(root_dir, 'm2c'), exist_ok=True)
 
     # Step 4: Save using SPECULA data objects
     print(f"\nSaving influence functions and modal basis...")
@@ -299,13 +300,14 @@ if __name__ == "__main__":
     xao_dir = '/raid1/mmenessini/calibration/XAO'
     soul_dir = '/raid1/mmenessini/calibration/SOUL'
     ekarus_dir = '/raid1/mmenessini/calibration/EKARUS'
+    fsoc_dir = '/raid1/mmenessini/calibration/FSOC'
     
     # Npix = 160
     # compute_and_save_influence_functions(root_dir,tag='bmc2k_vlt', pupil_pixels=Npix, n_acts=50,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
     # compute_and_save_influence_functions(root_dir,tag='dm241_vlt', pupil_pixels=Npix, n_acts=17,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
-    compute_and_save_dcao_matrix(xao_dir,first_stage_tag='bmc2k_vlt',second_stage_tag='bmc2k_vlt',N1_modes=1300,N2_modes=150)
+    # compute_and_save_dcao_matrix(xao_dir,first_stage_tag='bmc2k_vlt',second_stage_tag='bmc2k_vlt',N1_modes=1300,N2_modes=150)
 
     # Npix = 160
     # compute_and_save_influence_functions(root_dir,tag='asm', pupil_pixels=Npix, n_acts=30,
@@ -313,10 +315,12 @@ if __name__ == "__main__":
 
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
-    # Npix = 120
+    Npix = 120
     # compute_and_save_influence_functions(ekarus_dir,tag='dm820', pupil_pixels=Npix, n_acts=32, #shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm241', pupil_pixels=Npix, n_acts=17, #shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
+    compute_and_save_influence_functions(fsoc_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
+                                          geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.0)

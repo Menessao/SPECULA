@@ -98,11 +98,18 @@ if __name__ == "__main__":
     #     rec_tag = f'pyr{rMod:1.1f}_10x10_{Nmodes}modes'
     #     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-    Nmodes = 150
-    root_dir = '/raid1/mmenessini/calibration/RISTRETTO'
-    im_tag = 'pyr0.0_16x16_l900_im'
-    rec_tag = 'pyr0.0_16x16_l900_150modes'
+
+    Nmodes = 400
+    root_dir = '/raid1/mmenessini/calibration/FSOC'
+    im_tag = 'pyr0.0_40x40_dm468_im'
+    rec_tag = f'pyr0.0_40x40_{Nmodes:1.0f}modes'
     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
+
+    # Nmodes = 150
+    # root_dir = '/raid1/mmenessini/calibration/RISTRETTO'
+    # im_tag = 'pyr0.0_16x16_l900_im'
+    # rec_tag = 'pyr0.0_16x16_l900_150modes'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
 
 #     Nmodes = 1300
 #     rMods = np.array([0,0.5,1,2,3])

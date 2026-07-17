@@ -1,0 +1,36 @@
+pyr_sn:
+  class: 'SnCalibrator'
+  output_tag: 'pyr0.0_40x40_sn'           # Output filename
+  overwrite: true
+  inputs:
+    in_slopes: 'pyr_slopes.out_slopes'
+
+pyr_override:
+  pup_diam:          40.                     # Pupil diameter in subaps.
+  pup_dist:          60.    
+  mod_amp: 0.0
+  inputs:
+    in_ef: 'prop.out_source_ngs_ef'
+
+pyr_slopes_override:
+  pupdata_object:         'pyr_pupdata_40x40'         
+
+main_override:
+  total_time: 0.001 # acquire single frame
+
+# Disable noise for clean measurements
+ocam_override:
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+
+data_store_override:
+  store_dir:         '/raid1/mmenessini/results/EKARUS/frames'  
+  create_tn: false
+  inputs:
+    input_list: ['pyr0.0_40x40_frame_null-ocam.out_pixels',]
+
+# Remove closed-loop components (not needed for slope null)
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store',
+        'dm','dm_mode_res','filter','psf','ef_prop','pyr_modalrec', ]
