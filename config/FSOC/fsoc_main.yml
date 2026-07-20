@@ -204,6 +204,7 @@ psf:
 
 dm_mode_res:
   class:            'ModalAnalysis'
+  wavelengthInNm:    1550
   ifunc_inv_object: 'obs30_kl_inv' #'dm468_kl_inv' #'unobs_kl_inv' #
   inputs:
     in_ef: ['ef_prop.out_ef']
@@ -211,6 +212,7 @@ dm_mode_res:
 
 atmo_modes:
   class:            'ModalAnalysis'
+  wavelengthInNm:    1550
   ifunc_inv_object: 'obs30_kl_inv' #'dm468_kl_inv' #'unobs_kl_inv' #
   inputs:
     in_ef: ['prop.out_source_ngs_ef']

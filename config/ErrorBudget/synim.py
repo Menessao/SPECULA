@@ -66,16 +66,15 @@ def shift_image(image, shift, axis):
     shifted_image = img_floor * (1.0 - shift_frac) + img_ceil * shift_frac
     return shifted_image
 
-# def rotate_ifunc_inv(rot_deg:float):
-#     kl_new = np.zeros_like(kl)
-#     img = np.zeros(lbtpup.shape)
-#     for j in range(kl.shape[1]):
-#         img[lbtpup.astype(bool)] = kl[:,j]
-#         rot_img = rotate(img,angle=rot_deg,reshape=False)
-#         kl_new[:,j] = rot_img[lbtpup.astype(bool)]
-#     kl_inv_new = np.linalg.pinv(kl_new)
-#     ifunc_inv_obj = IFuncInv(ifunc_inv=kl_inv_new, mask=lbtpup)
-#     ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift_inv.fits', overwrite=True)
+def add_mode(ifunc,mode_id:int,mode_amp:float):
+    ifunc_new = np.zeros_like(ifunc)
+    img = np.zeros(lbtpup.shape)
+    mode = kl[:,mode_id] * mode_amp
+    for j in range(ifunc.shape[1]):
+        img[lbtpup.astype(bool)] = ifunc[:,j] + mode
+        ifunc_new[:,j] = img[lbtpup.astype(bool)]
+    print(np.sum(abs(ifunc-ifunc_new)))
+    return ifunc_new
 
 def rotate_ifunc(ifunc,rot_deg:float):
     ifunc_new = np.zeros_like(ifunc)
@@ -104,7 +103,7 @@ def zoom_ifunc(ifunc,mag:float):
         ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
     return ifunc_new
 
-def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None):
+def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,modeIds:list=None,modeAmps:list=None):
     ifunc_new = ifunc.copy()
     if rot is not None:
         ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
@@ -114,10 +113,13 @@ def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None):
         ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftY,ax_dir=1)
     if mag is not None:
         ifunc_new[:] = zoom_ifunc(ifunc_new,mag)
+    if modeIds is not None and modeAmps is not None:
+        for mode,amp in zip(modeIds,modeAmps):
+            ifunc_new[:] = add_mode(ifunc_new,mode,amp)
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift.fits', overwrite=True)
 
-def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None):
+def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,modeIds:list=None,modeAmps:list=None):
     ifunc_new = ifunc.copy()
     ifunc_inv_new = klinv.copy()
     if rot is not None:
@@ -133,6 +135,10 @@ def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None):
         ifunc_new[:] = zoom_ifunc(ifunc_new,mag)
         ifunc_inv_new[:] = zoom_ifunc(ifunc_inv_new,mag).T
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
+    if modeIds is not None and modeAmps is not None:
+        for mode,amp in zip(modeIds,modeAmps):
+            ifunc_new[:] = add_mode(ifunc_new,mode,amp)
+            ifunc_inv_new[:] = add_mode(ifunc_inv_new,mode,amp)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift.fits', overwrite=True)
     ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=lbtpup)
     ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift_inv.fits', overwrite=True)
@@ -183,20 +189,26 @@ if __name__ == "__main__":
     rot0 = 55.38
     shiftX0 = -0.627
     shiftY0 = -0.848
+    astigX0 = 0
+    astigY0 = 0
+    defocus0 = 0
 
-    prefix = 'it0_'
+    prefix = 'it6_'
     overwrite = False
 
     rotvec = np.linspace(-2.0,2.0,21)
     shiftvec = np.linspace(-0.5,0.5,21)
     mags = np.linspace(-0.05,0.05,11)+1.0
 
+    mode_amps = np.linspace(-1,1,11)*1e-8
+    mode_ids = np.arange(2,4)
+
     result_dir = '/raid1/mmenessini/results/SOUL/KLv30dx/'
 
-    columns = ['rotation','shiftX','shiftY','magnification','metric']
+    columns = ['rotation','shiftX','shiftY','magnification','astigX','defocus','astigY','metric']
     result = []
 
-    save_ifunc_pars(ifunc,rot=rot0,shiftX=shiftX0,shiftY=shiftY0)
+    # save_ifunc_pars(ifunc,rot=rot0,shiftX=shiftX0,shiftY=shiftY0)
     # print(ifunc.shape,lbtpup.shape)
 
     # err_rot = np.zeros([len(rotvec),Nmodes])
@@ -204,7 +216,7 @@ if __name__ == "__main__":
     #     print(f'Testing rotation: {rot}')
     #     set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0)
     #     chi,err_rot[j] = evaluate_metric(Nmodes,return_err=True)
-    #     result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
+    #     result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'astigX': astigX0, 'astigY': astigY0, 'defocus': defocus0, 'magnification': 1.00, 'metric': chi})
     #     print(f'Obtained metric: {chi}')
     # fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_{Nmodes}modes_metrics.fits'),err_rot,overwrite=overwrite)
 
@@ -213,7 +225,7 @@ if __name__ == "__main__":
     #     print(f'Testing x-shift: {shft}')
     #     set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0)
     #     chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-    #     result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'magnification': 1.00, 'metric': chi})
+    #     result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'astigX': astigX0, 'astigY': astigY0, 'defocus': defocus0, 'magnification': 1.00, 'metric': chi})
     #     print(f'Obtained metric: {chi}')
     # fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftX{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
@@ -221,7 +233,7 @@ if __name__ == "__main__":
     #     print(f'Testing y-shift: {shft}')
     #     set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0)
     #     chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-    #     result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'magnification': 1.00, 'metric': chi})
+    #     result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'astigX': astigX0, 'astigY': astigY0, 'defocus': defocus0, 'magnification': 1.00, 'metric': chi})
     #     print(f'Obtained metric: {chi}')
     # fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftY{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
@@ -230,13 +242,33 @@ if __name__ == "__main__":
     #     print(f'Testing magnification: {mag*1e+2:1.1f}%')
     #     set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,mag=mag)
     #     chi,err_mag[j] = evaluate_metric(Nmodes,return_err=True)
-    #     result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'magnification': mag, 'metric': chi})
+    #     result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'astigX': astigX0, 'astigY': astigY0, 'defocus': defocus0, 'magnification': mag, 'metric': chi})
     #     print(f'Obtained metric: {chi}')
     # fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
 
-    # results_df = pd.DataFrame(result, columns=columns) 
-    # results_df.to_csv(os.path.join(result_dir, 'misreg_csv', 
-    #                                prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_deltaShift{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_metric.csv'), index=False)
+    for mode in mode_ids:
+        err_mag = np.zeros([len(mode_amps),Nmodes])
+        for j,amp in enumerate(mode_amps):
+            modeIds = np.array([mode]).tolist()
+            modeAmps = np.array([amp]).tolist()
+            print(f'Testing mode {mode} with amplitude: {amp*1e+9:1.0f}nm')
+            set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,modeIds=modeIds,modeAmps=modeAmps)
+            chi,err_mag[j] = evaluate_metric(Nmodes,return_err=True)
+            if mode == 2:
+                result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'astigX': astigX0+amp, 'astigY': astigY0, 'defocus': defocus0, 'magnification': 1.00, 'metric': chi})
+            elif mode == 3:
+                result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'astigX': astigX0, 'astigY': astigY0, 'defocus': defocus0+amp, 'magnification': 1.00, 'metric': chi})
+            elif mode == 4:
+                result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'astigX': astigX0, 'astigY': astigY0+amp, 'defocus': defocus0, 'magnification': 1.00, 'metric': chi})
+            else:
+                raise NotImplementedError('Only modes 2,3,4 are currently supported!')
+            print(f'Obtained metric: {chi}')
+        fits.writeto(os.path.join(result_dir, 'misreg_csv', prefix+f'deltaMode{mode}_{1e+9*(np.max(mode_amps)-np.min(mode_amps))/len(mode_amps):1.2f}Nm_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
+
+
+    results_df = pd.DataFrame(result, columns=columns) 
+    results_df.to_csv(os.path.join(result_dir, 'misreg_csv', 
+                                   prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_deltaShift{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_metric.csv'), index=False)
         
 
 

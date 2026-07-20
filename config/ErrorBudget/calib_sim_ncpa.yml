@@ -1,0 +1,84 @@
+# Synthetic interaction matrix in partial correction
+# ================================================
+
+# Push-pull command generator
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       500                         # Number of DM actuators
+  amp:          50  
+  # constant_amp: true
+  outputs:   ['output']
+
+# Interaction matrix calibrator
+pyr_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    500                         # Number of modes to calibrate
+  im_tag:    'pyr3.0_ncpa20260720_173000_im'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
+  inputs:
+    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
+    in_commands: 'pushpull.output'        # Push-pull commands
+
+# Override main simulation parameters
+main_override:
+  total_time: 0.588                # 500 modes × 2 (push+pull) × 0.000588s
+
+################################## ATMO RESIDUAL #####################################
+
+prop_override:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs'] 
+  inputs:
+    common_layer_list: ['pupilstop']       # Pupil
+  outputs:           ['out_source_ngs_ef'] 
+
+ef_mode:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_ngs_ef'    # Unaberrated calibration source
+    in_ef2: 'dm.out_layer'              # Mode amplitudes
+  outputs: ['out_ef']
+
+######################################################################################
+
+
+pushpull_plus_ncpa:
+  class:  'BaseOperation'
+  constant_sum_data: 'ncpa_vector_20260720_173000' 
+  inputs:
+    in_value1: 'pushpull.output'
+  outputs: ['out_value']
+
+# Override DM to use calibration commands
+dm_override:
+  sign: 1                                 # Use positive sign for calibration (default is -1)
+  nmodes: 648                            # Use all modes for calibration
+  inputs:
+    in_command: 'pushpull_plus_ncpa.out_value'         # Connect to push-pull generator
+
+pyr_override:
+  inputs: 
+    in_ef: 'ef_mode.out_ef'
+
+# Disable noise for clean measurements
+ocam_override:
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+atmo_pc_modes:
+  class: 'ModalAnalysis'
+  ifunc_inv_object: 'asm_v30dx_kl_inv'
+  inputs:
+    in_ef: 'ef_mode.out_ef'
+  outputs: ['out_modes']
+
+
+data_store_override:
+  inputs:
+    input_list: ['atmo_res-atmo_pc_modes.out_modes']
+
+# Remove unnecessary objects during calibration
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store', #'source_science',
+        'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'

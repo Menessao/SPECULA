@@ -77,6 +77,15 @@ def shift_image(image, shift, axis):
 #     ifunc_inv_obj = IFuncInv(ifunc_inv=kl_inv_new, mask=lbtpup)
 #     ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift_inv.fits', overwrite=True)
 
+def add_mode(ifunc,mode_id:int,mode_amp:float):
+    ifunc_new = np.zeros_like(ifunc)
+    img = np.zeros(lbtpup.shape)
+    mode = kl[:,mode_id] * mode_amp
+    for j in range(ifunc.shape[1]):
+        img[lbtpup.astype(bool)] = ifunc[:,j] + mode
+        ifunc_new[:,j] = img[lbtpup.astype(bool)]
+    return ifunc_new
+
 def rotate_ifunc(ifunc,rot_deg:float,flip:bool=False):
     ifunc_new = np.zeros_like(ifunc)
     img = np.zeros(lbtpup.shape)
