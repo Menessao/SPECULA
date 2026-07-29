@@ -322,5 +322,7 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
-    compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
-                                          geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)
+    compute_and_save_influence_functions(ekarus_dir,tag='dm468_unobs', pupil_pixels=Npix, n_acts=24,
+                                          geom='alpao', r0=5e-2, obsratio=0.0, D=1.82)
+    # compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
+    #                                       geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)

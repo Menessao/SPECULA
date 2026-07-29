@@ -19,7 +19,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_40x40_lbt_synim'            # Output IM filename
+  im_tag:    'pyr3.0_40x40_lbt_synim'            # Output IM filename
   overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -30,13 +30,13 @@ source_ngs:
   class:             'Source'
   polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
   height:            .inf                  # Infinite height (star)
-  magnitude:         9.5                   # R-band magnitude (bright NGS)
+  magnitude:         7.0                   # R-band magnitude (bright NGS)
   wavelengthInNm:    750                   # [nm] R-band for WFS
 
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'asm_v30dx_197pixels_optshift'
+  tag:               'asm_v30dx_197pixels' #_optshift'
 
 # Atmospheric propagation
 prop:

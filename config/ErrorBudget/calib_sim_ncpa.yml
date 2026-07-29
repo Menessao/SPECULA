@@ -12,12 +12,12 @@ pushpull:
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_ncpa20260720_173000_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  nmodes:    500                                   # Number of modes to calibrate
+  im_tag:    'pyr3.0_ncpa20260720_173000_im'       # Output IM filename
+  overwrite: true                                  # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
-    in_commands: 'pushpull.output'        # Push-pull commands
+    in_commands: 'pushpull.output'            # Push-pull commands
 
 # Override main simulation parameters
 main_override:
