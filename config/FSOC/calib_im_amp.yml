@@ -12,7 +12,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    440                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_40x40_dm468_im'            # Output IM filename
+  im_tag:    'pyr0.0_40x40_dm468_h10km_im'            # Output IM filename
   overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -26,16 +26,23 @@ main_override:
 # Disable atmosphere for clean calibration
 prop_override:
   source_dict_ref:   ['source_ngs']
-  doFresnel: false
   inputs:
     common_layer_list: ['pupilstop', 'dm.out_layer']  # Only pupil + DM
   outputs:           ['out_source_ngs_ef']
+
+ef_prop_override:
+  inputs:
+    in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm_perfect.out_layer'          # DM1 correction
+  outputs: ['out_ef']
+
 
 pyr_slopes_override:
   pupdata_object:         'pyr_pupdata_40x40'  
 
 # Override DM to use calibration commands
 dm_override:
+  height: 10000
   sign: 1                                 # Use positive sign for calibration (default is -1)
   nmodes: 440                            # Use all modes for calibration
   inputs:
@@ -43,12 +50,24 @@ dm_override:
   # ifunc_object:      'obs30_ifunc'      # Influence functions
   # m2c_object:        'obs30_m2c'        # Modal-to-command matrix
 
+
+dm_perfect:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'obs30_ifunc'    # Influence functions
+  m2c_object:        'obs30_m2c'      # Modal-to-command matrix
+  height:            0                # Ground-conjugated DM
+  nmodes:            400
+  inputs:
+    in_command:      'atmo_modes.out_modes'
+  outputs:           ['out_layer']
+
 pyr_override:
   pup_diam:          40.                     # Pupil diameter in subaps.
   pup_dist:          60.    
   mod_amp: 0.0
   inputs: 
-    in_ef: 'prop.out_source_ngs_ef'
+    in_ef: 'ef_prop.out_ef'
 
 # pyr_slopes_override:
 #   slopes_from_intensity: false
@@ -60,6 +79,7 @@ ocam_override:
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
+
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes',
-        'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec'] 
+remove: ['atmo','seeing','wind_speed','wind_direction','data_store',
+        'dm_mode_res','filter','psf', 'pyr_modalrec'] 
