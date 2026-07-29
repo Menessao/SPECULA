@@ -524,9 +524,8 @@ class TestAtmoPropagation(unittest.TestCase):
             target_device_idx=target_device_idx
         )
         layer.A = xp.ones((64, 64))
-        # layer.A[20:44, 20:44] = 0.5  # Central amplitude dip
         x_coords = xp.arange(64, dtype=float) * pixel_pitch
-        layer.phaseInNm = 200.0 * xp.sin(2 * xp.pi * x_coords / 1.0) * xp.ones((64, 64)) #100.0 * xp.ones((64, 64))
+        layer.phaseInNm = 200.0 * xp.sin(2 * xp.pi * x_coords / 12.0) * xp.ones((64, 64)) #100.0 * xp.ones((64, 64))
         layer.generation_time = 1
         
         telescope_pupil = Layer(
@@ -549,7 +548,7 @@ class TestAtmoPropagation(unittest.TestCase):
             target_device_idx=target_device_idx
         )
         prop_geo.inputs['atmo_layer_list'].set([layer])
-        prop_geo.inputs['common_layer_list'].set([])
+        prop_geo.inputs['common_layer_list'].set([telescope_pupil])
         prop_geo.setup()
         
         # Fresnel Propagation
@@ -558,7 +557,7 @@ class TestAtmoPropagation(unittest.TestCase):
             source_dict={'src': source}, 
             doFresnel=True, 
             wavelengthInNm=wavelength, 
-            padding_factor=2, 
+            padding_factor=4, 
             target_device_idx=target_device_idx
         )
         prop_fresnel.inputs['atmo_layer_list'].set([layer])
@@ -653,7 +652,6 @@ class TestAtmoPropagation(unittest.TestCase):
         
         # Ensure the output matches the exact value (1500 nm) rather than modulo bounds of lambda (0 nm).
         assert np.max(abs(output_phase)) > wavelength, f"Phase unwrapping failed; expected > {wavelength}, got mean {np.max(output_phase)}"
-
 
     def test_atmo_chromatic_shift_switches(self):
         """Test AtmoPropagation chromatic switch logic (disabled/equal wavelength)."""
