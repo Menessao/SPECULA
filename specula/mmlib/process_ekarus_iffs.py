@@ -30,8 +30,8 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
     # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'alpaoIFFs.fits')))
     # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'alpaoPupMask.fits')),dtype=bool)
-    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits')))
-    mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
+    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits')))
+    # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
     iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'purged_trim_IFs.fits')))
     mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'trim_IFmask.fits')),dtype=bool)
 

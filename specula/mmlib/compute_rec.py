@@ -101,8 +101,8 @@ if __name__ == "__main__":
 
     Nmodes = 400
     root_dir = '/raid1/mmenessini/calibration/FSOC'
-    im_tag = 'pyr0.0_40x40_dm468_im'
-    rec_tag = f'pyr0.0_40x40_{Nmodes:1.0f}modes'
+    im_tag = 'pyr5.0_40x40_dm468_im'
+    rec_tag = f'pyr5.0_40x40_{Nmodes:1.0f}modes'
     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
 
     # Nmodes = 150

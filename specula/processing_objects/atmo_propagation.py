@@ -439,10 +439,10 @@ class AtmoPropagation(BaseProcessingObj):
                 # diff = self.xp.angle(want * self.xp.conj(got))
                 # print(self.xp.max(abs(diff)))
                 # assert np.allclose(want,got,1e-4)                
-                # output_ef.phaseInNm[:] = (self.prop_sign * self.xp.angle(
-                #     self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil]) * self.wavelengthInNm / (
-                #                                   2 * self.xp.pi))
-                output_ef.phaseInNm[:] = self.prop_sign * self.phase_fresnel
+                output_ef.phaseInNm[:] = (self.prop_sign * self.xp.angle(
+                    self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil]) * self.wavelengthInNm / (
+                                                  2 * self.xp.pi))
+                # output_ef.phaseInNm[:] = self.prop_sign * self.phase_fresnel
                 output_ef.A[:] = (abs(self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil]))
 
 

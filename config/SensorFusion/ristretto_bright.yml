@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/XAO'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        4.000                 # [s] 1 second simulation
+  total_time:        1.000                 # [s] 1 second simulation
   time_step:         0.00025                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -89,8 +89,8 @@ pyr:
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   fov:               2.0                     # Requested field-of-view [arcsec]
   mod_amp:           1.0                     # Modulation radius (in lambda/D units)
-  output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    1200                     # [nm] Pyramid wavelength
+  output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    750                     # [nm] Pyramid wavelength
   inputs:
     in_ef: 'first_stage_prop.out_ef' 
 
@@ -232,7 +232,7 @@ dm1:
 ######################### dCAO compensation #########################
 # cmd1_to_cmd2:
 #   class: 'MVM'
-#   recmat_object: 'bmc2k_vlt_1300modes_to_dm468_vlt_300modes' #'bmc2k_vlt_1300modes_to_bmc2k_vlt_300modes' #'bmc2k_vlt_1300modes_to_dm468_vlt_300modes' #'bmc2k_vlt_1300modes_to_dm241_vlt_150modes'
+#   recmat_object: 'bmc2k_vlt_1300modes_to_dm468_vlt_300modes' 
 #   inputs:
 #     in_vector: 'filter1.out_comm'
 #   outputs: ['out_vector']

@@ -5,7 +5,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/FSOC/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       120                   # Must match influence function computation
   pixel_pitch:       0.00833              # [m] Pitch of the pupil phase array (1.82m/120pix)
-  total_time:        2.0                   # [s] Total simulation running time
+  total_time:        1.0                   # [s] Total simulation running time
   time_step:         0.0005                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -64,7 +64,8 @@ prop:
   simul_params_ref:  'main'
   source_dict_ref:   ['source_ngs'] 
   doFresnel: true
-  padding_factor: 4
+  padding_factor: 4  
+  wavelengthInNm:    1550  
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']       # Pupil
@@ -85,7 +86,7 @@ pyr:
   pup_diam:          40.                     # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   fov:               15.0                     # Requested field-of-view [arcsec]
-  mod_amp:           0.0                     # Modulation radius (in lambda/D units)
+  mod_amp:           5.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    1550                     # [nm] Pyramid wavelength
   inputs:
@@ -110,7 +111,7 @@ ocam:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'           
-  sn_object:              'pyr0.0_40x40_sn' # Commented during calibration
+  # sn_object:              'pyr0.0_40x40_sn' # Commented during calibration
   slopes_from_intensity:  true
   inputs:
     in_pixels:        'ocam.out_pixels'
@@ -118,7 +119,7 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr0.0_40x40_400modes_rec'        
+  recmat_object:     'pyr5.0_40x40_400modes_rec'        
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -224,6 +225,7 @@ data_store:
   store_dir:         '/raid1/mmenessini/results/FSOC'             # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
+                  'atmo_phase-prop.out_source_ngs_ef',
                   'sr-psf.out_sr',
                   'atmo_res-atmo_modes.out_modes',
                   'dm_res-dm_mode_res.out_modes',

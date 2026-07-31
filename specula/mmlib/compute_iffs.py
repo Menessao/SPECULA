@@ -82,9 +82,9 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         pupil_mask = hdu[1].data
     else:
         pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0, obsratio=obsratio)
+        fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask)
         
     # unobs_pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0)
-
 
     # Step 3: Create output directory
     os.makedirs(os.path.join(root_dir, 'ifunc'), exist_ok=True)
@@ -301,7 +301,7 @@ if __name__ == "__main__":
     soul_dir = '/raid1/mmenessini/calibration/SOUL'
     ekarus_dir = '/raid1/mmenessini/calibration/EKARUS'
     fsoc_dir = '/raid1/mmenessini/calibration/FSOC'
-    
+
     # Npix = 160
     # compute_and_save_influence_functions(root_dir,tag='bmc2k_vlt', pupil_pixels=Npix, n_acts=50,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, pupil_mask_tag='vlt_pupil')
@@ -322,7 +322,7 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
-    compute_and_save_influence_functions(ekarus_dir,tag='dm468_unobs', pupil_pixels=Npix, n_acts=24,
-                                          geom='alpao', r0=5e-2, obsratio=0.0, D=1.82)
+    compute_and_save_influence_functions(ekarus_dir,tag='simul_DM468', pupil_pixels=Npix, n_acts=24,
+                                          geom='alpao', r0=3e-2, obsratio=0.0, D=1.82)
     # compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
     #                                       geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)
