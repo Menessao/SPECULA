@@ -26,24 +26,34 @@ def regularize_mat(mat, thr:float=1e-2):
     return mat
 
 def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:int, D:float, r0=0.03, L0=25):
-    
-    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_IFFs.fits')))
-    mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
+    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_IFFs.fits')))
+    # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
+    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'alpaoIFFs.fits')))
+    # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'alpaoPupMask.fits')),dtype=bool)
+    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits')))
+    mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
+    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'purged_trim_IFs.fits')))
+    mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'trim_IFmask.fits')),dtype=bool)
 
     X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
-    minX = specula.xp.min(X[~mask])
-    maxX = specula.xp.max(X[~mask])
-    minY = specula.xp.min(Y[~mask])
-    maxY = specula.xp.max(Y[~mask])
+    minX = specula.xp.min(X[~mask.astype(bool)])
+    maxX = specula.xp.max(X[~mask.astype(bool)])
+    minY = specula.xp.min(Y[~mask.astype(bool)])
+    maxY = specula.xp.max(Y[~mask.astype(bool)])
 
     crop_mask = mask[int(minX-1):int(maxX+1),:]
     crop_mask = crop_mask[:,int(minY-1):int(maxY+1)]
 
+    # print(specula.xp.sum(1-mask),specula.xp.sum(1-crop_mask),mask.shape,mask.dtype,minX,maxX,minY,maxY)
+
     Nacts = specula.xp.shape(iffs)[0]
     aux = specula.xp.zeros(crop_mask.shape,dtype=specula.xp.float32)
 
-    binned_shape = (Npix,Npix)
-    bin_mask = toccd(crop_mask.astype(float), binned_shape, xp=specula.xp) > 0
+    # binned_shape = (Npix,Npix)
+    # bin_mask = toccd(crop_mask.astype(float), binned_shape, xp=specula.xp) > 0
+    bin_mask = crop_mask.copy()
+    binned_shape = crop_mask.shape
+    Npix = binned_shape[0]
     # print(bin_mask.shape,specula.xp.sum(1-bin_mask),specula.xp.sum(bin_mask))
     # fits.writeto(os.path.join(root_dir,'mask','bin_mask.fits'),cpuArray(bin_mask.astype(float)),overwrite=True)
     # pupil = specula.xp.array(fits.getdata(os.path.join(root_dir,'pupilstop',mask_tag+'.fits')),dtype=bool)
@@ -93,7 +103,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
         L0=L0,
         zern_modes=zern_modes,
         oversampling=oversampling,
-        if_max_condition_number=1e+4,
+        if_max_condition_number=None,
         xp=specula.xp,
         dtype=specula.xp.float32
     )
@@ -165,6 +175,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     pupil_mask = Pupilstop(simul_params=simul_params, input_mask=1-bin_mask) # bin_pup_mask
     fname = os.path.join(root_dir, 'pupilstop', tag+f'_{Npix:1.0f}pixels.fits')
     pupil_mask.save(fname)
+    print("OK: " + fname + f" (pupil mask: {bin_mask.shape})")
 
 
 
@@ -173,7 +184,7 @@ if __name__ == "__main__":
     data_path = '/raid1/mmenessini/calibration/EKARUS/data'
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
 
-    postprocess_iffs(root_dir=root_dir, data_path=data_path, mask_tag='copernico_pupil_120pixels', tag='unobs_DM468', Npix=120, D=D)
+    postprocess_iffs(root_dir=root_dir, data_path=data_path, mask_tag='copernico_pupil_120pixels', tag='purged_trim_DM468', Npix=120, D=D)
 
 
 

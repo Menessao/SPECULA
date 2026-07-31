@@ -358,8 +358,10 @@ class AtmoPropagation(BaseProcessingObj):
 
     def angular_spectrum_propagation(self, ef_in, propagator):
         if propagator[0] is not None:
-            ef_in *= propagator[0]
-        self.ft_ef1[:] = self.xp.fft.fft2(self.xp.fft.fftshift(ef_in, axes=(-2, -1)), axes=(-2, -1),
+            ef_prop = ef_in * propagator[0] 
+        else:
+            ef_prop = ef_in
+        self.ft_ef1[:] = self.xp.fft.fft2(self.xp.fft.fftshift(ef_prop, axes=(-2, -1)), axes=(-2, -1),
                                           norm="ortho")
         ef_fresnel_new = self.xp.fft.fftshift(
             self.xp.fft.ifft2(self.ft_ef1 * self.xp.fft.fftshift(propagator[1], axes=(-2, -1)), norm="ortho",
@@ -430,8 +432,19 @@ class AtmoPropagation(BaseProcessingObj):
                     output_ef.phaseInNm += self.prop_sign * self.ef_temp.phaseInNm
 
             if self.doFresnel:
+                # want = self.xp.angle(self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil])
+                # got = self.xp.angle(self.xp.exp(1j*self.phase_fresnel * 2*np.pi / self.wavelengthInNm,dtype=self.complex_dtype))
+                # want = self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil]
+                # got = abs(want) * self.xp.exp(1j*self.phase_fresnel * 2*np.pi / self.wavelengthInNm,dtype=self.complex_dtype)
+                # diff = self.xp.angle(want * self.xp.conj(got))
+                # print(self.xp.max(abs(diff)))
+                # assert np.allclose(want,got,1e-4)                
+                # output_ef.phaseInNm[:] = (self.prop_sign * self.xp.angle(
+                #     self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil]) * self.wavelengthInNm / (
+                #                                   2 * self.xp.pi))
                 output_ef.phaseInNm[:] = self.prop_sign * self.phase_fresnel
                 output_ef.A[:] = (abs(self.ef_fresnel[s_shifted[0]:s_shifted[0] + self.pixel_pupil, s_shifted[1]:s_shifted[1] + self.pixel_pupil]))
+
 
     def post_trigger(self):
         super().post_trigger()

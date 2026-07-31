@@ -58,8 +58,9 @@ prop:
   class:             'AtmoPropagation'
   simul_params_ref:  'main'
   source_dict_ref:   ['source_ngs'] 
-  # doFresnel: true
-  # padding_factor: 4
+  doFresnel: true
+  padding_factor: 4
+  wavelengthInNm: 750
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']       # Pupil
