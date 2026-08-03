@@ -66,10 +66,29 @@ prop:
     common_layer_list: ['pupilstop']       # Pupil
   outputs:           ['out_source_ngs_ef'] 
 
-first_stage_prop:
+ef_prop:
   class: 'ElectricFieldCombinator'
   inputs:
     in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm1.out_layer:-1'          # DM1 correction
+  outputs: ['out_ef']
+
+pyr_prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs'] 
+  doFresnel: true
+  padding_factor: 4
+  wavelengthInNm: 1200
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']       # Pupil
+  outputs:           ['out_source_ngs_ef'] 
+
+first_stage_prop:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'pyr_prop.out_source_ngs_ef'    # Turbulence
     in_ef2: 'dm1.out_layer:-1'          # DM1 correction
   outputs: ['out_ef']
 
@@ -90,7 +109,7 @@ pyr:
   fov:               2.0                     # Requested field-of-view [arcsec]
   mod_amp:           1.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    750                     # [nm] Pyramid wavelength
+  wavelengthInNm:    1200                     # [nm] Pyramid wavelength
   inputs:
     in_ef: 'first_stage_prop.out_ef' 
 
@@ -258,7 +277,7 @@ coro_psf1:
   # use_average_field: false
   compute_profile_metrics: true
   inputs:
-    in_ef:           'first_stage_prop.out_ef' 
+    in_ef:           'ef_prop.out_ef' 
 
 psf1:
   class:             'PSF'
@@ -268,7 +287,7 @@ psf1:
   start_time:        1.0                 # Start PSF integration after 500ms
   verbose: true
   inputs:
-    in_ef:           'first_stage_prop.out_ef'
+    in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 # coro_psf2:

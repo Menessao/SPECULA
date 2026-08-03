@@ -14,8 +14,9 @@ from specula.data_objects.m2c import M2C
 from specula.calib_manager import CalibManager
 from specula.lib.modal_base_generator import make_modal_base_from_ifs_fft
 from specula.lib.toccd import toccd
+from specula.lib.make_mask import make_mask
 
-# from specula import cpuArray
+from specula import cpuArray
 
 
 def regularize_mat(mat, thr:float=1e-2):
@@ -30,10 +31,10 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
     # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'alpaoIFFs.fits')))
     # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'alpaoPupMask.fits')),dtype=bool)
-    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits')))
-    # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
-    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'purged_trim_IFs.fits')))
-    mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'trim_IFmask.fits')),dtype=bool)
+    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'../ifunc/reordered_DM468_ifunc.fits'))).T
+    mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
+    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'purged_trim_IFs.fits')))
+    # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'trim_IFmask.fits')),dtype=bool)
 
     X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
     minX = specula.xp.min(X[~mask.astype(bool)])
@@ -44,16 +45,19 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     crop_mask = mask[int(minX-1):int(maxX+1),:]
     crop_mask = crop_mask[:,int(minY-1):int(maxY+1)]
 
+
     # print(specula.xp.sum(1-mask),specula.xp.sum(1-crop_mask),mask.shape,mask.dtype,minX,maxX,minY,maxY)
 
     Nacts = specula.xp.shape(iffs)[0]
     aux = specula.xp.zeros(crop_mask.shape,dtype=specula.xp.float32)
 
-    # binned_shape = (Npix,Npix)
-    # bin_mask = toccd(crop_mask.astype(float), binned_shape, xp=specula.xp) > 0
-    bin_mask = crop_mask.copy()
-    binned_shape = crop_mask.shape
-    Npix = binned_shape[0]
+    binned_shape = (Npix,Npix)
+    # bin_mask = toccd(specula.xp.array(crop_mask).astype(float), binned_shape, xp=specula.xp) > 0
+    obsratio = 0.3
+    bin_mask = (1-make_mask(np_size=Npix, diaratio=1.0, obsratio=obsratio)).astype(bool)
+    # bin_mask = crop_mask.copy()
+    # binned_shape = crop_mask.shape
+    # Npix = binned_shape[0]
     # print(bin_mask.shape,specula.xp.sum(1-bin_mask),specula.xp.sum(bin_mask))
     # fits.writeto(os.path.join(root_dir,'mask','bin_mask.fits'),cpuArray(bin_mask.astype(float)),overwrite=True)
     # pupil = specula.xp.array(fits.getdata(os.path.join(root_dir,'pupilstop',mask_tag+'.fits')),dtype=bool)
@@ -66,6 +70,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     # # Regularized influence functions
     # iffs = regularize_mat(iffs, thr=1e-2)  # was 2e/4
 
+    print(int(specula.xp.sum(1-bin_mask)),iffs.shape)
     IF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))]) # bin_pup_mask
     unobsIF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))])
 
@@ -98,7 +103,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
     kl_basis, m2c, _ = make_modal_base_from_ifs_fft(
         pupil_mask=specula.xp.array(1-bin_mask),
         diameter=D,
-        influence_functions=unobsIF,
+        influence_functions=IF, #unobsIF,
         r0=r0,
         L0=L0,
         zern_modes=zern_modes,
@@ -184,7 +189,7 @@ if __name__ == "__main__":
     data_path = '/raid1/mmenessini/calibration/EKARUS/data'
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
 
-    postprocess_iffs(root_dir=root_dir, data_path=data_path, mask_tag='copernico_pupil_120pixels', tag='purged_trim_DM468', Npix=120, D=D)
+    postprocess_iffs(root_dir=root_dir, data_path=data_path, mask_tag='copernico_pupil_120pixels', tag='reordered_obs_DM468', Npix=160, D=D)
 
 
 

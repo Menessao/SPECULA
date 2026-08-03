@@ -182,6 +182,8 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
     print(f'Pupil pixel centers: {x_c},{y_c}')
     x = (x-x_c)*shrink + x_c
     y = (y-y_c)*shrink + y_c
+    sort_ids = np.argsort(y*dim+x)
+    y = y[sort_ids[::-1]]
     coordinates = xp.vstack((x, y))
     grid_x, grid_y = xp.meshgrid(xp.arange(dim), xp.arange(dim))
 
@@ -258,7 +260,7 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
         logger.info("Mechanical coupling applied.")
 
     if do_slaving:
-        ifs_cube, coordinates, n_act_tot, slave_mat = apply_slaving(
+        ifs_cube, coordinates, master_ids, slave_mat = apply_slaving(
             ifs_cube=ifs_cube,
             coordinates=coordinates,
             idx=idx,
@@ -271,15 +273,17 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
             dtype=dtype
         )
         coords = coordinates
+        n_act_tot = len(master_ids)
     else:
         coords = coordinates
+        master_ids = None
         slave_mat = xp.zeros((n_act_tot, n_act_tot), dtype=dtype)
 
     ifs_2d = xp.array([ifs_cube[i][idx] for i in range(n_act_tot)], dtype=dtype)
 
     logger.info("Computation completed.")
 
-    return ifs_2d, mask, coords, slave_mat
+    return ifs_2d, mask, coords, slave_mat, master_ids
 
 
 # ==============================================================================
@@ -426,4 +430,4 @@ def apply_slaving(ifs_cube, coordinates, idx, step, slaving_thr=0.1,
     # Update the slave_mat using xp.ix_ for correct numpy/cupy indexing
     slave_mat[xp.ix_(idx_master, idx_slave)] = W_ms
 
-    return ifs_cube_out, coords_out, len(idx_master), slave_mat
+    return ifs_cube_out, coords_out, idx_master, slave_mat

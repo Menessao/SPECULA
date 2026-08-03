@@ -13,7 +13,7 @@ from specula.data_objects.m2c import M2C
 from specula.calib_manager import CalibManager
 from specula import cpuArray
 
-from specula.mmlib.utils import remap_on_new_mask
+# from specula.mmlib.utils import remap_on_new_mask
 
 from astropy.io import fits
 
@@ -82,7 +82,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         pupil_mask = hdu[1].data
     else:
         pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0, obsratio=obsratio)
-        fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask)
+        fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask,overwrite=True)
         
     # unobs_pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0)
 
@@ -91,7 +91,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     os.makedirs(os.path.join(root_dir, 'm2c'), exist_ok=True)
 
     # Step 1: Generate zonal influence functions
-    influence_functions,mask,coords,slaveMat = compute_zonal_ifunc(
+    influence_functions,mask,coords,slaveMat,master_ids = compute_zonal_ifunc(
         pupil_pixels,
         n_actuators,
         geom=geom,
@@ -107,6 +107,10 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         dtype=dtype,
         shrink=shrink_coords,
     )
+
+    if doSlaving:
+        fits.writeto(os.path.join(root_dir,'ifunc',tag+'_masterids.fits'),cpuArray(master_ids),overwrite=True)
+        fits.writeto(os.path.join(root_dir,'ifunc',tag+'_slavemat.fits'),cpuArray(slaveMat),overwrite=True)
 
     # influence_functions = remap_on_new_mask(influence_functions,old_mask=(1-unobs_pupil_mask).astype(bool),new_mask=(1-pupil_mask).astype(bool),xp=specula.xp)
 
@@ -135,7 +139,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         L0=L0,
         zern_modes=zern_modes,
         oversampling=oversampling,
-        if_max_condition_number=1e+2,
+        if_max_condition_number=1e+3,
         xp=specula.xp,
         dtype=dtype
     )
@@ -315,14 +319,16 @@ if __name__ == "__main__":
 
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
-    Npix = 120
+    Npix = 160
     # compute_and_save_influence_functions(ekarus_dir,tag='dm820', pupil_pixels=Npix, n_acts=32, #shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm241', pupil_pixels=Npix, n_acts=17, #shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
-    compute_and_save_influence_functions(ekarus_dir,tag='simul_DM468', pupil_pixels=Npix, n_acts=24,
+    # compute_and_save_influence_functions(ekarus_dir,tag='simul_DM468', pupil_pixels=Npix, n_acts=24,
+    #                                       geom='alpao', r0=3e-2, obsratio=0.0, D=1.82)
+    compute_and_save_influence_functions(ekarus_dir,tag='simul_unobs_DM468', pupil_pixels=Npix, n_acts=24,
                                           geom='alpao', r0=3e-2, obsratio=0.0, D=1.82)
     # compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
     #                                       geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)
