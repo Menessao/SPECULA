@@ -229,3 +229,45 @@ def remap_on_new_mask(data, old_mask, new_mask, xp=np):
         remasked_data = remasked_data.T
     
     return remasked_data
+
+
+
+def image_grid(shape, recenter:bool = False):
+    ny, nx = shape
+    cy, cx = (0,0)
+    if recenter:
+        cy, cx = ny//2, nx//2
+    x = np.arange(nx, dtype=float) - cx
+    y = np.arange(ny, dtype=float) - cy
+    X,Y = np.meshgrid(x, y)
+    return X,Y
+
+def get_photocenter(image,offset:bool=False):
+    X,Y = image_grid(image.shape)
+    qy = np.sum(Y * image) / np.sum(image)
+    qx = np.sum(X * image) / np.sum(image)
+    if offset:
+        qy += 0.5
+        qx += 0.5
+    return qx,qy 
+
+def get_frame_pupil_centers(frame,thr=0.3,xhalf=100,yhalf=120):
+    Y,X = image_grid(frame.shape)
+    ll = (X<=xhalf) * (Y<=yhalf)
+    lr = (X>xhalf) * (Y<=yhalf)
+    ul = (X<=xhalf) * (Y>yhalf)
+    ur = (X>xhalf) * (Y>yhalf)
+    centers = np.zeros([4,2])
+    mask = (frame*ll > thr*np.nanmax(frame*ll)).astype(bool)
+    qx,qy = get_photocenter(mask)
+    centers[0,:] = np.array([qx,qy])
+    mask = (frame*lr > thr*np.nanmax(frame*lr)).astype(bool)
+    qx,qy = get_photocenter(mask)
+    centers[1,:] = np.array([qx,qy])
+    mask = (frame*ul > thr*np.nanmax(frame*ul)).astype(bool)
+    qx,qy = get_photocenter(mask)
+    centers[2,:] = np.array([qx,qy])
+    mask = (frame*ur > thr*np.nanmax(frame*ur)).astype(bool)
+    qx,qy = get_photocenter(mask)
+    centers[3,:] = np.array([qx,qy])
+    return centers

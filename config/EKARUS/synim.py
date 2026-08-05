@@ -11,7 +11,7 @@ from scipy.ndimage import rotate
 
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
-from specula.mmlib.utils import get_pupil_mask
+from specula.mmlib.utils import get_pupil_mask, get_frame_pupil_centers
 from specula.mmlib.yaml_overrides import write_yaml_overrides
 
 klinv = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/reordered_unobs_DM468_kl_inv.fits')
@@ -20,7 +20,14 @@ ifunc = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/reordered_unobs
 ekapup = fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_160pixels.fits')
 
 imfull = fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/IntMat_20260802_233704.fits')
-pyr_mask = get_pupil_mask(npix=120,filepath='/raid1/mmenessini/calibration/EKARUS/pupils/pyr_pupdata_onbench.fits')
+pyr_mask = get_pupil_mask(npix=240,filepath='/raid1/mmenessini/calibration/EKARUS/pupils/pyr_pupdata_onbench.fits')
+crop_pyr_mask = pyr_mask[60:180,60:180]
+
+pup_hdu = fits.open('/raid1/mmenessini/calibration/EKARUS/pupils/pyr_pupdata_onbench.fits')
+pup_ids = pup_hdu[1].data
+
+im_tag = 'pyr5.0_dm468_onbench_synim'
+ifunc_tag = 'dm468_ifunc_shift'
 
 
 def shift_image(image, shift, axis):
@@ -91,7 +98,7 @@ def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None
     if shearAmp is not None:
         ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=ekapup)
-    ifunc_obj.save('/raid1/mmenessini/calibration/EKARUS/ifunc/dm468_ifunc_shift.fits', overwrite=True)
+    ifunc_obj.save(f'/raid1/mmenessini/calibration/EKARUS/ifunc/{ifunc_tag}.fits', overwrite=True)
 
 def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
     ifunc_new = ifunc.copy()
@@ -117,35 +124,74 @@ def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=Non
     ifunc_inv_obj.save('/raid1/mmenessini/calibration/EKARUS/ifunc/dm468_ifunc_bestshift_inv.fits', overwrite=True)
 
 
+# def evaluate_error(Nmodes:int):
+#     refim = im[:Nslopes,:Nmodes]
+#     aux = fits.getdata('/raid1/mmenessini/calibration/EKARUS/im/pyr3.0_40x40_lbt_synim.fits')[:,:Nmodes]
+#     synim = aux.copy()
+#     synim[:Nslopes//2,:] = aux[Nslopes//2:,:]
+#     synim[Nslopes//2:,:] = aux[:Nslopes//2,:]*-1
+#     synim -= np.mean(synim,axis=0)
+#     synim *= np.std(refim,axis=0)/np.std(synim,axis=0)
+#     err = np.zeros(Nmodes)
+#     for j in range(Nmodes):
+#         img = np.zeros(np.size(half_mask))
+#         img[half_mask.flatten()] = refim[pupids,j]
+#         img = img.reshape([60,120])
+#         np.put(fimg, pup_ids[:,0], synim[:Nslopes//2,j])
+#         np.put(fimg, pup_ids[:,1], synim[Nslopes//2:,j])
+#         f2d = fimg.reshape([npix,npix])
+#         delta = img - f2d[:60,:120]
+#         err[j] = np.sqrt(np.sum(delta[half_mask]**2))
+#     return err
+
+imframe = np.std(imfull,axis=1).reshape([240,240])
+
+ref_centers = get_frame_pupil_centers(imframe)
+avg_center = np.mean(ref_centers,axis=0)
+
+xmin = int(np.round(avg_center[0]))-60
+xmax = int(np.round(avg_center[0]))+60
+ymin = int(np.round(avg_center[1]))-60
+ymax = int(np.round(avg_center[1]))+60
+
+refim = np.zeros([np.sum(crop_pyr_mask),imfull.shape[1]])
+for j in range(imfull.shape[1]):
+    img = imfull[:,j].reshape([240,240])
+    crop_img = img[ymin:ymax,xmin:xmax]
+    refim[:,j] = crop_img[crop_pyr_mask]
+
 def evaluate_error(Nmodes:int):
-    refim = im[:Nslopes,:Nmodes]
-    aux = fits.getdata('/raid1/mmenessini/calibration/EKARUS/im/pyr3.0_40x40_lbt_synim.fits')[:,:Nmodes]
-    synim = aux.copy()
-    synim[:Nslopes//2,:] = aux[Nslopes//2:,:]
-    synim[Nslopes//2:,:] = aux[:Nslopes//2,:]*-1
-    synim -= np.mean(synim,axis=0)
-    synim *= np.std(refim,axis=0)/np.std(synim,axis=0)
+    calibim = fits.getdata(f'/raid1/mmenessini/calibration/EKARUS/im/{im_tag}.fits')[:,:Nmodes]
+    calibim -= np.mean(calibim,axis=0)
+    calibim *= np.std(refim,axis=0)/np.std(calibim,axis=0)
     err = np.zeros(Nmodes)
     for j in range(Nmodes):
-        img = np.zeros(np.size(half_mask))
-        img[half_mask.flatten()] = refim[pupids,j]
-        img = img.reshape([60,120])
-        np.put(fimg, pup_ids[:,0], synim[:Nslopes//2,j])
-        np.put(fimg, pup_ids[:,1], synim[Nslopes//2:,j])
-        f2d = fimg.reshape([npix,npix])
-        delta = img - f2d[:60,:120]
-        err[j] = np.sqrt(np.sum(delta[half_mask]**2))
+        want = refim[:,j]
+        fimg = np.zeros([240,240])
+        rtot = 0
+        for i in range(4):
+            valid_ids = pup_ids[:,i] != -1
+            len_ids = np.sum(valid_ids)
+            np.put(fimg, pup_ids[valid_ids,i], calibim[rtot:rtot+len_ids,j])
+            rtot += len_ids
+        f2d = fimg.reshape([240,240])[60:180,60:180]
+        got = f2d[crop_pyr_mask]
+        delta = want - got
+        err[j] = np.sqrt(np.sum(delta**2))
     return err
 
 def evaluate_metric(Nmodes,return_err:bool=False):
     ovdes = ("{"
-            f"main.total_time: {Nmodes*0.001}, "
+            f"main.total_time: {Nmodes*0.001*2}, "
             f"dm.nmodes: {Nmodes}, "
-            f"pushpull.nmodes: {Nmodes}, "
+            f"pushpull.nmodes: {Nmodes}, "  
+            f"pushpull.amp:    3000000, "
             f"pyr_im_calibrator.nmodes: {Nmodes}, "
-            f"pyr_im_calibrator.im_tag: 'pyr5.0_onbench_dm468_synim', "
+            f"pyr_im_calibrator.im_tag: {im_tag}, "
             f"pyr_im_calibrator.overwrite: true, "
             f"pyr.mod_amp: 5.0, "
+            f"dm.ifunc_object:      {ifunc_tag}, "
+            f"dm.m2c_object:        'M2C_KL_OOPAO_central_obstruction', "
             "}")
     write_yaml_overrides(input_string=ovdes, temp_name='temp_synim')
     main_config = 'ekarus_onbench.yml calib_im.yml'
@@ -165,7 +211,7 @@ if __name__ == "__main__":
 
     Nmodes = 300
 
-    rot0 = 55.38
+    rot0 = 0.0
     shiftX0 = 0.0
     shiftY0 = 0.0
     shearAmp0 = 0
@@ -174,9 +220,9 @@ if __name__ == "__main__":
     prefix = 'it0_'
     overwrite = False
 
-    rotvec = np.linspace(-2.0,2.0,21)
+    rotvec = np.linspace(-5.0,5.0,21)
     shiftvec = np.linspace(-1.5,1.5,21)
-    mags = np.linspace(-0.05,0.1,23)+1.0
+    mags = np.linspace(-0.05,0.05,11)+1.0
 
     # shear_amps = np.linspace(-0.1,0.1,11)
     # shear_angles = np.linspace(-np.pi/8,np.pi/8,11)

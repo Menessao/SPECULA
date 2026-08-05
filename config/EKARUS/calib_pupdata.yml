@@ -5,7 +5,8 @@ pyr_pupdata:
   thr1: 0.05
   thr2: 0.02
   display_debug: false
-  output_tag:        'pyr_pupdata_onbench'
+  slopes_from_intensity: true
+  output_tag:        'pyr_pupdata_onsky'
   overwrite: true
   inputs:
     in_i: 'pyr.out_i'

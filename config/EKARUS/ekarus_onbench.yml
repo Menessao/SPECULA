@@ -35,7 +35,8 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  simul_params_ref:  'main'
+  tag:                'reordered_unobs_DM468_160pixels'
+  # simul_params_ref:  'main'
 
 # Multi-layer atmospheric model
 atmo:
@@ -74,8 +75,8 @@ pyr:
   simul_params_ref:  'main'
   pup_diam:          38.                     # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
-  pyr_tlt_coeff:     [[1.1328852114285715, 1.0876296414285715, 1.1665203742857142, 1.1357142857142857],
-                      [1.0607142857142857, 0.9845511985714286, 1.0239343157142857, 0.95]]
+  pyr_tlt_coeff:     [[1.1328852114285715, 1.0976296414285716, 1.18185203742857142, 1.1357142857142857],
+                      [1.0607142857142857, 0.9545511985714286, 1.0589343157142857, 0.985]]
   fov:               8.8                     # Requested field-of-view [arcsec]
   mod_amp:           5.0                     # Modulation radius (in lambda/D units)
   output_resolution: 240                      # Output sampling [usually corresponding to CCD pixels]
@@ -127,7 +128,7 @@ dm:
   class:             'DM'
   simul_params_ref:  'main'
   ifunc_object:      'reordered_unobs_DM468_ifunc'  # Measured Influence functions
-  m2c_object:        'M2C_KL_OOPAO'                 # OOPAO M2C
+  m2c_object:        'M2C_KL_OOPAO_central_obstruction'                 # OOPAO M2C
   # ifunc_object:      'simul_unobs_DM468_ifunc'      # Simulated Influence functions
   # m2c_object:        'simul_unobs_DM468_m2c'        # Synthetic Modal-to-command matrix
   height:            0                # Ground-conjugated DM

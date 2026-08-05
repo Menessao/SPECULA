@@ -79,8 +79,8 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
         unobsIF[j,:] = bin_if[~bin_mask]
 
     
-    # Regularized influence functions
-    IF = regularize_mat(IF, thr=1e-1)
+    # # Regularized influence functions
+    # IF = regularize_mat(IF, thr=1e-1)
 
     zern_modes = 2
     oversampling = 4
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     data_path = '/raid1/mmenessini/calibration/EKARUS/data'
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
 
-    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='reordered_obs_DM468', Npix=160, D=D, obsratio=0.33)
+    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='reordered_unobs_DM468', Npix=160, D=D, obsratio=0.0)
 
 
 

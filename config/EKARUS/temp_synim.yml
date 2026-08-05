@@ -1,0 +1,15 @@
+main_override:
+  total_time: 0.6
+dm_override:
+  nmodes: 300
+  ifunc_object: dm468_ifunc_shift
+  m2c_object: 'M2C_KL_OOPAO_central_obstruction'
+pushpull_override:
+  nmodes: 300
+  amp: 3000000
+pyr_im_calibrator_override:
+  nmodes: 300
+  im_tag: pyr5.0_dm468_onbench_synim
+  overwrite: true
+pyr_override:
+  mod_amp: 5.0

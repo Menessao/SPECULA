@@ -4,16 +4,16 @@
 # Push-pull command generator
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       400                        # Number of DM actuators
-  amp:          20
+  nmodes:       300                        # Number of DM actuators
+  amp:          3000000
   outputs:   ['output']
 
 # Interaction matrix calibrator
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    400                         # Number of modes to calibrate
+  nmodes:    300                         # Number of modes to calibrate
   im_tag:    'pyr5.0_onbench_dm468_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -21,7 +21,7 @@ pyr_im_calibrator:
 # Override main simulation parameters
 main_override:
   time_step: 0.001
-  total_time: 0.8                 # 400 modes × 2 (push+pull) × 0.001s
+  total_time: 0.6                 # 400 modes × 2 (push+pull) × 0.001s
 
 # Disable atmosphere for clean calibration
 prop_override:
@@ -36,16 +36,16 @@ prop_override:
 # Override DM to use calibration commands
 dm_override:
   sign: 1                                 # Use positive sign for calibration (default is -1)
-  nmodes: 400                            # Use all modes for calibration
+  nmodes: 300                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
-  # ifunc_object:      'dm468_ifunc'      # Influence functions
+  # ifunc_object:      'reordered_unobs_DM468_ifunc'      # Influence functions
   # m2c_object:        'dm468_m2c'        # Modal-to-command matrix
 
 pyr_override:
   # pup_diam:          40.                     # Pupil diameter in subaps.
   # pup_dist:          60.    
-  mod_amp: 5.0
+  mod_amp: 6.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
@@ -56,6 +56,14 @@ ocam_override:
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
+data_store_override:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/EKARUS'             # Data result directory: 'store_dir'/TN/
+  create_tn: false
+  inputs:
+    input_list: ['calib_frame-ocam.out_pixels',
+                  'dm_ef-prop.out_source_ngs_ef']
+
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes',
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'data_store',
         'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec'] #,'coro_psf'

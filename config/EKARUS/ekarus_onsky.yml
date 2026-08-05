@@ -127,7 +127,7 @@ dm:
   class:             'DM'
   simul_params_ref:  'main'
   ifunc_object:      'reordered_unobs_DM468_ifunc'  # Measured Influence functions
-  m2c_object:        'M2C_KL_OOPAO'                 # OOPAO M2C
+  m2c_object:        'M2C_KL_OOPAO_central_obstruction'                 # OOPAO M2C
   # ifunc_object:      'simul_unobs_DM468_ifunc'      # Simulated Influence functions
   # m2c_object:        'simul_unobs_DM468_m2c'        # Synthetic Modal-to-command matrix
   height:            0                # Ground-conjugated DM
