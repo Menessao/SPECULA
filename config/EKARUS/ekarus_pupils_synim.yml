@@ -15,12 +15,16 @@ source_ngs:
   polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
   height:            .inf                  # Infinite height (star)
   magnitude:         1.0                   # R-band magnitude (bright NGS)
-  wavelengthInNm:    750                   # [nm] R-band for WFS
+  wavelengthInNm:    700                   # [nm] R-band for WFS
 
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
   tag:               'Copernico_Pupil_160pixels' 
+  
+dmstop:
+  class:             'Pupilstop'
+  simul_params_ref:   'main'
 
   
 # Atmospheric propagation
@@ -38,23 +42,23 @@ prop:
 pyr:
   class:             'ModulatedPyramid'
   simul_params_ref:  'main'
-  pup_diam:          38.                     # Pupil diameter in subaps.
+  pup_diam:          36.5                     # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   # pyr_tlt_coeff:     [[1.16145664, 1.11620107, 1.15223466, 1.12545586],
   #                     [0.97246648, 0.95597977, 1.03822003, 1.05478171]]
-  pyr_tlt_coeff:     [[1.16145664, 1.11620107, 1.15223466, 1.15],
-                      [1.075, 0.95597977, 1.03822003, 0.95]]
-  fov:               6.0                     # Requested field-of-view [arcsec]
+  pyr_tlt_coeff:     [[1.1471709257142857, 1.0876296414285715, 1.1665203742857142, 1.1357142857142857],
+                      [1.075, 0.9702654842857144, 1.0096486014285715, 0.95]]
+  fov:               8.8                     # Requested field-of-view [arcsec]
   mod_amp:           5.0                     # Modulation radius (in lambda/D units)
-  output_resolution: 120                      # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    750                     # [nm] Pyramid wavelength
+  output_resolution: 240                      # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    700                     # [nm] Pyramid wavelength
   inputs:
     in_ef: 'prop.out_source_ngs_ef'
 
 ocam:
   class:             'CCD'
   simul_params_ref:  'main'
-  size:              [120,120]            # Total detector size
+  size:              [240,240]            # Total detector size
   dt:                0.0005              # [s] Integration time (2000 fps)
   bandw:             300                   # [nm]
   # photon_noise:      true                  # Enable photon noise

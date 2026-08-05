@@ -12,8 +12,8 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    400                         # Number of modes to calibrate
-  im_tag:    'pyr5.0_40x40_dm468_im'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  im_tag:    'pyr5.0_onbench_dm468_im'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -30,8 +30,8 @@ prop_override:
     common_layer_list: ['pupilstop', 'dm.out_layer']  # Only pupil + DM
   outputs:           ['out_source_ngs_ef']
 
-pyr_slopes_override:
-  pupdata_object:         'pyr_pupdata_40x40'  
+# pyr_slopes_override:
+#   pupdata_object:         'pyr_pupdata_40x40'  
 
 # Override DM to use calibration commands
 dm_override:
@@ -39,8 +39,8 @@ dm_override:
   nmodes: 400                            # Use all modes for calibration
   inputs:
     in_command: 'pushpull.output'         # Connect to push-pull generator
-  ifunc_object:      'dm468_ifunc'      # Influence functions
-  m2c_object:        'dm468_m2c'        # Modal-to-command matrix
+  # ifunc_object:      'dm468_ifunc'      # Influence functions
+  # m2c_object:        'dm468_m2c'        # Modal-to-command matrix
 
 pyr_override:
   # pup_diam:          40.                     # Pupil diameter in subaps.
@@ -49,15 +49,13 @@ pyr_override:
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
-# pyr_slopes_override:
-#   slopes_from_intensity: false
-
 # Disable noise for clean measurements
 ocam_override:
+  dt:             0.001
   photon_noise:   false                   # No photon noise
   readout_noise:  false                   # No read noise
   excess_noise:   false                   # No excess noise
 
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction','data_store','atmo_modes',
-        'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec','coro_psf'] 
+        'dm_mode_res','filter','psf', 'ef_prop','pyr_modalrec'] #,'coro_psf'

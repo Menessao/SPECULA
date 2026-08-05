@@ -57,7 +57,8 @@ img = img[ymin:ymax,xmin:xmax]
 
 def evaluate_metric():
     frame = fits.getdata('/raid1/mmenessini/results/EKARUS/frame.fits')[0]
-    diff = img/np.mean(img)-frame/np.mean(frame)
+    cframe = frame[60:180,60:180]
+    diff = img/np.mean(img)-cframe/np.mean(cframe)
     chi = np.sum(diff**2)
     return chi
 

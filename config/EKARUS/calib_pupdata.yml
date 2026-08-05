@@ -2,11 +2,11 @@
 # as a function of a single frame of the Pyramid WFS
 pyr_pupdata:
   class: 'PyrPupdataCalibrator'
-  thr1: 0.04
-  thr2: 0.05
+  thr1: 0.05
+  thr2: 0.02
   display_debug: false
-  output_tag:        'pyr_pupdata_40x40'
-  overwrite: false
+  output_tag:        'pyr_pupdata_onbench'
+  overwrite: true
   inputs:
     in_i: 'pyr.out_i'
 
@@ -21,7 +21,7 @@ prop_override:
     common_layer_list: ['pupilstop']       # Pupil
 
 pyr_override:
-  mod_amp:           10.0   # Modulation radius (in lambda/D units)
+  mod_amp:           30.0   # Modulation radius (in lambda/D units)
   inputs:
     in_ef: 'prop.out_source_ngs_ef'
 
