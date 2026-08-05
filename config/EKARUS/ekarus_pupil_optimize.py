@@ -63,28 +63,21 @@ def evaluate_metric():
 
 # Parameters to optimize
 cobs = np.linspace(0.3,0.4,21)
-rots = np.linspace(20,40,21)
-diams = np.linspace(37.5,40,6)
+rots = np.linspace(-20,-40,21)
+diams = np.linspace(36,40,9)
 dtlts = np.linspace(-0.1,0.1,15)
-pyr_tlt_ref = [[1.16145664, 1.11620107, 1.15223466, 1.15],[1.075, 0.95597977, 1.03822003, 0.95]]
+# pyr_tlt_ref = [[1.16145664, 1.11620107, 1.15223466, 1.15],[1.075, 0.95597977, 1.03822003, 0.95]]
+pyr_tlt_ref = [[1.1471709257142857, 1.0876296414285715, 1.1665203742857142, 1.1357142857142857], [1.075, 0.9702654842857144, 1.0096486014285715, 0.95]]
 
 result_dir = '/raid1/mmenessini/calibration/EKARUS/scratch_pupopt'
 overrides_name = 'pup_overrides'
+main_config = 'config/EKARUS/ekarus_pupils_synim.yml'
 results = []
 
 if __name__ == '__main__':
 
-    angle = -30
-    obs = 0.3
-
-    # vec = np.zeros(len(cobs))
-    # for i,cob in enumerate(cobs):
-    #     os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {cob:1.2f} {angle}')
-    #     os.system('specula config/EKARUS/ekarus_synim.yml')
-    #     vec[i] = evaluate_metric()
-    # np.savez(os.path.join(result_dir,'center_obs_metric.npz'),metric=vec,obstructions=cobs)
-    # obs = cobs[np.argmin(vec)]
-    # print(f'Selected {obs*1e+2:1.0f}% central obstruction')
+    angle = -28
+    obs = 0.32
 
     vec = np.zeros(len(diams))
     for i,diam in enumerate(diams):
@@ -93,47 +86,62 @@ if __name__ == '__main__':
                 f"pyr.pyr_tlt_coeff: {pyr_tlt_ref}, "
                 "}")
         write_yaml_overrides(input_string=ovdes, temp_name=overrides_name)
-        os.system('specula config/EKARUS/ekarus_synim.yml pup_overrides.yml')
+        os.system(f'specula {main_config} {overrides_name}.yml')
         vec[i] = evaluate_metric()
     np.savez(os.path.join(result_dir,'pup_sizes_metric.npz'),metric=vec,pup_diams=diams)
     diam = diams[np.argmin(vec)]
     print(f'Selected {diam:1.1f} pix diameter')
 
-    best_pyr_tlt = pyr_tlt_ref.copy()
-    for k in range(4):
-        vec = np.zeros([len(dtlts),len(dtlts)])
-        for i,dtlty in enumerate(dtlts):
-            for j,dtltx in enumerate(dtlts):
-                pyr_tlts = np.array(best_pyr_tlt)
-                pyr_tlts[0,k] = pyr_tlts[0,k] + dtltx
-                pyr_tlts[1,k] = pyr_tlts[1,k] + dtlty
-                pyr_tlt = (pyr_tlts).tolist()
-                ovdes = ("{"
-                        f"pyr.pup_diam: {diam:1.1f}, "
-                        f"pyr.pyr_tlt_coeff: {pyr_tlt}, "
-                        "}")
-                write_yaml_overrides(input_string=ovdes, temp_name=overrides_name)
-                os.system('specula config/EKARUS/ekarus_synim.yml pup_overrides.yml')
-                vec[i,j] = evaluate_metric()
-        np.savez(os.path.join(result_dir,f'pup{k:1.0f}_tilts_metric.npz'),metric=vec,tiltsX=pyr_tlts[0,k]+dtlts,tiltsY=pyr_tlts[1,k]+dtlts)
-        best_pyr_tlt[0,k] = pyr_tlts[0,k] + dtlts[np.unravel_index(pyr_tlt.argmin(), pyr_tlt.shape)[0]]
-        best_pyr_tlt[1,k] = pyr_tlts[1,k] + dtlts[np.unravel_index(pyr_tlt.argmin(), pyr_tlt.shape)[0]]
-        print(f'Selected {best_pyr_tlt[0,k]:1.2f},{best_pyr_tlt[1,k]:1.2f} for pupil {k}')
+    ovdes = ("{"
+            f"pyr.pup_diam: {diam:1.1f}, "
+            f"pyr.pyr_tlt_coeff: {pyr_tlt_ref}, "
+            "}")
+    write_yaml_overrides(input_string=ovdes, temp_name=overrides_name)
 
-    overrides = ("{"
-                f"pyr.pup_diam: {diam:1.1f}, "
-                f"pyr.pyr_tlt_coeff: {best_pyr_tlt}, "
-                "}")
-    write_yaml_overrides(input_string=overrides, temp_name=overrides_name)
+    # vec = np.zeros(len(cobs))
+    # for i,cob in enumerate(cobs):
+    #     os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {cob:1.2f} {angle}')
+    #     os.system(f'specula {main_config} {overrides_name}.yml')
+    #     vec[i] = evaluate_metric()
+    # np.savez(os.path.join(result_dir,'center_obs_metric.npz'),metric=vec,obstructions=cobs)
+    # obs = cobs[np.argmin(vec)]
+    # print(f'Selected {obs*1e+2:1.0f}% central obstruction')
+    # os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {obs:1.2f} {angle}')
+
+    # best_pyr_tlt = np.array(pyr_tlt_ref.copy())
+    # for k in range(4):
+    #     vec = np.zeros([len(dtlts),len(dtlts)])
+    #     for i,dtltx in enumerate(dtlts):
+    #         for j,dtlty in enumerate(dtlts):
+    #             pyr_tlts = best_pyr_tlt.copy()
+    #             pyr_tlts[0,k] = pyr_tlts[0,k] + dtltx
+    #             pyr_tlts[1,k] = pyr_tlts[1,k] + dtlty
+    #             ovdes = ("{"
+    #                     f"pyr.pup_diam: {diam:1.1f}, "
+    #                     f"pyr.pyr_tlt_coeff: {(pyr_tlts).tolist()}, "
+    #                     "}")
+    #             write_yaml_overrides(input_string=ovdes, temp_name=overrides_name)
+    #             os.system(f'specula {main_config} {overrides_name}.yml')
+    #             vec[i,j] = evaluate_metric()
+    #     np.savez(os.path.join(result_dir,f'pup{k:1.0f}_tilts_metric.npz'),metric=vec,tiltsX=pyr_tlts[0,k]+dtlts,tiltsY=pyr_tlts[1,k]+dtlts)
+    #     best_pyr_tlt[0,k] = best_pyr_tlt[0,k] + dtlts[np.unravel_index(vec.argmin(), vec.shape)[0]]
+    #     best_pyr_tlt[1,k] = best_pyr_tlt[1,k] + dtlts[np.unravel_index(vec.argmin(), vec.shape)[1]]
+    #     print(f'Selected {best_pyr_tlt[0,k]:1.2f},{best_pyr_tlt[1,k]:1.2f} for pupil {k}')
+
+    # overrides = ("{"
+    #             f"pyr.pup_diam: {diam:1.1f}, "
+    #             f"pyr.pyr_tlt_coeff: {best_pyr_tlt.tolist()}, "
+    #             "}")
+    # write_yaml_overrides(input_string=overrides, temp_name=overrides_name)
     
-    vec = np.zeros(len(rots))
-    for i,rot in enumerate(rots):
-        os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {obs:1.2f} {rot}')
-        os.system('specula config/EKARUS/ekarus_synim.yml pup_overrides.yml')
-        vec[i] = evaluate_metric()
-    np.savez(os.path.join(result_dir,'pup_rotations_metric.npz'),metric=vec,pup_rots=rots)
-    rot = rots[np.argmin(vec)]
-    print(f'Selected {rot:1.1f}° pupil rotation')
+    # vec = np.zeros(len(rots))
+    # for i,rot in enumerate(rots):
+    #     os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {obs:1.2f} {rot}')
+    #     os.system(f'specula {main_config} {overrides_name}.yml')
+    #     vec[i] = evaluate_metric()
+    # np.savez(os.path.join(result_dir,'pup_rotations_metric.npz'),metric=vec,pup_rots=rots)
+    # rot = rots[np.argmin(vec)]
+    # print(f'Selected {rot:1.1f}° pupil rotation')
 
-    os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {obs:1.2f} {rot}')
-    os.system('specula config/EKARUS/ekarus_synim.yml pup_overrides.yml')
+    # os.system(f'python specula/mmlib/save_telescope_aperture.py 160 {obs:1.2f} {rot}')
+    # os.system(f'specula {main_config} {overrides_name}.yml')
