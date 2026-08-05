@@ -65,7 +65,7 @@ def evaluate_metric():
 cobs = np.linspace(0.3,0.4,21)
 rots = np.linspace(20,40,21)
 diams = np.linspace(37.5,40,6)
-dtlts = np.linspace(-0.2,0.2,21)
+dtlts = np.linspace(-0.1,0.1,15)
 pyr_tlt_ref = [[1.16145664, 1.11620107, 1.15223466, 1.15],[1.075, 0.95597977, 1.03822003, 0.95]]
 
 result_dir = '/raid1/mmenessini/calibration/EKARUS/scratch_pupopt'
@@ -122,7 +122,7 @@ if __name__ == '__main__':
 
     overrides = ("{"
                 f"pyr.pup_diam: {diam:1.1f}, "
-                f"pyr.pyr_tlt_coeff: {pyr_tlt}, "
+                f"pyr.pyr_tlt_coeff: {best_pyr_tlt}, "
                 "}")
     write_yaml_overrides(input_string=overrides, temp_name=overrides_name)
     
