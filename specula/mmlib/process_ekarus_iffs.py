@@ -26,15 +26,14 @@ def regularize_mat(mat, thr:float=1e-2):
     print(f'Regularized {specula.xp.sum(S<thr*S.max()):1.0f} eigenvalues')
     return mat
 
-def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:int, D:float, r0=0.03, L0=25):
+def postprocess_iffs(root_dir:str, data_path:str, tag:str,
+                     Npix:int, D:float, obsratio = 0.0, r0=0.03, L0=25):
     # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_IFFs.fits')))
     # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
     # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'alpaoIFFs.fits')))
     # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'alpaoPupMask.fits')),dtype=bool)
-    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'../ifunc/reordered_DM468_ifunc.fits'))).T
+    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits'))).T
     mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
-    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'purged_trim_IFs.fits')))
-    # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'trim_IFmask.fits')),dtype=bool)
 
     X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
     minX = specula.xp.min(X[~mask.astype(bool)])
@@ -53,7 +52,6 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
 
     binned_shape = (Npix,Npix)
     # bin_mask = toccd(specula.xp.array(crop_mask).astype(float), binned_shape, xp=specula.xp) > 0
-    obsratio = 0.3
     bin_mask = (1-make_mask(np_size=Npix, diaratio=1.0, obsratio=obsratio)).astype(bool)
     # bin_mask = crop_mask.copy()
     # binned_shape = crop_mask.shape
@@ -81,8 +79,8 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
         unobsIF[j,:] = bin_if[~bin_mask]
 
     
-    # # Regularized influence functions
-    # IF = regularize_mat(IF, thr=1e-3)
+    # Regularized influence functions
+    IF = regularize_mat(IF, thr=1e-1)
 
     zern_modes = 2
     oversampling = 4
@@ -108,7 +106,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str, mask_tag:str, Npix:in
         L0=L0,
         zern_modes=zern_modes,
         oversampling=oversampling,
-        if_max_condition_number=None,
+        if_max_condition_number=1e+3,
         xp=specula.xp,
         dtype=specula.xp.float32
     )
@@ -189,7 +187,7 @@ if __name__ == "__main__":
     data_path = '/raid1/mmenessini/calibration/EKARUS/data'
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
 
-    postprocess_iffs(root_dir=root_dir, data_path=data_path, mask_tag='copernico_pupil_120pixels', tag='reordered_obs_DM468', Npix=160, D=D)
+    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='reordered_obs_DM468', Npix=160, D=D, obsratio=0.33)
 
 
 
