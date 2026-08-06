@@ -64,7 +64,7 @@ prop:
   simul_params_ref:  'main'
   source_dict_ref:   ['source_ngs'] 
   doFresnel: true
-  padding_factor: 4  
+  padding_factor: 4
   wavelengthInNm:    1550  
   inputs:
     atmo_layer_list: ['atmo.layer_list']

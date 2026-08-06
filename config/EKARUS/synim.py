@@ -114,10 +114,10 @@ def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=Non
         ifunc_inv_new[:] = shift_ifunc(ifunc_inv_new.T,shift=shiftY,ax_dir=1).T
     if mag is not None:
         ifunc_new[:] = warp_image(ifunc_new,mag=mag)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new,mag=mag).T
+        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,mag=mag).T
     if shearAmp is not None:
         ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new,shear=shearAmp,rot=shearAngle).T
+        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,shear=shearAmp,rot=shearAngle).T
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=ekapup)
     ifunc_obj.save('/raid1/mmenessini/calibration/EKARUS/ifunc/dm468_ifunc_bestshift.fits', overwrite=True)
     ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=ekapup)
@@ -211,28 +211,29 @@ if __name__ == "__main__":
 
     Nmodes = 300
 
-    rot0 = 0.0
-    shiftX0 = 0.0
-    shiftY0 = 0.0
+    rot0 = 0.33
+    shiftX0 = 0.35
+    shiftY0 = -0.02
+    mag0 = 1.013
     shearAmp0 = 0
     shearAngle0 = 0
 
-    prefix = 'it0_'
+    prefix = 'it4_'
     overwrite = False
 
-    rotvec = np.linspace(-5.0,5.0,21)
-    shiftvec = np.linspace(-1.5,1.5,21)
-    mags = np.linspace(-0.05,0.05,11)+1.0
+    rotvec = np.linspace(-0.25,0.25,11)
+    shiftvec = np.linspace(-0.2,0.2,11)
+    dmags = np.linspace(-0.005,0.005,11)
 
-    # shear_amps = np.linspace(-0.1,0.1,11)
-    # shear_angles = np.linspace(-np.pi/8,np.pi/8,11)
+    shear_amps = np.linspace(-0.05,0.05,5)
+    shear_angles = np.linspace(-np.pi,np.pi,36)
 
     result_dir = '/raid1/mmenessini/results/EKARUS/'
 
     columns = ['rotation','shiftX','shiftY','magnification','shearAmp','shearAngle','metric']
     result = []
 
-    # save_ifunc_pars(ifunc,rot=rot0,shiftX=shiftX0,shiftY=shiftY0)
+    save_ifunc_pars(ifunc,rot=rot0,shiftX=shiftX0,shiftY=shiftY0,mag=mag0)
     # print(ifunc.shape,ekapup.shape)
 
     err_rot = np.zeros([len(rotvec),Nmodes])
@@ -240,7 +241,7 @@ if __name__ == "__main__":
         print(f'Testing rotation: {rot}')
         set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_rot[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0, 'magnification': 1.00, 'metric': chi})
+        result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0, 'magnification': mag0, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_{Nmodes}modes_metrics.fits'),err_rot,overwrite=overwrite)
 
@@ -249,39 +250,39 @@ if __name__ == "__main__":
         print(f'Testing x-shift: {shft}')
         set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': 1.00, 'metric': chi})
+        result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftX{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
     for j,shft in enumerate(shiftvec):
         print(f'Testing y-shift: {shft}')
-        set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0,shearAmp=shearAmp0,shearAngle=shearAngle0)
+        set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0,shearAmp=shearAmp0,shearAngle=shearAngle0,mag=mag0)
         chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': 1.00, 'metric': chi})
+        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftY{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
-    err_mag = np.zeros([len(mags),Nmodes])
-    for j,mag in enumerate(mags):
-        print(f'Testing magnification: {mag*1e+2:1.1f}%')
-        set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,mag=mag,shearAmp=shearAmp0,shearAngle=shearAngle0)
+    err_mag = np.zeros([len(dmags),Nmodes])
+    for j,dmag in enumerate(dmags):
+        print(f'Testing magnification: {(mag0+dmag)*1e+2:1.1f}%')
+        set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,mag=mag0+dmag,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_mag[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag, 'metric': chi})
+        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0+dmag, 'metric': chi})
         print(f'Obtained metric: {chi}')
-    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
+    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaMag{1e+2*(np.max(dmags)-np.min(dmags))/len(dmags):1.2f}_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
 
-    # err_mag = np.zeros([len(shear_amps),len(shear_angles),Nmodes])
-    # for i,shear in enumerate(shear_amps):
-    #     for j,angle in enumerate(shear_angles):
-    #         print(f'Testing shear {shear} with angle: {angle*180/np.pi}°')
-    #         set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,shearAngle=shearAngle0+angle,shearAmp=shearAmp0+shear)
-    #         chi,err_mag[i,j] = evaluate_metric(Nmodes,return_err=True)
-    #         result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0,  'shearAmp': shearAmp0+shear, 'shearAngle': shearAngle0+angle, 'magnification': 1.00, 'metric': chi})
-    #         print(f'Obtained metric: {chi}')
-    # fits.writeto(os.path.join(result_dir, 'misreg_csv', prefix+f'deltaShear{delta_vec(shear_amps):1.2f}dAngle{delta_vec(shear_angles)*180/np.pi:1.0f}deg_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
+    err_mag = np.zeros([len(shear_amps),len(shear_angles),Nmodes])
+    for i,shear in enumerate(shear_amps):
+        for j,angle in enumerate(shear_angles):
+            print(f'Testing shear {shear} with angle: {angle*180/np.pi}°')
+            set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,shearAngle=shearAngle0+angle,shearAmp=shearAmp0+shear)
+            chi,err_mag[i,j] = evaluate_metric(Nmodes,return_err=True)
+            result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0,  'shearAmp': shearAmp0+shear, 'shearAngle': shearAngle0+angle, 'magnification': mag0, 'metric': chi})
+            print(f'Obtained metric: {chi}')
+    fits.writeto(os.path.join(result_dir, 'misreg_csv', prefix+f'deltaShear{delta_vec(shear_amps):1.2f}dAngle{delta_vec(shear_angles)*180/np.pi:1.0f}deg_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
     results_df = pd.DataFrame(result, columns=columns) 
     results_df.to_csv(os.path.join(result_dir, 'misreg_csv', 
-                                   prefix+f'deltaRot{delta_vec(rotvec):1.2f}_deltaShift{delta_vec(shiftvec):1.2f}_deltaMag{1e+2*delta_vec(mags):1.2f}_shear{delta_vec(shear_amps):1.2f}dAngle{delta_vec(shear_angles)*180/np.pi:1.0f}_metric.csv'), index=False)
+                                   prefix+f'deltaRot{delta_vec(rotvec):1.2f}_deltaShift{delta_vec(shiftvec):1.2f}_deltaMag{1e+2*delta_vec(dmags):1.2f}_shear{delta_vec(shear_amps):1.2f}dAngle{delta_vec(shear_angles)*180/np.pi:1.0f}_metric.csv'), index=False)
         
 
 

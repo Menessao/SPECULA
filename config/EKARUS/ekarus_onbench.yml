@@ -4,8 +4,8 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/EKARUS/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
   pixel_pitch:       0.011375             # [m] Pitch of the pupil phase array (1.82m/120pix)
-  total_time:        0.0005                   # [s] Total simulation running time
-  time_step:         0.0005                 # [s] Simulation time step
+  total_time:        1.0                   # [s] Total simulation running time
+  time_step:         0.002                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
@@ -17,12 +17,29 @@ seeing:
 
 wind_speed:
   class:             'WaveGenerator'
-  constant:          [5.0]   
+  # constant:          [5.0]   
+  constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
 
 wind_direction:
   class:             'WaveGenerator'
-  constant:          [38.0] 
+  # constant:          [38.0] 
+  constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
 
+# Multi-layer atmospheric model
+atmo:
+  class:             'AtmoEvolution'
+  simul_params_ref:  'main'
+  L0:                25.0                   # [m] Outer scale
+  # heights:           [0] # [m] Ground, mid, high layers at 0 zenith angle
+  # Cn2:               [1.0]   
+  heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] Ground, mid, high layers at 0 zenith angle
+  Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
+  fov:               0.0                    # [arcsec] Field of view
+  inputs:
+    seeing:          'seeing.output'
+    wind_speed:      'wind_speed.output'
+    wind_direction:  'wind_direction.output'
+  outputs:           ['layer_list']
 
 # Natural guide star for WFS
 source_ngs:
@@ -37,20 +54,6 @@ pupilstop:
   class:             'Pupilstop'
   tag:                'reordered_unobs_DM468_160pixels'
   # simul_params_ref:  'main'
-
-# Multi-layer atmospheric model
-atmo:
-  class:             'AtmoEvolution'
-  simul_params_ref:  'main'
-  L0:                25.0                   # [m] Outer scale
-  heights:           [0] # [m] Ground, mid, high layers at 0 zenith angle
-  Cn2:               [1.0]   
-  fov:               0.0                    # [arcsec] Field of view
-  inputs:
-    seeing:          'seeing.output'
-    wind_speed:      'wind_speed.output'
-    wind_direction:  'wind_direction.output'
-  outputs:           ['layer_list']
   
 # Atmospheric propagation
 prop:
@@ -88,7 +91,7 @@ ocam:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [240,240]            # Total detector size
-  dt:                0.0005              # [s] Integration time (2000 fps)
+  dt:                0.002              # [s] Integration time (2000 fps)
   bandw:             300                   # [nm]
   photon_noise:      true                  # Enable photon noise
   readout_noise:     true                  # Enable read noise
@@ -110,25 +113,27 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr5.0_40x40_400modes_rec'        
+  recmat_object:     'pyr5.0_onbench_measIF_dm468_400modes_rec'       
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
 filter: 
   class:             'Integrator'
-  delay:             1.5                     # Temporal delay in time steps
-  int_gain:          [1.0] #[0.7,0.6,0.2] #
-  # ff:                [1.0,0.99,0.95]
-  n_modes:           [400] #[2,120,278] #
+  delay:             0.75                     # Temporal delay in time steps
+  int_gain:          [0.7] #
+  ff:                [0.995]
+  n_modes:           [400] #
   inputs:
       delta_comm:  'pyr_modalrec.out_modes' #
 
 dm:
   class:             'DM'
   simul_params_ref:  'main'
+  # ifunc_object:      'dm468_ifunc_bestshift'  # Measured Influence functions
   ifunc_object:      'reordered_unobs_DM468_ifunc'  # Measured Influence functions
-  m2c_object:        'M2C_KL_OOPAO_central_obstruction'                 # OOPAO M2C
+  # m2c_object:        'M2C_KL_OOPAO_central_obstruction'                 # OOPAO M2C
+  m2c_object:        'M2C_KL_OOPAO_synthetic'                 # OOPAO M2C
   # ifunc_object:      'simul_unobs_DM468_ifunc'      # Simulated Influence functions
   # m2c_object:        'simul_unobs_DM468_m2c'        # Synthetic Modal-to-command matrix
   height:            0                # Ground-conjugated DM
@@ -145,23 +150,23 @@ psf:
   wavelengthInNm:    650                 # [nm] visible
   nd:                4                    # 4x padding for PSF
   start_time:        0.0                  # Start PSF integration after 500ms
-  # verbose: true
+  verbose: true
   inputs:
     in_ef:           'ef_prop.out_ef'
   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
  
 dm_mode_res:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'reordered_unobs_DM468_kl_inv'
-  # ifunc_inv_object: 'simul_unobs_DM468_kl_inv'
+  # ifunc_inv_object: 'reordered_unobs_DM468_kl_inv'
+  ifunc_inv_object: 'simul_unobs_DM468_kl_inv'
   inputs:
     in_ef: ['ef_prop.out_ef']
   outputs: ['out_modes']
 
 atmo_modes:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'reordered_unobs_DM468_kl_inv'
-  # ifunc_inv_object: 'simul_unobs_DM468_kl_inv'
+  # ifunc_inv_object: 'reordered_unobs_DM468_kl_inv'
+  ifunc_inv_object: 'simul_unobs_DM468_kl_inv'
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
   outputs: ['out_modes']

@@ -13,8 +13,8 @@ from specula.data_objects.simul_params import SimulParams
 
 from specula.lib.make_mask import make_mask
 
-def save_copernico_pupil(destination_dir:str, tag:str, Npix=160, obs=0.3, angle=-30, D:float=1.82, overwrite=False):
-    new_pupil = make_mask(np_size=Npix,obsratio=obs,spider=True,n_petals=4,angle_offset=angle,spider_width=0.02/D*Npix)
+def save_copernico_pupil(destination_dir:str, tag:str, Npix=160, obs=0.3, angle=-30, D:float=1.82, diaratio=1.0, overwrite=False):
+    new_pupil = make_mask(np_size=Npix,diaratio=diaratio,obsratio=obs,spider=True,n_petals=4,angle_offset=angle,spider_width=0.02/D*Npix)
     os.makedirs(destination_dir,exist_ok=True)
     fname = os.path.join(destination_dir, tag+f'_{Npix:1.0f}pixels.fits')
     fits.writeto(fname,new_pupil.reshape([Npix,Npix,1]),overwrite=overwrite)
@@ -63,9 +63,10 @@ if __name__ == "__main__":
 
     # save_lbt_pupil(Npix=220)
 
+    diaratio = 36.5/38
     destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
-    tag = 'Copernico_Pupil'
-    save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, Npix=Npix, overwrite=True)
+    tag = f'Copernico_Pupil_{diaratio:1.2f}diaratio'
+    save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, diaratio=diaratio, Npix=Npix, overwrite=True)
     aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
 
     # data_dir = '/raid1/mmenessini/calibration/VLT'

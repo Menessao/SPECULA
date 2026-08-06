@@ -98,12 +98,19 @@ if __name__ == "__main__":
     #     rec_tag = f'pyr{rMod:1.1f}_10x10_{Nmodes}modes'
     #     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
-
     Nmodes = 400
-    root_dir = '/raid1/mmenessini/calibration/FSOC'
-    im_tag = 'pyr5.0_40x40_dm468_im'
-    rec_tag = f'pyr5.0_40x40_{Nmodes:1.0f}modes'
-    rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
+    root_dir = '/raid1/mmenessini/calibration/EKARUS'
+    tag = 'pyr5.0_onbench_crop_measIF' #'pyr5.0_onsky_measIF_dm468'
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
+    tag = 'pyr5.0_onbench_crop' #'pyr5.0_onsky_dm468'
+    rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
+
+
+    # Nmodes = 400
+    # root_dir = '/raid1/mmenessini/calibration/FSOC'
+    # im_tag = 'pyr5.0_40x40_dm468_im'
+    # rec_tag = f'pyr5.0_40x40_{Nmodes:1.0f}modes'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)#startMode=150,
 
     # Nmodes = 150
     # root_dir = '/raid1/mmenessini/calibration/RISTRETTO'

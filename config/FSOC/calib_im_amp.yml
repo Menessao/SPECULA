@@ -5,7 +5,7 @@
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       440                        # Number of DM actuators
-  amp:          50
+  amp:          25
   outputs:   ['output']
 
 # Interaction matrix calibrator
@@ -42,7 +42,7 @@ pyr_slopes_override:
 
 # Override DM to use calibration commands
 dm_override:
-  height: 10000
+  height: 9000
   sign: 1                                 # Use positive sign for calibration (default is -1)
   nmodes: 440                            # Use all modes for calibration
   inputs:
@@ -80,6 +80,10 @@ ocam_override:
   excess_noise:   false                   # No excess noise
 
 
+data_store_override:
+  inputs:
+    input_list: ['corr_ef-ef_prop.out_ef', 'uncorr_ef-prop.out_source_ngs_ef', 'dm_complex_shape-dm.out_layer']
+
 # Remove unnecessary objects during calibration
-remove: ['atmo','seeing','wind_speed','wind_direction','data_store',
+remove: ['atmo','seeing','wind_speed','wind_direction', #'data_store',
         'dm_mode_res','filter','psf', 'pyr_modalrec'] 
