@@ -112,8 +112,8 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  # recmat_object:     'pyr5.0_onsky_measIF_dm468_400modes_rec'    
-  recmat_object:     'pyr5.0_onbench_crop_measIF_400modes_rec'    
+  recmat_object:     'pyr5.0_onsky_measIF_dm468_400modes_rec'    
+  # recmat_object:     'pyr5.0_onbench_crop_measIF_400modes_rec'    
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -121,8 +121,8 @@ pyr_modalrec:
 filter: 
   class:             'Integrator'
   delay:             0.75                     # Temporal delay in time steps
-  int_gain:          [0.7] #
-  ff:                [0.995]
+  int_gain:          [0.4] #
+  ff:                [0.95]
   n_modes:           [400] #
   inputs:
       delta_comm:  'pyr_modalrec.out_modes' #
@@ -136,7 +136,7 @@ dm:
   # ifunc_object:      'simul_unobs_DM468_ifunc'      # Simulated Influence functions
   # m2c_object:        'simul_unobs_DM468_m2c'        # Synthetic Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            200
+  nmodes:            400
   inputs:
     in_command:      'filter.out_comm'
   outputs:           ['out_layer']

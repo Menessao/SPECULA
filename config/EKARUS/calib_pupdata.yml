@@ -11,23 +11,13 @@ pyr_pupdata:
   inputs:
     in_i: 'pyr.out_i'
 
-# clean_aperture:
-#   class:             'Pupilstop'
-#   simul_params_ref:   'main'
-#   mask_diam:         1.0     
-#   obs_diam:          0.3
-
-prop_override:
-  inputs:
-    common_layer_list: ['pupilstop']       # Pupil
-
 pyr_override:
   mod_amp:           30.0   # Modulation radius (in lambda/D units)
   inputs:
     in_ef: 'prop.out_source_ngs_ef'
 
 main_override:
-  total_time:  0.001
+  total_time:  0.01
 
 # Remove unnecessary components to avoid issues and speed up the calibration
 remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'pyr_slopes', 'dm',

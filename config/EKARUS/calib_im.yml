@@ -12,7 +12,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    400                         # Number of modes to calibrate
-  im_tag:    'pyr5.0_onsky_measIF_dm468_im'            # Output IM filename
+  im_tag:    'pyr5.0_onbench_measIF_dm468_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -45,7 +45,7 @@ dm_override:
 pyr_override:
   # pup_diam:          40.                     # Pupil diameter in subaps.
   # pup_dist:          60.    
-  # mod_amp: 5.0
+  mod_amp: 5.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 
