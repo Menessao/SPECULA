@@ -45,7 +45,7 @@ dm_override:
 pyr_override:
   # pup_diam:          40.                     # Pupil diameter in subaps.
   # pup_dist:          60.    
-  mod_amp: 3.0
+  # mod_amp: 3.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 

@@ -19,16 +19,19 @@ kl = np.linalg.pinv(klinv)
 ifunc = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/reordered_unobs_DM468_ifunc.fits')
 ekapup = fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_160pixels.fits')
 
-imfull = fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/IntMat_20260802_233704.fits')
+# imfull = fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/IntMat_20260802_233704.fits')
+imfull = fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/IntMat_20260731_233429.fits')
 pyr_mask = get_pupil_mask(npix=240,filepath='/raid1/mmenessini/calibration/EKARUS/pupils/pyr_pupdata_onbench.fits')
 crop_pyr_mask = pyr_mask[60:180,60:180]
 
 pup_hdu = fits.open('/raid1/mmenessini/calibration/EKARUS/pupils/pyr_pupdata_onbench.fits')
 pup_ids = pup_hdu[1].data
 
-rMod = 3.0
+rMod = 5.0
 im_tag = f'pyr{rMod:1.1f}_dm468_onbench_synim'
 ifunc_tag = 'dm468_ifunc_shift'
+m2c_tag = 'M2C_KL_OOPAO_central_obstruction'
+m2c_tag = 'M2C_KL_OOPAO_synthetic'
 
 
 def shift_image(image, shift, axis):
@@ -129,15 +132,13 @@ imframe = np.std(imfull,axis=1).reshape([240,240])
 ref_centers = get_frame_pupil_centers(imframe)
 avg_center = np.mean(ref_centers,axis=0)
 
-xmin = int(np.round(avg_center[0]))-60
-xmax = int(np.round(avg_center[0]))+60
-ymin = int(np.round(avg_center[1]))-60
-ymax = int(np.round(avg_center[1]))+60
-
+hsize = 120
 refim = np.zeros([np.sum(crop_pyr_mask),imfull.shape[1]])
 for j in range(imfull.shape[1]):
     img = imfull[:,j].reshape([240,240])
-    crop_img = img[ymin:ymax,xmin:xmax]
+    auximg = shift_image(img, shift=120-avg_center[1], axis=0)
+    frimg = shift_image(auximg, shift=120-avg_center[0], axis=1)
+    crop_img = frimg[60:180,60:180]
     refim[:,j] = crop_img[crop_pyr_mask]
 
 def evaluate_error(Nmodes:int):
@@ -171,7 +172,7 @@ def evaluate_metric(Nmodes,return_err:bool=False):
             f"pyr_im_calibrator.overwrite: true, "
             f"pyr.mod_amp: {rMod:1.1f}, "
             f"dm.ifunc_object:      {ifunc_tag}, "
-            f"dm.m2c_object:        'M2C_KL_OOPAO_central_obstruction', "
+            f"dm.m2c_object:        {m2c_tag}, "
             "}")
     write_yaml_overrides(input_string=ovdes, temp_name='temp_synim')
     main_config = 'ekarus_onbench.yml calib_im.yml'
@@ -202,12 +203,15 @@ if __name__ == "__main__":
     shearAmp0 = 0
     shearAngle0 = 0
 
-    prefix = 'it4_'
+    prefix = 'oldIM_it0_'
     overwrite = False
 
-    rotvec = np.linspace(-0.25,0.25,11)
-    shiftvec = np.linspace(-0.2,0.2,11)
-    dmags = np.linspace(-0.005,0.005,11)
+    rotvec = np.linspace(-5.0,5.0,21)
+    shiftvec = np.linspace(-1.0,1.0,21)
+    dmags = np.linspace(-0.03,0.05,15)
+    # rotvec = np.linspace(-0.25,0.25,11)
+    # shiftvec = np.linspace(-0.2,0.2,11)
+    # dmags = np.linspace(-0.005,0.005,11)
 
     shear_amps = np.linspace(-0.05,0.05,5)
     shear_angles = np.linspace(-np.pi,np.pi,36)
