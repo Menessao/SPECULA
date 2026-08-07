@@ -189,12 +189,12 @@ delta_vec = lambda vec: (np.max(vec)-np.min(vec))/len(vec)
 
 if __name__ == "__main__":
 
-    Nmodes = 300
+    Nmodes = 400
 
-    rot0 = 0.33
-    shiftX0 = 0.35
-    shiftY0 = -0.02
-    mag0 = 1.013
+    rot0 = 0.0
+    shiftX0 = 0.0
+    shiftY0 = 0.00
+    mag0 = 1.00
     # rot0 = 0.33
     # shiftX0 = 0.35
     # shiftY0 = -0.02

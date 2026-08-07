@@ -12,7 +12,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    440                         # Number of modes to calibrate
-  im_tag:    'pyr0.0_40x40_dm468_h10km_im'            # Output IM filename
+  im_tag:    'pyr0.0_40x40_dm468_h20km_im'            # Output IM filename
   overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -42,7 +42,7 @@ pyr_slopes_override:
 
 # Override DM to use calibration commands
 dm_override:
-  height: 9000
+  height: 20000
   sign: 1                                 # Use positive sign for calibration (default is -1)
   nmodes: 440                            # Use all modes for calibration
   inputs:
@@ -57,7 +57,7 @@ dm_perfect:
   ifunc_object:      'obs30_ifunc'    # Influence functions
   m2c_object:        'obs30_m2c'      # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
-  nmodes:            400
+  nmodes:            440
   inputs:
     in_command:      'atmo_modes.out_modes'
   outputs:           ['out_layer']
@@ -82,7 +82,7 @@ ocam_override:
 
 data_store_override:
   inputs:
-    input_list: ['corr_ef-ef_prop.out_ef', 'uncorr_ef-prop.out_source_ngs_ef', 'dm_complex_shape-dm.out_layer']
+    input_list: ['corr_ef-ef_prop.out_ef', 'uncorr_ef-prop.out_source_ngs_ef', 'dm_complex_shape-dm.out_layer', 'frames-ocam.out_pixels']
 
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction', #'data_store',
