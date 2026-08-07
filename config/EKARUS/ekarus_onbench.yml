@@ -130,8 +130,8 @@ filter:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  # ifunc_object:      'dm468_ifunc_bestshift'  # Measured Influence functions
-  ifunc_object:      'reordered_unobs_DM468_ifunc'  # Measured Influence functions
+  ifunc_object:      'dm468_ifunc_bestshift'  # Measured Influence functions
+  # ifunc_object:      'reordered_unobs_DM468_ifunc'  # Measured Influence functions
   # m2c_object:        'M2C_KL_OOPAO_central_obstruction'                 # OOPAO M2C
   m2c_object:        'M2C_KL_OOPAO_synthetic'                 # OOPAO M2C
   # ifunc_object:      'simul_unobs_DM468_ifunc'      # Simulated Influence functions

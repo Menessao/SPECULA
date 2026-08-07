@@ -112,8 +112,8 @@ pyr_slopes:
 
 pyr_modalrec:
   class:             'Modalrec'
-  recmat_object:     'pyr5.0_onsky_measIF_dm468_400modes_rec'    
-  # recmat_object:     'pyr5.0_onbench_crop_measIF_400modes_rec'    
+  # recmat_object:     'pyr5.0_onsky_measIF_dm468_400modes_rec'    
+  recmat_object:     'pyr5.0_onbench_crop_measIF_400modes_rec'    
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
