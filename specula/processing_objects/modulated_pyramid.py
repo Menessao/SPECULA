@@ -167,6 +167,8 @@ class ModulatedPyramid(BaseProcessingObj):
         toccd_side = result['toccd_side']
         final_ccd_side = result['final_ccd_side']
 
+        print(fft_sampling,fft_padding)
+
         # Compute focal plane central obstruction dimension ratio
         fp_obsratio = fp_obs / (fft_totsize / fft_res) if fp_obs is not None else 0
 
@@ -370,7 +372,7 @@ class ModulatedPyramid(BaseProcessingObj):
         # When p + c is odd, using floor division leaves a 2*A array that is one
         # pixel smaller than the actual FFT size (e.g. 1098 instead of 1100),
         # which then fails when multiplied by the focal-plane mask.
-        A = int(self.xp.ceil((p + c) / 2.0))
+        A = int(((p + c) // 2.0))
         pyr_tlt = self.xp.zeros((2 * A, 2 * A), dtype=self.dtype)
         y, x = self.xp.mgrid[0:A,0:A]
 

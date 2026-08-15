@@ -6,7 +6,7 @@ dm_override:
   m2c_object: M2C_KL_OOPAO_synthetic
 pushpull_override:
   nmodes: 400
-  amp: 3000000
+  amp: 25
 pyr_im_calibrator_override:
   nmodes: 400
   im_tag: pyr5.0_dm468_onbench_synim

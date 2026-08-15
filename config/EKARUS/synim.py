@@ -166,7 +166,7 @@ def evaluate_metric(Nmodes,return_err:bool=False):
             f"main.total_time: {Nmodes*0.001*2}, "
             f"dm.nmodes: {Nmodes}, "
             f"pushpull.nmodes: {Nmodes}, "  
-            f"pushpull.amp:    3000000, "
+            f"pushpull.amp:    25, "
             f"pyr_im_calibrator.nmodes: {Nmodes}, "
             f"pyr_im_calibrator.im_tag: {im_tag}, "
             f"pyr_im_calibrator.overwrite: true, "
@@ -193,9 +193,9 @@ if __name__ == "__main__":
     Nmodes = 400
 
     rot0 = 0.0
-    shiftX0 = 0.0
+    shiftX0 = 0.1
     shiftY0 = 0.00
-    mag0 = 1.00
+    mag0 = 1.014
     # rot0 = 0.33
     # shiftX0 = 0.35
     # shiftY0 = -0.02
@@ -203,12 +203,12 @@ if __name__ == "__main__":
     shearAmp0 = 0
     shearAngle0 = 0
 
-    prefix = 'oldIM_it0_'
+    prefix = 'oldIM_it2_'
     overwrite = False
 
-    rotvec = np.linspace(-5.0,5.0,21)
+    rotvec = np.linspace(-0.5,0.5,11)
     shiftvec = np.linspace(-1.0,1.0,21)
-    dmags = np.linspace(-0.03,0.05,15)
+    dmags = np.linspace(-0.01,0.01,11)
     # rotvec = np.linspace(-0.25,0.25,11)
     # shiftvec = np.linspace(-0.2,0.2,11)
     # dmags = np.linspace(-0.005,0.005,11)

@@ -68,7 +68,7 @@ def shift_image(image, shift, axis):
 def warp_image(ifunc,shear:float=0,rot:float=0,mag:float=1.0):
     ifunc_new = np.zeros_like(ifunc)
     img = np.zeros(lbtpup.shape)
-    center_y, center_x = img.shape[0]/2.0, img.shape[1]/ 2.0
+    center_y, center_x = img.shape[0]/2.0, img.shape[1]/2.0
     shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
     shear_and_scale = AffineTransform(shear=shear, rotation=rot, scale=mag)
     shift_to_center = AffineTransform(translation=(center_x, center_y))
