@@ -1,7 +1,6 @@
 from astropy.io import fits
 import numpy as np
 import os
-import pandas as pd
 
 import specula 
 specula.init(0)
@@ -17,7 +16,9 @@ kl = np.linalg.pinv(klinv)
 ifunc = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc.fits')
 lbtpup = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupilstop/asm_v30dx_197pixels.fits')
 
-im = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbt_refim.fits')
+rec = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_20251120_085351.fits')
+im = np.linalg.pinv(rec)
+
 pupids = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/pup_ids.fits')
 pyr_masks = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupmask_shift.fits').astype(bool)
 
@@ -62,13 +63,18 @@ def warp_image(ifunc,shear:float=0,rot:float=0,mag:float=1.0):
         ifunc_new[:,j] = warp_img[lbtpup.astype(bool)]
     return ifunc_new
 
-def rotate_ifunc(ifunc,rot_deg:float):
+
+def rotate_ifunc(ifunc,rot_deg:float,flip:bool=False):
     ifunc_new = np.zeros_like(ifunc)
     img = np.zeros(lbtpup.shape)
     for j in range(ifunc.shape[1]):
         img[lbtpup.astype(bool)] = ifunc[:,j]
         rot_img = rotate(img,angle=rot_deg,reshape=False)
-        ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
+        if flip:
+            rot_flip_img = rot_img[::-1,:]
+            ifunc_new[:,j] = rot_flip_img[lbtpup.astype(bool)]
+        else:
+            ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
     return ifunc_new
 
 def shift_ifunc(ifunc,shift:float,ax_dir):
@@ -81,10 +87,10 @@ def shift_ifunc(ifunc,shift:float,ax_dir):
     return ifunc_new
 
 
-def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
+def set_ifunc_pars(ifunc,flip=True,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
     ifunc_new = ifunc.copy()
-    if rot is not None:
-        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
+    if rot is not None or flip is True:
+        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot,flip=flip)
     if shiftX is not None:
         ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
     if shiftY is not None:
@@ -94,14 +100,14 @@ def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None
     if shearAmp is not None:
         ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
-    ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift.fits', overwrite=True)
+    ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_lbti_ifunc_optshift.fits', overwrite=True)
 
-def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
+def save_ifunc_pars(ifunc,flip=True,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
     ifunc_new = ifunc.copy()
     ifunc_inv_new = klinv.copy()
-    if rot is not None:
-        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
-        ifunc_inv_new[:] = rotate_ifunc(ifunc_inv_new.T,rot_deg=rot).T
+    if rot is not None or flip is True:
+        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot,flip=flip)
+        ifunc_inv_new[:] = rotate_ifunc(ifunc_inv_new.T,rot_deg=rot,flip=flip).T
     if shiftX is not None:
         ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
         ifunc_inv_new[:] = shift_ifunc(ifunc_inv_new.T,shift=shiftX,ax_dir=0).T
@@ -115,9 +121,9 @@ def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=Non
         ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
         ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,shear=shearAmp,rot=shearAngle).T
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
-    ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift.fits', overwrite=True)
+    ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_lbti_ifunc_shift.fits', overwrite=True)
     ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=lbtpup)
-    ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift_inv.fits', overwrite=True)
+    ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_lbti_ifunc_shift_inv.fits', overwrite=True)
 
 Nslopes = 2512
 npix = 120
@@ -130,7 +136,7 @@ def get_synim(Nmodes:int,alpha=None):
     if alpha is not None:
         set_ifunc_pars(ifunc,rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])
         os.system(f"specula {main_config}")
-    aux = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbt_synim.fits')[:,:Nmodes]
+    aux = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbti_synim.fits')[:,:Nmodes]
     synim = aux.copy()
     synim[:Nslopes//2,:] = aux[Nslopes//2:,:]
     synim[Nslopes//2:,:] = aux[:Nslopes//2,:]*-1
@@ -154,6 +160,7 @@ def get_refim(Nmodes:int):
         refim_true[:,j] = img[half_mask]
     return refim_true
 
+
 def sensitivity_matrix(alphas,eps_vec,Nmodes):
     sens = []
     print('Computing sensitivity matrix')
@@ -173,7 +180,7 @@ delta_vec = lambda vec: (np.max(vec)-np.min(vec))/len(vec)
 
 if __name__ == "__main__":
 
-    rot0 = 54
+    rot0 = -47
     shiftX0 = 0.0
     shiftY0 = 0.0
     mag0 = 1.0
@@ -189,6 +196,9 @@ if __name__ == "__main__":
     max_its = 10
     
     alpha = np.array([rot0,shiftX0,shiftY0,mag0])
+    synim = get_synim(Nmodes=Nmodes,alpha=alpha)
+    print('Done!')
+
     eps = np.array([drot,dshft,dshft,dmag])
     refim = get_refim(Nmodes)
     err = tol + 1
