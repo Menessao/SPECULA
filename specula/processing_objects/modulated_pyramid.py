@@ -368,11 +368,7 @@ class ModulatedPyramid(BaseProcessingObj):
         return result
 
     def get_pyr_tlt(self, p, c):
-        # The FFT grid size is derived from an even-sized pupil grid after padding.
-        # When p + c is odd, using floor division leaves a 2*A array that is one
-        # pixel smaller than the actual FFT size (e.g. 1098 instead of 1100),
-        # which then fails when multiplied by the focal-plane mask.
-        A = int(((p + c) // 2.0))
+        A = int(round((p + c) / 2.0))
         pyr_tlt = self.xp.zeros((2 * A, 2 * A), dtype=self.dtype)
         y, x = self.xp.mgrid[0:A,0:A]
 

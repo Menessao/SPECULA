@@ -271,3 +271,34 @@ def get_frame_pupil_centers(frame,thr=0.3,xhalf=100,yhalf=120):
     qx,qy = get_photocenter(mask)
     centers[3,:] = np.array([qx,qy])
     return centers
+
+def two_level_thresholding(image, thr1 = 0.1, thr2 = 0.25):    
+    min_val, max_val = float(np.min(image)), float(np.max(image))
+    s1 = min_val + (max_val - min_val) * thr1
+    thresh_img = image.copy()
+    thresh_img[thresh_img < s1] = 0
+    s2 = float(np.mean(thresh_img[thresh_img > 0])) * thr2
+    mask = thresh_img >= s2
+    return mask
+
+def shift_image(image, shift, axis):
+    shift_int = int(np.floor(shift))
+    shift_frac = shift - shift_int
+    def integer_shift(img, pixels, ax):
+        if pixels == 0:
+            return img.copy()
+        pad_width = [(0, 0), (0, 0)]
+        if pixels > 0:
+            pad_width[ax] = (pixels, 0)  # Pad start (left/top)
+            sliced_img = np.pad(img, pad_width, mode='constant', constant_values=0)
+            if ax == 0: return sliced_img[:-pixels, :]
+            else:       return sliced_img[:, :-pixels]
+        else:
+            pad_width[ax] = (0, abs(pixels))  # Pad end (right/bottom)
+            sliced_img = np.pad(img, pad_width, mode='constant', constant_values=0)
+            if ax == 0: return sliced_img[abs(pixels):, :]
+            else:       return sliced_img[:, abs(pixels):]
+    img_floor = integer_shift(image, shift_int, axis)
+    img_ceil = integer_shift(image, shift_int + 1, axis)
+    shifted_image = img_floor * (1.0 - shift_frac) + img_ceil * shift_frac
+    return shifted_image

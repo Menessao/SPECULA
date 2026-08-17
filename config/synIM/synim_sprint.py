@@ -142,14 +142,12 @@ def sensitivity_matrix(alphas,eps_vec,Nmodes):
     # shiftY0 = 0.12
     # mag0 = 0.981
 
-delta_vec = lambda vec: (np.max(vec)-np.min(vec))/len(vec)
-
 if __name__ == "__main__":
 
     rot0 = -34.1
-    shiftX0 = 0.28
-    shiftY0 = -1.03
-    mag0 = 0.97
+    shiftX0 = 0.27
+    shiftY0 = -1.01
+    mag0 = 0.974
 
     drot = 0.2
     dshft = 0.01
@@ -182,7 +180,7 @@ if __name__ == "__main__":
         dalpha = np.linalg.pinv(sens) @ aux.flatten()
         print(f'Update parameters are: {dalpha}')
         alpha_new = alpha + dalpha
-        err = np.max(np.abs(dalpha)-np.abs(eps)/5)
+        err = np.max(np.abs(dalpha)/np.abs(alpha))
 
         # Update synim
         alpha = alpha_new

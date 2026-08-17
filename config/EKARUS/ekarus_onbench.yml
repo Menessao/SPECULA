@@ -52,7 +52,8 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:                'reordered_unobs_DM468_160pixels'
+  # tag:                'reordered_unobs_DM468_160pixels'
+  tag:                'DM468_160pixels_bestshift'
   # simul_params_ref:  'main'
   
 # Atmospheric propagation

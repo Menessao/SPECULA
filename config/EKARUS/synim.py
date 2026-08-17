@@ -7,12 +7,13 @@ import specula
 specula.init(0)
 
 from skimage.transform import AffineTransform,warp
-from scipy.ndimage import rotate
 
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
-from specula.mmlib.utils import get_pupil_mask, get_frame_pupil_centers
+from specula.mmlib.utils import get_pupil_mask, get_frame_pupil_centers, shift_image
 from specula.mmlib.yaml_overrides import write_yaml_overrides
+
+from specula.mmlib.save_telescope_aperture import save_pupil
 
 klinv = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/reordered_unobs_DM468_kl_inv.fits')
 kl = np.linalg.pinv(klinv)
@@ -34,101 +35,66 @@ m2c_tag = 'M2C_KL_OOPAO_central_obstruction'
 m2c_tag = 'M2C_KL_OOPAO_synthetic'
 
 
-def shift_image(image, shift, axis):
-    shift_int = int(np.floor(shift))
-    shift_frac = shift - shift_int
-    def integer_shift(img, pixels, ax):
-        if pixels == 0:
-            return img.copy()
-        pad_width = [(0, 0), (0, 0)]
-        if pixels > 0:
-            pad_width[ax] = (pixels, 0)  # Pad start (left/top)
-            sliced_img = np.pad(img, pad_width, mode='constant', constant_values=0)
-            if ax == 0: return sliced_img[:-pixels, :]
-            else:       return sliced_img[:, :-pixels]
-        else:
-            pad_width[ax] = (0, abs(pixels))  # Pad end (right/bottom)
-            sliced_img = np.pad(img, pad_width, mode='constant', constant_values=0)
-            if ax == 0: return sliced_img[abs(pixels):, :]
-            else:       return sliced_img[:, abs(pixels):]
-    img_floor = integer_shift(image, shift_int, axis)
-    img_ceil = integer_shift(image, shift_int + 1, axis)
-    shifted_image = img_floor * (1.0 - shift_frac) + img_ceil * shift_frac
-    return shifted_image
-
-def warp_image(ifunc,shear:float=0,rot:float=0,mag:float=1.0):
-    ifunc_new = np.zeros_like(ifunc)
+def warp_image(ifunc,pupmask,
+               flip:bool=False,
+               shftX:float=0.0,shftY:float=0.0,
+               shear:float=0,rot:float=0,
+               mag:float=1.0,
+               oldpup=ekapup):
+    pup_mask = pupmask.astype(bool)
+    ifunc_new = np.zeros([int(np.sum(pup_mask)),ifunc.shape[1]])
     img = np.zeros(ekapup.shape)
-    center_y, center_x = img.shape[0]/2.0, img.shape[1]/ 2.0
+    center_y, center_x = img.shape[0]/2.0, img.shape[1]/2.0
     shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
-    shear_and_scale = AffineTransform(shear=shear, rotation=rot, scale=mag)
-    shift_to_center = AffineTransform(translation=(center_x, center_y))
+    shear_and_scale = AffineTransform(shear=shear, rotation=rot*np.pi/180, scale=mag)
+    shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
     trf = shift_to_origin + shear_and_scale + shift_to_center
-    # warp_mask = np.logical_or(warp((1-ekapup), inverse_map=trf.inverse),(1-ekapup).astype(bool))
     for j in range(ifunc.shape[1]):
-        img[ekapup.astype(bool)] = ifunc[:,j]
+        img[oldpup.astype(bool)] = ifunc[:,j]
+        if flip:
+            img = img[::-1,:]
         warp_img = warp(img, inverse_map=trf.inverse)
-        ifunc_new[:,j] = warp_img[ekapup.astype(bool)]
+        ifunc_new[:,j] = warp_img[pup_mask]
     return ifunc_new
 
-def rotate_ifunc(ifunc,rot_deg:float):
-    ifunc_new = np.zeros_like(ifunc)
-    img = np.zeros(ekapup.shape)
-    for j in range(ifunc.shape[1]):
-        img[ekapup.astype(bool)] = ifunc[:,j]
-        rot_img = rotate(img,angle=rot_deg,reshape=False)
-        ifunc_new[:,j] = rot_img[ekapup.astype(bool)]
-    return ifunc_new
+def warp_mask(pup,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,rot:float=0.0):
+    center_y, center_x = pup.shape[0]/2.0, pup.shape[1]/2.0
+    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
+    scale = AffineTransform(rotation=rot*np.pi/180,scale=mag)
+    shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
+    trf = shift_to_origin + scale + shift_to_center
+    warp_pup = (warp(pup.astype(float), inverse_map=trf.inverse)) > 0.9
+    return warp_pup.astype(float)
 
-def shift_ifunc(ifunc,shift:float,ax_dir):
-    ifunc_new = np.zeros_like(ifunc)
-    img = np.zeros(ekapup.shape)
-    for j in range(ifunc.shape[1]):
-        img[ekapup.astype(bool)] = ifunc[:,j]
-        shift_img = shift_image(img,shift=shift,axis=ax_dir)
-        ifunc_new[:,j] = shift_img[ekapup.astype(bool)]
-    return ifunc_new
 
-def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
-    ifunc_new = ifunc.copy()
-    if rot is not None:
-        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
-    if shiftX is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
-    if shiftY is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftY,ax_dir=1)
-    if mag is not None:
-        ifunc_new[:] = warp_image(ifunc_new,mag=mag)
+def set_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
+    warpup = warp_mask(ekapup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
+    ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     if shearAmp is not None:
-        ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
-    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=ekapup)
+        oldpup = warpup.copy()
+        warpup[:] = warp_mask(warpup,shear=shearAmp,rot=shearAngle)
+        ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup)
+    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save(f'/raid1/mmenessini/calibration/EKARUS/ifunc/{ifunc_tag}.fits', overwrite=True)
+    save_pupil(warpup, '/raid1/mmenessini/calibration/EKARUS/pupilstop/', fname='DM468_160pixels_shift', Npix=160, D=1.82)
 
-def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
-    ifunc_new = ifunc.copy()
-    ifunc_inv_new = klinv.copy()
-    if rot is not None:
-        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
-        ifunc_inv_new[:] = rotate_ifunc(ifunc_inv_new.T,rot_deg=rot).T
-    if shiftX is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
-        ifunc_inv_new[:] = shift_ifunc(ifunc_inv_new.T,shift=shiftX,ax_dir=0).T
-    if shiftY is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftY,ax_dir=1)
-        ifunc_inv_new[:] = shift_ifunc(ifunc_inv_new.T,shift=shiftY,ax_dir=1).T
-    if mag is not None:
-        ifunc_new[:] = warp_image(ifunc_new,mag=mag)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,mag=mag).T
+
+def save_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
+    warpup = warp_mask(ekapup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
+    ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
+    ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag).T
     if shearAmp is not None:
-        ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,shear=shearAmp,rot=shearAngle).T
-    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=ekapup)
+        oldpup = warpup.copy()
+        warpup[:] = warp_mask(warpup,shear=shearAmp,rot=shearAngle)
+        ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup)
+        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup).T
+    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/EKARUS/ifunc/dm468_ifunc_bestshift.fits', overwrite=True)
-    ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=ekapup)
+    ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=warpup)
     ifunc_inv_obj.save('/raid1/mmenessini/calibration/EKARUS/ifunc/dm468_ifunc_bestshift_inv.fits', overwrite=True)
+    save_pupil(warpup, '/raid1/mmenessini/calibration/EKARUS/pupilstop/', fname='DM468_160pixels_bestshift', Npix=160, D=1.82)
 
 imframe = np.std(imfull,axis=1).reshape([240,240])
-
 ref_centers = get_frame_pupil_centers(imframe)
 avg_center = np.mean(ref_centers,axis=0)
 
@@ -141,13 +107,16 @@ for j in range(imfull.shape[1]):
     crop_img = frimg[60:180,60:180]
     refim[:,j] = crop_img[crop_pyr_mask]
 
-def evaluate_error(Nmodes:int):
+def get_synim(Nmodes:int,alpha=None):
+    if alpha is not None:
+        set_ifunc_pars(rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])
+        main_config = 'ekarus_onbench.yml calib_im.yml'
+        os.system(f"specula {main_config} temp_synim.yml")
     calibim = fits.getdata(f'/raid1/mmenessini/calibration/EKARUS/im/{im_tag}.fits')[:,:Nmodes]
     calibim -= np.mean(calibim,axis=0)
     calibim *= np.std(refim,axis=0)/np.std(calibim,axis=0)
-    err = np.zeros(Nmodes)
+    synim = np.zeros(refim.shape)
     for j in range(Nmodes):
-        want = refim[:,j]
         fimg = np.zeros([240,240])
         rtot = 0
         for i in range(4):
@@ -156,17 +125,33 @@ def evaluate_error(Nmodes:int):
             np.put(fimg, pup_ids[valid_ids,i], calibim[rtot:rtot+len_ids,j])
             rtot += len_ids
         f2d = fimg.reshape([240,240])[60:180,60:180]
-        got = f2d[crop_pyr_mask]
-        delta = want - got
-        err[j] = np.sqrt(np.sum(delta**2))
-    return err
+        synim[:,j] = f2d[crop_pyr_mask]
+    return synim
 
-def evaluate_metric(Nmodes,return_err:bool=False):
+def sensitivity_matrix(alphas,eps_vec,Nmodes):
+    sens = []
+    print('Computing sensitivity matrix')
+    for k,eps in enumerate(eps_vec):
+        alpha_eps = alphas.copy()
+        alpha_eps[k] += eps
+        push = get_synim(Nmodes,alpha_eps)
+        alpha_eps[k] -= 2*eps
+        pull = get_synim(Nmodes,alpha_eps)
+        delta = (push-pull)/(2*eps)
+        sens.append(delta.flatten())
+    sens = np.array(sens).T
+    return sens
+
+
+if __name__ == "__main__":
+
+    Nmodes = 400
     ovdes = ("{"
             f"main.total_time: {Nmodes*0.001*2}, "
             f"dm.nmodes: {Nmodes}, "
             f"pushpull.nmodes: {Nmodes}, "  
             f"pushpull.amp:    25, "
+            f"pupilstop.tag: 'DM468_160pixels_shift', "
             f"pyr_im_calibrator.nmodes: {Nmodes}, "
             f"pyr_im_calibrator.im_tag: {im_tag}, "
             f"pyr_im_calibrator.overwrite: true, "
@@ -175,104 +160,51 @@ def evaluate_metric(Nmodes,return_err:bool=False):
             f"dm.m2c_object:        {m2c_tag}, "
             "}")
     write_yaml_overrides(input_string=ovdes, temp_name='temp_synim')
-    main_config = 'ekarus_onbench.yml calib_im.yml'
-    os.system(f"specula {main_config} temp_synim.yml")
-    err = evaluate_error(Nmodes)
-    metric = np.sqrt(np.sum(err**2))
-    if return_err:
-        return metric,err
-    else:
-        return metric
-
-
-delta_vec = lambda vec: (np.max(vec)-np.min(vec))/len(vec)
-
-
-if __name__ == "__main__":
-
-    Nmodes = 400
 
     rot0 = 0.0
-    shiftX0 = 0.1
-    shiftY0 = 0.00
-    mag0 = 1.014
-    # rot0 = 0.33
-    # shiftX0 = 0.35
-    # shiftY0 = -0.02
-    # mag0 = 1.013
-    shearAmp0 = 0
-    shearAngle0 = 0
+    shiftX0 = 0.0
+    shiftY0 = 0.0
+    mag0 = 1.0
 
-    prefix = 'oldIM_it2_'
-    overwrite = False
+    drot = 0.2
+    dshft = 0.01
+    dmag = 0.001
 
-    rotvec = np.linspace(-0.5,0.5,11)
-    shiftvec = np.linspace(-1.0,1.0,21)
-    dmags = np.linspace(-0.01,0.01,11)
-    # rotvec = np.linspace(-0.25,0.25,11)
-    # shiftvec = np.linspace(-0.2,0.2,11)
-    # dmags = np.linspace(-0.005,0.005,11)
+    tol = 0
+    max_its = 10
 
-    shear_amps = np.linspace(-0.05,0.05,5)
-    shear_angles = np.linspace(-np.pi,np.pi,36)
+    alpha = np.array([rot0,shiftX0,shiftY0,mag0])
+    # synim = get_synim(Nmodes=Nmodes,alpha=alpha)
+    # print('Done')
+    eps = np.array([drot,dshft,dshft,dmag])
+    err = tol + 1
+    k = 0
 
-    result_dir = '/raid1/mmenessini/results/EKARUS/'
+    while err > tol and k < max_its:
+        print(f'Iteration {k}')
+        sens = sensitivity_matrix(alpha,eps,Nmodes)
 
-    columns = ['rotation','shiftX','shiftY','magnification','shearAmp','shearAngle','metric']
-    result = []
+        # Update gain and synIM
+        synim = get_synim(Nmodes,alpha=alpha)
+        G = np.diag(np.linalg.pinv(synim) @ refim)
 
-    save_ifunc_pars(ifunc,rot=rot0,shiftX=shiftX0,shiftY=shiftY0,mag=mag0)
-    # print(ifunc.shape,ekapup.shape)
+        # Update alpha
+        aux = ((refim @ np.diag(1/G)) - synim)
+        dalpha = np.linalg.pinv(sens) @ aux.flatten()
+        print(f'Update parameters are: {dalpha}')
+        alpha_new = alpha + dalpha
+        err = np.max(np.abs(dalpha)/np.abs(alpha))
+        # err = np.max(np.abs(dalpha)-np.abs(eps)/2)
 
-    err_rot = np.zeros([len(rotvec),Nmodes])
-    for j,rot in enumerate(rotvec):
-        print(f'Testing rotation: {rot}')
-        set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0,shearAmp=shearAmp0,shearAngle=shearAngle0)
-        chi,err_rot[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0, 'magnification': mag0, 'metric': chi})
-        print(f'Obtained metric: {chi}')
-    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_{Nmodes}modes_metrics.fits'),err_rot,overwrite=overwrite)
-
-    err_shft = np.zeros([len(shiftvec),Nmodes])
-    for j,shft in enumerate(shiftvec):
-        print(f'Testing x-shift: {shft}')
-        set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0,shearAmp=shearAmp0,shearAngle=shearAngle0)
-        chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0, 'metric': chi})
-        print(f'Obtained metric: {chi}')
-    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftX{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
-
-    for j,shft in enumerate(shiftvec):
-        print(f'Testing y-shift: {shft}')
-        set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0,shearAmp=shearAmp0,shearAngle=shearAngle0,mag=mag0)
-        chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0, 'metric': chi})
-        print(f'Obtained metric: {chi}')
-    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftY{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
-
-    err_mag = np.zeros([len(dmags),Nmodes])
-    for j,dmag in enumerate(dmags):
-        print(f'Testing magnification: {(mag0+dmag)*1e+2:1.1f}%')
-        set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,mag=mag0+dmag,shearAmp=shearAmp0,shearAngle=shearAngle0)
-        chi,err_mag[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0+dmag, 'metric': chi})
-        print(f'Obtained metric: {chi}')
-    fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaMag{1e+2*(np.max(dmags)-np.min(dmags))/len(dmags):1.2f}_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
-
-    # err_mag = np.zeros([len(shear_amps),len(shear_angles),Nmodes])
-    # for i,shear in enumerate(shear_amps):
-    #     for j,angle in enumerate(shear_angles):
-    #         print(f'Testing shear {shear} with angle: {angle*180/np.pi}°')
-    #         set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,shearAngle=shearAngle0+angle,shearAmp=shearAmp0+shear)
-    #         chi,err_mag[i,j] = evaluate_metric(Nmodes,return_err=True)
-    #         result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0,  'shearAmp': shearAmp0+shear, 'shearAngle': shearAngle0+angle, 'magnification': mag0, 'metric': chi})
-    #         print(f'Obtained metric: {chi}')
-    # fits.writeto(os.path.join(result_dir, 'misreg_csv', prefix+f'deltaShear{delta_vec(shear_amps):1.2f}dAngle{delta_vec(shear_angles)*180/np.pi:1.0f}deg_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
-    results_df = pd.DataFrame(result, columns=columns) 
-    results_df.to_csv(os.path.join(result_dir, 'misreg_csv', 
-                                   prefix+f'deltaRot{delta_vec(rotvec):1.2f}_deltaShift{delta_vec(shiftvec):1.2f}_deltaMag{1e+2*delta_vec(dmags):1.2f}_shear{delta_vec(shear_amps):1.2f}dAngle{delta_vec(shear_angles)*180/np.pi:1.0f}_metric.csv'), index=False)
-        
-
+        # Update synim
+        alpha = alpha_new
+        k += 1
+    
+    if k == max_its:
+        print(f'\nOptimization did not converge in {max_its} iterations! Last parameters: {alpha}')
+    else:
+        print(f'\nOptimization success in {k} iterations! Found parameters: {alpha}')
+        save_ifunc_pars(rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])
 
                 
 
