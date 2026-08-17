@@ -6,8 +6,6 @@ from specula.lib.toccd import toccd
 import os
 import sys
 
-import matplotlib.pyplot as plt
-
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.simul_params import SimulParams
 
@@ -19,6 +17,13 @@ def save_copernico_pupil(destination_dir:str, tag:str, Npix=160, obs=0.3, angle=
     fname = os.path.join(destination_dir, tag+f'_{Npix:1.0f}pixels.fits')
     fits.writeto(fname,new_pupil.reshape([Npix,Npix,1]),overwrite=overwrite)
     return new_pupil
+
+def save_pupil(pupil, destination_dir:str, fname:str, Npix:int, D:float):
+    os.makedirs(destination_dir,exist_ok=True)
+    fpath = os.path.join(destination_dir, fname+'.fits')
+    simul_params = SimulParams(pixel_pupil=Npix,pixel_pitch=D/Npix)
+    pupilstop = Pupilstop(simul_params=simul_params, input_mask=pupil)
+    pupilstop.save(fpath)
 
 def save_pupil_to_size(data_dir:str, destination_dir:str, tag:str, Npix:int, thr:float=0.9, D:float=8.2):
     hdu = fits.open(os.path.join(data_dir, tag+f'_{Npix}pixels.fits'))

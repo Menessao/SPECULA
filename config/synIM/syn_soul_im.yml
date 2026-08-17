@@ -13,14 +13,14 @@ main:
 pushpull:
   class:        'PushPullGenerator'
   nmodes:       500                        # Number of DM actuators
-  amp:          200
+  amp:          25
   outputs:   ['output']
 
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_40x40_lbti_synim'            # Output IM filename
-  overwrite: true                         # Overwrite existing files
+  im_tag:    'pyr3.0_40x40_lbti_optsynim'            # Output IM filename
+  overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands
@@ -36,7 +36,7 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'asm_v30dx_197pixels' #_optshift'
+  tag:               'asm_v30dx_197pixels_shift'
 
 # Atmospheric propagation
 prop:
@@ -86,7 +86,7 @@ pyr_slopes:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_v30dx_lbti_ifunc_optshift'      # Our computed influence functions
+  ifunc_object:      'asm_v30dx_lbti_ifunc_shift'      # Our computed influence functions
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
   sign:              1
@@ -95,10 +95,10 @@ dm:
     in_command:      'pushpull.output'
   outputs:           ['out_layer']
 
-# data_store:
-#   class:             'DataStore'
-#   store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
-#   create_tn: false
-#   inputs:
-#     input_list: ['ccd-ocam.out_pixels','dm_ef-dm.out_layer']
+data_store:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
+  create_tn: false
+  inputs:
+    input_list: ['ccd-ocam.out_pixels','dm_ef-dm.out_layer']
 

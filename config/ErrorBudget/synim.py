@@ -191,9 +191,15 @@ if __name__ == "__main__":
 
     Nmodes = 500
 
+    # rot0 = 55.38
+    # shiftX0 = -0.627
+    # shiftY0 = -0.848
+
     rot0 = 55.38
-    shiftX0 = -0.627
-    shiftY0 = -0.848
+    shiftX0 = -0.633
+    shiftY0 = -0.875
+    mag0 = 1.002
+
     shearAmp0 = 0
     shearAngle0 = 0
 
@@ -220,7 +226,7 @@ if __name__ == "__main__":
         print(f'Testing rotation: {rot}')
         set_ifunc_pars(ifunc,rot=rot0+rot,shiftX=shiftX0,shiftY=shiftY0,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_rot[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0, 'magnification': 1.00, 'metric': chi})
+        result.append({'rotation': rot+rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0, 'magnification': mag0, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaRot{(np.max(rotvec)-np.min(rotvec))/len(rotvec):1.2f}_{Nmodes}modes_metrics.fits'),err_rot,overwrite=overwrite)
 
@@ -229,7 +235,7 @@ if __name__ == "__main__":
         print(f'Testing x-shift: {shft}')
         set_ifunc_pars(ifunc,rot=rot0,shiftX=shft+shiftX0,shiftY=shiftY0,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': 1.00, 'metric': chi})
+        result.append({'rotation': rot0, 'shiftX': shft+shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftX{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
@@ -237,7 +243,7 @@ if __name__ == "__main__":
         print(f'Testing y-shift: {shft}')
         set_ifunc_pars(ifunc,rot=rot0,shiftY=shft+shiftY0,shiftX=shiftX0,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_shft[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': 1.00, 'metric': chi})
+        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shft+shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaShiftY{(np.max(shiftvec)-np.min(shiftvec))/len(shiftvec):1.2f}_{Nmodes}modes_metrics.fits'),err_shft,overwrite=overwrite)
 
@@ -246,7 +252,7 @@ if __name__ == "__main__":
         print(f'Testing magnification: {mag*1e+2:1.1f}%')
         set_ifunc_pars(ifunc,rot=rot0,shiftY=shiftY0,shiftX=shiftX0,mag=mag,shearAmp=shearAmp0,shearAngle=shearAngle0)
         chi,err_mag[j] = evaluate_metric(Nmodes,return_err=True)
-        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag, 'metric': chi})
+        result.append({'rotation': rot0, 'shiftX': shiftX0, 'shiftY': shiftY0, 'shearAmp': shearAmp0, 'shearAngle': shearAngle0,  'magnification': mag0+mag, 'metric': chi})
         print(f'Obtained metric: {chi}')
     fits.writeto(os.path.join(result_dir, 'misreg_csv',prefix+f'deltaMag{1e+2*(np.max(mags)-np.min(mags))/len(mags):1.2f}_{Nmodes}modes_metrics.fits'),err_mag,overwrite=overwrite)
 

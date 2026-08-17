@@ -1,0 +1,12 @@
+pushpull_override:
+  amp: 200
+
+pupilstop_override:
+  tag:               'asm_v30dx_197pixels_optshift'
+
+pyr_im_calibrator_override: 
+  im_tag:    'pyr3.0_40x40_lbti_synim'
+  overwrite: true
+
+dm_override:
+  ifunc_object:   'asm_v30dx_lbti_ifunc_optshift' 
