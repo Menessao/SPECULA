@@ -1,5 +1,9 @@
+main_override:
+  total_time: 1.0
+
 pushpull_override:
   amp: 200
+  nmodes: 500
 
 pupilstop_override:
   tag:               'asm_v30dx_197pixels_optshift'
@@ -7,6 +11,7 @@ pupilstop_override:
 pyr_im_calibrator_override: 
   im_tag:    'pyr3.0_40x40_lbti_synim'
   overwrite: true
+  nmodes: 500
 
 dm_override:
   ifunc_object:   'asm_v30dx_lbti_ifunc_optshift' 

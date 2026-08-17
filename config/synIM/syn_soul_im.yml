@@ -5,20 +5,20 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/SOUL/KLv30dx'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       197                   # Must match influence function computation
   pixel_pitch:       0.041736           # [m] Pitch of the pupil phase array
-  total_time:        1.0               # [s] Total simulation running time
+  total_time:        1.2               # [s] Total simulation running time
   time_step:         0.001               # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
 pushpull:
   class:        'PushPullGenerator'
-  nmodes:       500                        # Number of DM actuators
+  nmodes:       600                        # Number of DM actuators
   amp:          25
   outputs:   ['output']
 
 pyr_im_calibrator:
   class:     'ImCalibrator'
-  nmodes:    500                         # Number of modes to calibrate
+  nmodes:    600                         # Number of modes to calibrate
   im_tag:    'pyr3.0_40x40_lbti_optsynim'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:

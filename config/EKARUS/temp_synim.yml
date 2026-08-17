@@ -7,6 +7,8 @@ dm_override:
 pushpull_override:
   nmodes: 400
   amp: 25
+pupilstop_override:
+  tag: 'DM468_160pixels_shift'
 pyr_im_calibrator_override:
   nmodes: 400
   im_tag: pyr5.0_dm468_onbench_synim

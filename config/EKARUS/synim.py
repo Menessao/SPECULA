@@ -10,7 +10,7 @@ from skimage.transform import AffineTransform,warp
 
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
-from specula.mmlib.utils import get_pupil_mask, get_frame_pupil_centers, shift_image
+from specula.mmlib.utils import get_pupil_mask, get_frame_pupil_centers, shift_image, remap_on_new_mask
 from specula.mmlib.yaml_overrides import write_yaml_overrides
 
 from specula.mmlib.save_telescope_aperture import save_pupil
@@ -18,7 +18,6 @@ from specula.mmlib.save_telescope_aperture import save_pupil
 klinv = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/reordered_unobs_DM468_kl_inv.fits')
 kl = np.linalg.pinv(klinv)
 ifunc = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/reordered_unobs_DM468_ifunc.fits')
-ekapup = fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_160pixels.fits')
 
 # imfull = fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/IntMat_20260802_233704.fits')
 imfull = fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/IntMat_20260731_233429.fits')
@@ -34,6 +33,18 @@ ifunc_tag = 'dm468_ifunc_shift'
 m2c_tag = 'M2C_KL_OOPAO_central_obstruction'
 m2c_tag = 'M2C_KL_OOPAO_synthetic'
 
+def warp_mask(pup,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,rot:float=0.0):
+    center_y, center_x = pup.shape[0]/2.0, pup.shape[1]/2.0
+    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
+    scale = AffineTransform(rotation=rot*np.pi/180,scale=mag)
+    shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
+    trf = shift_to_origin + scale + shift_to_center
+    warp_pup = (warp(pup.astype(float), inverse_map=trf.inverse)) > 0.9
+    return warp_pup.astype(float)
+
+og_ekapup = fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_160pixels.fits')
+ekapup = np.logical_and(warp_mask(og_ekapup,shftX=0,shftY=0,mag=1.0).astype(bool),og_ekapup.astype(bool)).astype(float)
+ifunc = remap_on_new_mask(ifunc,(1-og_ekapup).astype(bool),(1-ekapup).astype(bool))
 
 def warp_image(ifunc,pupmask,
                flip:bool=False,
@@ -57,17 +68,8 @@ def warp_image(ifunc,pupmask,
         ifunc_new[:,j] = warp_img[pup_mask]
     return ifunc_new
 
-def warp_mask(pup,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,rot:float=0.0):
-    center_y, center_x = pup.shape[0]/2.0, pup.shape[1]/2.0
-    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
-    scale = AffineTransform(rotation=rot*np.pi/180,scale=mag)
-    shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
-    trf = shift_to_origin + scale + shift_to_center
-    warp_pup = (warp(pup.astype(float), inverse_map=trf.inverse)) > 0.9
-    return warp_pup.astype(float)
 
-
-def set_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
+def set_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
     warpup = warp_mask(ekapup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     if shearAmp is not None:
@@ -79,7 +81,7 @@ def set_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None
     save_pupil(warpup, '/raid1/mmenessini/calibration/EKARUS/pupilstop/', fname='DM468_160pixels_shift', Npix=160, D=1.82)
 
 
-def save_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
+def save_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
     warpup = warp_mask(ekapup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag).T
@@ -161,7 +163,7 @@ if __name__ == "__main__":
             "}")
     write_yaml_overrides(input_string=ovdes, temp_name='temp_synim')
 
-    rot0 = 0.0
+    rot0 = -8.0
     shiftX0 = 0.0
     shiftY0 = 0.0
     mag0 = 1.0
@@ -170,12 +172,12 @@ if __name__ == "__main__":
     dshft = 0.01
     dmag = 0.001
 
-    tol = 0
+    tol = 1e-3
     max_its = 10
 
     alpha = np.array([rot0,shiftX0,shiftY0,mag0])
-    # synim = get_synim(Nmodes=Nmodes,alpha=alpha)
-    # print('Done')
+    synim = get_synim(Nmodes=Nmodes,alpha=alpha)
+    print('Done')
     eps = np.array([drot,dshft,dshft,dmag])
     err = tol + 1
     k = 0

@@ -154,13 +154,14 @@ if __name__ == "__main__":
     dmag = 0.001
 
     result_dir = '/raid1/mmenessini/results/SOUL/KLv30dx/'
-    Nmodes = 500
+    Nmodes = 400
 
-    tol = 0
+    tol = 1e-2
     max_its = 10
 
     alpha = np.array([rot0,shiftX0,shiftY0,mag0])
-    # synim = get_synim(Nmodes=Nmodes,alpha=alpha)
+    # save_ifunc_pars(rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])
+    # # synim = get_synim(Nmodes=Nmodes,alpha=alpha)
     # print('Done')
     eps = np.array([drot,dshft,dshft,dmag])
     refim = get_refim(Nmodes)
@@ -181,6 +182,7 @@ if __name__ == "__main__":
         print(f'Update parameters are: {dalpha}')
         alpha_new = alpha + dalpha
         err = np.max(np.abs(dalpha)/np.abs(alpha))
+        print(err)
 
         # Update synim
         alpha = alpha_new

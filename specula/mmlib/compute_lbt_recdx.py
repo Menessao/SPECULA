@@ -56,17 +56,17 @@ if __name__ == "__main__":
     rMod = 0.0
     seeing = 1.0
     types = ['DL','PCinf','PCperf']
-    Nmodes = np.array([100,500,550,600]) #200,300,400,
+    Nmodes = np.array([100,400,500,550,600]) #200,300,400,
     for tp in types:
         if tp == 'DL':
-            tag = f'pyr{rMod:1.1f}_40x40_lbt_optsynim'
-            rectag = f'Rec_mod{rMod:1.1f}_synthDL' #_LowAmp
+            tag = f'pyr{rMod:1.1f}_40x40_lbti_optsynim' #f'pyr{rMod:1.1f}_40x40_lbt_optsynim'
+            rectag = f'Rec_mod{rMod:1.1f}_LBTIdx_synthDL' #f'Rec_mod{rMod:1.1f}_synthDL'
         elif tp == 'PCinf':
-            tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcinf' #_LowAmp
-            rectag = f'Rec_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}' #_LowAmp
+            tag = f'pyr{rMod:1.1f}_lbti_s{seeing:1.1f}_synim_pcinf' #f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcinf'
+            rectag = f'Rec_mod{rMod:1.1f}_LBTIdx_synPCinf_s{seeing:1.1f}' #f'Rec_mod{rMod:1.1f}_synthPCinf_s{seeing:1.1f}'
         elif tp == 'PCperf':
-            tag = f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcperf' #_LowAmp
-            rectag = f'Rec_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}' #_LowAmp
+            tag = f'pyr{rMod:1.1f}_lbti_s{seeing:1.1f}_synim_pcperf' #f'pyr{rMod:1.1f}_s{seeing:1.1f}_synim_pcperf'
+            rectag = f'Rec_mod{rMod:1.1f}_LBTIdx_synPCperf_s{seeing:1.1f}' #f'Rec_mod{rMod:1.1f}_synthPCperf_s{seeing:1.1f}'
         print(tag)
         IntMat = fits.getdata(op.join(impath,tag+'.fits'))
         for N in Nmodes:
