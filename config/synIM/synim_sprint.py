@@ -6,7 +6,6 @@ import specula
 specula.init(0)
 
 from skimage.transform import AffineTransform,warp
-from scipy.ndimage import rotate #,zoom
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
 
@@ -28,7 +27,12 @@ filepath=f'/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupdata.fits'
 
 main_config = 'syn_soul_im.yml'
 
-def warp_image(ifunc,pupmask,flip:bool=False,shftX:float=0.0,shftY:float=0.0,shear:float=0,rot:float=0,mag:float=1.0):
+def warp_image(ifunc,pupmask,
+               flip:bool=False,
+               shftX:float=0.0,shftY:float=0.0,
+               shear:float=0,rot:float=0,
+               mag:float=1.0,
+               oldpup=lbtpup):
     pup_mask = pupmask.astype(bool)
     ifunc_new = np.zeros([int(np.sum(pup_mask)),ifunc.shape[1]])
     img = np.zeros(lbtpup.shape)
@@ -38,14 +42,14 @@ def warp_image(ifunc,pupmask,flip:bool=False,shftX:float=0.0,shftY:float=0.0,she
     shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
     trf = shift_to_origin + shear_and_scale + shift_to_center
     for j in range(ifunc.shape[1]):
-        img[lbtpup.astype(bool)] = ifunc[:,j]
+        img[oldpup.astype(bool)] = ifunc[:,j]
         if flip:
             img = img[::-1,:]
         warp_img = warp(img, inverse_map=trf.inverse)
         ifunc_new[:,j] = warp_img[pup_mask]
     return ifunc_new
 
-def warp_mask(pup,flip:bool=False,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,rot:float=0.0):
+def warp_mask(pup,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,rot:float=0.0):
     center_y, center_x = pup.shape[0]/2.0, pup.shape[1]/2.0
     shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
     scale = AffineTransform(rotation=rot*np.pi/180,scale=mag)
@@ -56,24 +60,26 @@ def warp_mask(pup,flip:bool=False,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,
 
 
 def set_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
-    warpup = warp_mask(lbtpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
+    warpup = warp_mask(lbtpup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     if shearAmp is not None:
+        oldpup = warpup.copy()
         warpup[:] = warp_mask(warpup,shear=shearAmp,rot=shearAngle)
-        ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle)
+        ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup)
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_lbti_ifunc_optshift.fits', overwrite=True)
     save_pupil(warpup, '/raid1/mmenessini/calibration/SOUL/KLv30dx/pupilstop/', fname='asm_v30dx_197pixels_optshift', Npix=197, D=8.222)
 
 
 def save_ifunc_pars(flip=True,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearAmp=None,shearAngle=0):
-    warpup = warp_mask(lbtpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
+    warpup = warp_mask(lbtpup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag)
     ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag).T
     if shearAmp is not None:
+        oldpup = warpup.copy()
         warpup[:] = warp_mask(warpup,shear=shearAmp,rot=shearAngle)
-        ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,warpup,shear=shearAmp,rot=shearAngle).T
+        ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup)
+        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup).T
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_lbti_ifunc_shift.fits', overwrite=True)
     ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=warpup)
@@ -140,10 +146,10 @@ delta_vec = lambda vec: (np.max(vec)-np.min(vec))/len(vec)
 
 if __name__ == "__main__":
 
-    rot0 = -34
-    shiftX0 = 0.0
-    shiftY0 = 0.0
-    mag0 = 1.0
+    rot0 = -34.1
+    shiftX0 = 0.28
+    shiftY0 = -1.03
+    mag0 = 0.97
 
     drot = 0.2
     dshft = 0.01
@@ -152,7 +158,7 @@ if __name__ == "__main__":
     result_dir = '/raid1/mmenessini/results/SOUL/KLv30dx/'
     Nmodes = 500
 
-    tol = 1e-3
+    tol = 0
     max_its = 10
 
     alpha = np.array([rot0,shiftX0,shiftY0,mag0])
@@ -176,7 +182,7 @@ if __name__ == "__main__":
         dalpha = np.linalg.pinv(sens) @ aux.flatten()
         print(f'Update parameters are: {dalpha}')
         alpha_new = alpha + dalpha
-        err = np.max(np.abs(dalpha)/np.abs(alpha))
+        err = np.max(np.abs(dalpha)-np.abs(eps)/5)
 
         # Update synim
         alpha = alpha_new
