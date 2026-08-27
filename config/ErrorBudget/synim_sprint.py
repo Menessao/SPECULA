@@ -95,7 +95,7 @@ pup_ids = pup_hdu[1].data
 
 def get_synim(Nmodes:int,alpha=None):
     if alpha is not None:
-        set_ifunc_pars(ifunc,rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])
+        set_ifunc_pars(ifunc,rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3],shearX=alpha[4],shearY=alpha[5])
         os.system(f"specula {main_config}")
     aux = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/im/pyr3.0_40x40_lbt_synim.fits')[:,:Nmodes]
     synim = aux.copy()
@@ -142,6 +142,11 @@ if __name__ == "__main__":
     shiftX0 = 0.0
     shiftY0 = 0.0
     mag0 = 1.0
+    
+    rot0 = -55.39
+    shiftX0 = -0.80
+    shiftY0 = -1.31
+    mag0 = 1.0002
     shearX0 = 0.0
     shearY0 = 0.0
 
@@ -154,14 +159,13 @@ if __name__ == "__main__":
     Nmodes = 500
 
     tol = 1e-3
-    max_its = 20
+    max_its = 10
     doShear = False
     
     alpha = np.array([rot0,shiftX0,shiftY0,mag0,shearX0,shearY0])
     eps = np.array([drot,dshft,dshft,dmag,dshear,dshear])
     if doShear is False:
         eps = eps[:4]
-        alpha = alpha[:4]
     refim = get_refim(Nmodes)
     err = tol + 1
     k = 0
@@ -176,20 +180,24 @@ if __name__ == "__main__":
 
         # Update alpha
         aux = ((refim @ np.diag(1/G)) - synim)
+        metric = np.sqrt(np.sum(aux**2))
         dalpha = np.linalg.pinv(sens) @ aux.flatten()
         print(f'Update parameters are: {dalpha}')
-        alpha_new = alpha + dalpha
-        err = np.max(np.abs(dalpha)/np.abs(alpha_new))
-        print(err)
+        alpha_new = alpha.copy()
+        alpha_new[:len(dalpha)] += dalpha
+        err = np.max(np.abs(dalpha)/np.abs(alpha_new[:len(dalpha)]))
+        print(err,metric)
+
+        eps = eps/2 + eps/2*(np.abs(dalpha)>eps)
 
         # Update synim
         alpha = alpha_new
         k += 1
     
     if k == max_its:
-        print(f'\nOptimization did not converge in {max_its} iterations! Error metric is: {err:1.3e}\nLast parameters: {alpha}')
+        print(f'\nOptimization did not converge in {max_its} iterations! Error metric is: {metric:1.3e}\nLast parameters: {alpha}')
     else:
-        print(f'\nOptimization success in {k} iterations! Error metric is: {err:1.3e}\nFound parameters: {alpha}')
+        print(f'\nOptimization success in {k} iterations! Error metric is: {metric:1.3e}\nFound parameters: {alpha}')
         if len(alpha) > 4:
             save_ifunc_pars(rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3],shearX=alpha[4],shearY=alpha[5])
         else:
