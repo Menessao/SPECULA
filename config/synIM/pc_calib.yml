@@ -6,7 +6,7 @@ pushpull_override:
   ncycles: 70
 
 pyr_im_calibrator_override: 
-  im_tag:    'pyr3.0_lbti_s1.0_synim_pcinf'
+  im_tag:    'pyr3.0_lbti_s1.0_synim_pcperf' #'pyr3.0_lbti_s1.0_synim_pcinf'
 
 pyr_override:
   mod_amp: 3.0
@@ -56,7 +56,7 @@ dm_random:
   m2c_object:        'asm_v30dx_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
-    in_command: 'scale_random.out_value' # 'modal_analysis_random.out_modes'
+    in_command: 'modal_analysis_random.out_modes' #'scale_random.out_value' # 
   outputs: ['out_layer']
 
 atmo_pc:

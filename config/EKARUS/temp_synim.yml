@@ -1,16 +1,16 @@
 main_override:
-  total_time: 0.8
+  total_time: 0.7000000000000001
 dm_override:
-  nmodes: 400
+  nmodes: 350
   ifunc_object: dm468_ifunc_shift
   m2c_object: M2C_KL_OOPAO_synthetic
 pushpull_override:
-  nmodes: 400
-  amp: 25
+  nmodes: 350
+  amp: 200
 pupilstop_override:
   tag: 'DM468_160pixels_shift'
 pyr_im_calibrator_override:
-  nmodes: 400
+  nmodes: 350
   im_tag: pyr5.0_dm468_onbench_synim
   overwrite: true
 pyr_override:

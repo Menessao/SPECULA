@@ -239,6 +239,7 @@ class PyrPupdataCalibrator(BaseProcessingObj):
             center, radius = self._analyze_single_pupil(quad)
             centers[i] = center + offset
             radii[i] = radius
+            print(f'Pupil {i}: radius = {radius:1.1f}, center = {center}')
 
         return centers, radii
 
@@ -406,7 +407,7 @@ class PyrPupdataCalibrator(BaseProcessingObj):
 
             for i in range(4):
                 if radii[i] <= 0:
-                    raise ValueError("Invalid radius detected on index {i}. "
+                    raise ValueError(f"Invalid radius ({radii[i]}) detected on index {i}. "
                                      "Check input image and parameters.")
 
                 # Distance from center

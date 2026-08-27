@@ -36,7 +36,7 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'asm_v30dx_197pixels' #_optshift'
+  tag:               'asm_v30dx_197pixels_optshift'
 
 # Atmospheric propagation
 prop:

@@ -15,3 +15,10 @@ pyr_im_calibrator_override:
 
 dm_override:
   ifunc_object:   'asm_v30dx_lbti_ifunc_optshift' 
+
+data_store:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/SOUL/KLv30dx/scratch_synim'
+  create_tn: false
+  inputs:
+    input_list: ['ccd-ocam.out_pixels','dm_ef-dm.out_layer']

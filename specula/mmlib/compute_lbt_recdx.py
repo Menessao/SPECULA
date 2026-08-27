@@ -53,7 +53,7 @@ def generate_rec(im,Nmodes:int,argos:bool,rMod=3.0):
 if __name__ == "__main__":
     impath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/im'
     recpath = '/raid1/mmenessini/calibration/SOUL/KLv30dx/rec'
-    rMod = 0.0
+    rMod = 3.0
     seeing = 1.0
     types = ['DL','PCinf','PCperf']
     Nmodes = np.array([100,400,500,550,600]) #200,300,400,

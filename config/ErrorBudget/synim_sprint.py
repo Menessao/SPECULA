@@ -1,15 +1,14 @@
 from astropy.io import fits
 import numpy as np
 import os
-import pandas as pd
 
 import specula 
 specula.init(0)
 
 from skimage.transform import AffineTransform,warp
-from scipy.ndimage import rotate #,zoom
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
+from specula.mmlib.save_telescope_aperture import save_pupil
 
 klinv = fits.getdata('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_kl_inv.fits')
 kl = np.linalg.pinv(klinv)
@@ -25,99 +24,67 @@ filepath=f'/raid1/mmenessini/calibration/SOUL/KLv30dx/pupils/lbt_pupdata.fits'
 
 main_config = 'syn_soul_im.yml'
 
-def shift_image(image, shift, axis):
-    shift_int = int(np.floor(shift))
-    shift_frac = shift - shift_int
-    def integer_shift(img, pixels, ax):
-        if pixels == 0:
-            return img.copy()
-        pad_width = [(0, 0), (0, 0)]
-        if pixels > 0:
-            pad_width[ax] = (pixels, 0)  # Pad start (left/top)
-            sliced_img = np.pad(img, pad_width, mode='constant', constant_values=0)
-            if ax == 0: return sliced_img[:-pixels, :]
-            else:       return sliced_img[:, :-pixels]
-        else:
-            pad_width[ax] = (0, abs(pixels))  # Pad end (right/bottom)
-            sliced_img = np.pad(img, pad_width, mode='constant', constant_values=0)
-            if ax == 0: return sliced_img[abs(pixels):, :]
-            else:       return sliced_img[:, abs(pixels):]
-    img_floor = integer_shift(image, shift_int, axis)
-    img_ceil = integer_shift(image, shift_int + 1, axis)
-    shifted_image = img_floor * (1.0 - shift_frac) + img_ceil * shift_frac
-    return shifted_image
 
-def warp_image(ifunc,shear:float=0,rot:float=0,mag:float=1.0):
-    ifunc_new = np.zeros_like(ifunc)
+def warp_image(ifunc,pupmask,
+               flip:bool=False,
+               shftX:float=0.0,shftY:float=0.0,
+               shearX:float=0.0,shearY:float=0.0,
+               rot:float=0.0,
+               mag:float=1.0,
+               oldpup=lbtpup):
+    pup_mask = pupmask.astype(bool)
+    ifunc_new = np.zeros([int(np.sum(pup_mask)),ifunc.shape[1]])
     img = np.zeros(lbtpup.shape)
     center_y, center_x = img.shape[0]/2.0, img.shape[1]/2.0
     shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
-    shear_and_scale = AffineTransform(shear=shear, rotation=rot, scale=mag)
-    shift_to_center = AffineTransform(translation=(center_x, center_y))
+    shear_and_scale = AffineTransform(shear=(shearX,shearY), rotation=rot*np.pi/180, scale=mag)
+    shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
     trf = shift_to_origin + shear_and_scale + shift_to_center
-    # warp_mask = np.logical_or(warp((1-lbtpup), inverse_map=trf.inverse),(1-lbtpup).astype(bool))
     for j in range(ifunc.shape[1]):
-        img[lbtpup.astype(bool)] = ifunc[:,j]
+        img[oldpup.astype(bool)] = ifunc[:,j]
+        if flip is True:
+            img = img[::-1,:]
         warp_img = warp(img, inverse_map=trf.inverse)
-        ifunc_new[:,j] = warp_img[lbtpup.astype(bool)]
+        ifunc_new[:,j] = warp_img[pup_mask]
     return ifunc_new
 
-def rotate_ifunc(ifunc,rot_deg:float):
-    ifunc_new = np.zeros_like(ifunc)
-    img = np.zeros(lbtpup.shape)
-    for j in range(ifunc.shape[1]):
-        img[lbtpup.astype(bool)] = ifunc[:,j]
-        rot_img = rotate(img,angle=rot_deg,reshape=False)
-        ifunc_new[:,j] = rot_img[lbtpup.astype(bool)]
-    return ifunc_new
-
-def shift_ifunc(ifunc,shift:float,ax_dir):
-    ifunc_new = np.zeros_like(ifunc)
-    img = np.zeros(lbtpup.shape)
-    for j in range(ifunc.shape[1]):
-        img[lbtpup.astype(bool)] = ifunc[:,j]
-        shift_img = shift_image(img,shift=shift,axis=ax_dir)
-        ifunc_new[:,j] = shift_img[lbtpup.astype(bool)]
-    return ifunc_new
+def warp_mask(pup,shftX:float=0.0,shftY:float=0.0,mag:float=1.0,rot:float=0.0,
+               shearX:float=0.0,shearY:float=0.0):
+    center_y, center_x = pup.shape[0]/2.0, pup.shape[1]/2.0
+    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
+    scale = AffineTransform(shear=(shearX,shearY),rotation=rot*np.pi/180,scale=mag)
+    shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
+    trf = shift_to_origin + scale + shift_to_center
+    warp_pup = (warp(pup.astype(float), inverse_map=trf.inverse)) > 0.9
+    return warp_pup.astype(float)
 
 
-def set_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
-    ifunc_new = ifunc.copy()
-    if rot is not None:
-        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
-    if shiftX is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
-    if shiftY is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftY,ax_dir=1)
-    if mag is not None:
-        ifunc_new[:] = warp_image(ifunc_new,mag=mag)
-    if shearAmp is not None:
-        ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
-    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
+def set_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearX:float=0.0,shearY:float=0.0):
+    warpup = warp_mask(lbtpup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY)
+    ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY)
+    # if shearAmp is not None:
+    #     oldpup = warpup.copy()
+    #     warpup[:] = warp_mask(warpup,shear=shearAmp,rot=shearAngle)
+    #     ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup)
+    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_optshift.fits', overwrite=True)
+    save_pupil(warpup, '/raid1/mmenessini/calibration/SOUL/KLv30dx/pupilstop/', fname='asm_v30dx_197pixels_optshift', Npix=197, D=8.222)
 
-def save_ifunc_pars(ifunc,shiftX=None,shiftY=None,rot=None,mag=None,shearAmp=None,shearAngle=0):
-    ifunc_new = ifunc.copy()
-    ifunc_inv_new = klinv.copy()
-    if rot is not None:
-        ifunc_new[:] = rotate_ifunc(ifunc_new,rot_deg=rot)
-        ifunc_inv_new[:] = rotate_ifunc(ifunc_inv_new.T,rot_deg=rot).T
-    if shiftX is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftX,ax_dir=0)
-        ifunc_inv_new[:] = shift_ifunc(ifunc_inv_new.T,shift=shiftX,ax_dir=0).T
-    if shiftY is not None:
-        ifunc_new[:] = shift_ifunc(ifunc_new,shift=shiftY,ax_dir=1)
-        ifunc_inv_new[:] = shift_ifunc(ifunc_inv_new.T,shift=shiftY,ax_dir=1).T
-    if mag is not None:
-        ifunc_new[:] = warp_image(ifunc_new,mag=mag)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,mag=mag).T
-    if shearAmp is not None:
-        ifunc_new[:] = warp_image(ifunc_new,shear=shearAmp,rot=shearAngle)
-        ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,shear=shearAmp,rot=shearAngle).T
-    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=lbtpup)
+
+def save_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearX:float=0.0,shearY:float=0.0):
+    warpup = warp_mask(lbtpup,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY)
+    ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY)
+    ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY).T
+    # if shearAmp is not None:
+    #     oldpup = warpup.copy()
+    #     warpup[:] = warp_mask(warpup,shear=shearAmp,rot=shearAngle)
+    #     ifunc_new[:] = warp_image(ifunc_new,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup)
+    #     ifunc_inv_new[:] = warp_image(ifunc_inv_new.T,warpup,shear=shearAmp,rot=shearAngle,oldpup=oldpup).T
+    ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift.fits', overwrite=True)
-    ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=lbtpup)
+    ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=warpup)
     ifunc_inv_obj.save('/raid1/mmenessini/calibration/SOUL/KLv30dx/ifunc/asm_v30dx_ifunc_shift_inv.fits', overwrite=True)
+    save_pupil(warpup, '/raid1/mmenessini/calibration/SOUL/KLv30dx/pupilstop/', fname='asm_v30dx_197pixels_shift', Npix=197, D=8.222)
 
 Nslopes = 2512
 npix = 120
@@ -169,27 +136,32 @@ def sensitivity_matrix(alphas,eps_vec,Nmodes):
     return sens
 
 
-delta_vec = lambda vec: (np.max(vec)-np.min(vec))/len(vec)
-
 if __name__ == "__main__":
 
-    rot0 = 54
+    rot0 = -54
     shiftX0 = 0.0
     shiftY0 = 0.0
     mag0 = 1.0
+    shearX0 = 0.0
+    shearY0 = 0.0
 
     drot = 0.5
     dshft = 0.01
     dmag = 0.001
+    dshear = 0.001
 
     result_dir = '/raid1/mmenessini/results/SOUL/KLv30dx/'
     Nmodes = 500
 
     tol = 1e-3
-    max_its = 10
+    max_its = 20
+    doShear = False
     
-    alpha = np.array([rot0,shiftX0,shiftY0,mag0])
-    eps = np.array([drot,dshft,dshft,dmag])
+    alpha = np.array([rot0,shiftX0,shiftY0,mag0,shearX0,shearY0])
+    eps = np.array([drot,dshft,dshft,dmag,dshear,dshear])
+    if doShear is False:
+        eps = eps[:4]
+        alpha = alpha[:4]
     refim = get_refim(Nmodes)
     err = tol + 1
     k = 0
@@ -207,14 +179,18 @@ if __name__ == "__main__":
         dalpha = np.linalg.pinv(sens) @ aux.flatten()
         print(f'Update parameters are: {dalpha}')
         alpha_new = alpha + dalpha
-        err = np.max(np.abs(dalpha)/np.abs(alpha))
+        err = np.max(np.abs(dalpha)/np.abs(alpha_new))
+        print(err)
 
         # Update synim
         alpha = alpha_new
         k += 1
     
     if k == max_its:
-        print(f'\nOptimization did not converge in {max_its} iterations! Last parameters: {alpha}')
+        print(f'\nOptimization did not converge in {max_its} iterations! Error metric is: {err:1.3e}\nLast parameters: {alpha}')
     else:
-        print(f'\nOptimization success in {k} iterations! Found parameters: {alpha}')
-        save_ifunc_pars(ifunc,rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])
+        print(f'\nOptimization success in {k} iterations! Error metric is: {err:1.3e}\nFound parameters: {alpha}')
+        if len(alpha) > 4:
+            save_ifunc_pars(rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3],shearX=alpha[4],shearY=alpha[5])
+        else:
+            save_ifunc_pars(rot=alpha[0],shiftX=alpha[1],shiftY=alpha[2],mag=alpha[3])

@@ -53,7 +53,7 @@ source_ngs:
 pupilstop:
   class:             'Pupilstop'
   # tag:                'reordered_unobs_DM468_160pixels'
-  tag:                'DM468_160pixels_bestshift'
+  tag:               'DM468_160pixels_bestshift'
   # simul_params_ref:  'main'
   
 # Atmospheric propagation
@@ -77,11 +77,13 @@ ef_prop:
 pyr:
   class:             'ModulatedPyramid'
   simul_params_ref:  'main'
-  pup_diam:          38.                     # Pupil diameter in subaps.
+  pup_diam:          40. #38                    # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
-  pyr_tlt_coeff:     [[1.1328852114285715, 1.0976296414285716, 1.18185203742857142, 1.1357142857142857],
-                      [1.0607142857142857, 0.9545511985714286, 1.0589343157142857, 0.985]]
-  fov:               8.8                     # Requested field-of-view [arcsec]
+  # pyr_tlt_coeff:     [[1.1328852114285715, 1.0976296414285716, 1.18185203742857142, 1.1357142857142857],
+  #                     [1.0607142857142857, 0.9545511985714286, 1.0589343157142857, 0.985]]
+  pyr_tlt_coeff:     [[1.1520833372833667, 1.1116588162548362, 1.1671916659819192, 1.146550487556285],
+                      [1.0678673571075679, 0.968967716126909, 1.0351018949820765, 0.9617331782524007]]
+  fov:               8.8 #8.8                     # Requested field-of-view [arcsec]
   mod_amp:           5.0                     # Modulation radius (in lambda/D units)
   output_resolution: 240                      # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    635                     # [nm] Pyramid wavelength
