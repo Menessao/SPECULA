@@ -12,8 +12,9 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    400                         # Number of modes to calibrate
-  im_tag:    'pyr3.0_onbench_measIF_bestshift_dm468_im'            # Output IM filename
-  overwrite: false                         # Overwrite existing files
+  # im_tag:    'pyr3.0_onbench_measIF_bestshift_dm468_im'            # Output IM filename
+  im_tag:    'pyr5.0_dm468_40x40_obs_im'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
     in_commands: 'pushpull.output'        # Push-pull commands

@@ -28,21 +28,50 @@ def regularize_mat(mat, thr:float=1e-2):
 
 def postprocess_iffs(root_dir:str, data_path:str, tag:str,
                      Npix:int, D:float, obsratio = 0.0, r0=0.03, L0=25):
+
+    os.makedirs(root_dir, exist_ok=True)
+
+    # initialize calibration manager
+    calib_manager = CalibManager(root_dir)
+    
     # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_IFFs.fits')))
     # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'DM468_mask.fits')),dtype=bool)
     # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'alpaoIFFs.fits')))
     # mask = specula.xp.array(1-fits.getdata(os.path.join(data_path,'alpaoPupMask.fits')),dtype=bool)
-    iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits'))).T
-    mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
+    # iffs = specula.xp.array(fits.getdata(os.path.join(data_path,'reordered_IFs.fits'))).T
+    # iffs = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/simul_unobs_DM468_ifunc.fits').T
+    # mask = specula.xp.array(1-fits.getdata(os.path.join(root_dir,'pupilstop','simul_unobs_DM468_160pixels.fits'))).astype(bool)
+    # iffs = fits.getdata('/raid1/mmenessini/calibration/EKARUS/ifunc/simul_obs33_dia97_DM468_ifunc.fits').T
+    # mask = specula.xp.array(1-fits.getdata(os.path.join(root_dir,'pupilstop','simul_obs33_dia97_DM468_160pixels.fits'))).astype(bool)
+    iffs = specula.xp.array(fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/reordered_DM468_iffs.fits'))
+    # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
+    mask = specula.xp.array(1-fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_367pixels.fits'),dtype=bool)
 
-    X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
-    minX = specula.xp.min(X[~mask.astype(bool)])
-    maxX = specula.xp.max(X[~mask.astype(bool)])
-    minY = specula.xp.min(Y[~mask.astype(bool)])
-    maxY = specula.xp.max(Y[~mask.astype(bool)])
+    # iffs = regularize_mat(iffs, thr=1e-2)
+    # U,S,Vt = specula.xp.linalg.svd(iffs,full_matrices=False)
+    # Sinv = 1/S
+    # Sinv[:410] = 0
+    # rec = (Vt.T*Sinv) @ U.T
+    # rec = specula.xp.linalg.pinv(iffs)
+    # ifunc_inv_filename =  calib_manager.filename('ifunc','reordered_DM468_iffs_inv')
+    # print(f"\nSaving inverse ifuncs...")
+    # ifunc_inv_obj = IFuncInv(
+    #     ifunc_inv=rec,
+    #     mask=(1-mask).astype(specula.xp.uint8) # bin_pup_mask
+    # )
+    # ifunc_inv_obj.save(ifunc_inv_filename, overwrite=True)
+    # print("OK: " + ifunc_inv_filename + f" (inverse ifuncs: {rec.shape})")
 
-    crop_mask = mask[int(minX-1):int(maxX+1),:]
-    crop_mask = crop_mask[:,int(minY-1):int(maxY+1)]
+    # print(int(specula.xp.sum(1-mask)),specula.xp.size(mask))
+    # X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
+    # minX = specula.xp.min(X[~mask.astype(bool)])
+    # maxX = specula.xp.max(X[~mask.astype(bool)])
+    # minY = specula.xp.min(Y[~mask.astype(bool)])
+    # maxY = specula.xp.max(Y[~mask.astype(bool)])
+
+    # crop_mask = mask[int(minX-1):int(maxX+1),:]
+    # crop_mask = crop_mask[:,int(minY-1):int(maxY+1)]
+    crop_mask = mask.copy()
 
 
     # print(specula.xp.sum(1-mask),specula.xp.sum(1-crop_mask),mask.shape,mask.dtype,minX,maxX,minY,maxY)
@@ -52,10 +81,10 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
 
     binned_shape = (Npix,Npix)
     # bin_mask = toccd(specula.xp.array(crop_mask).astype(float), binned_shape, xp=specula.xp) > 0
-    bin_mask = (1-make_mask(np_size=Npix, diaratio=1.0, obsratio=obsratio)).astype(bool)
-    # bin_mask = crop_mask.copy()
-    # binned_shape = crop_mask.shape
-    # Npix = binned_shape[0]
+    # bin_mask = (1-make_mask(np_size=Npix, diaratio=1.0, obsratio=obsratio)).astype(bool)
+    bin_mask = crop_mask.copy()
+    binned_shape = crop_mask.shape
+    Npix = binned_shape[0]
     # print(bin_mask.shape,specula.xp.sum(1-bin_mask),specula.xp.sum(bin_mask))
     # fits.writeto(os.path.join(root_dir,'mask','bin_mask.fits'),cpuArray(bin_mask.astype(float)),overwrite=True)
     # pupil = specula.xp.array(fits.getdata(os.path.join(root_dir,'pupilstop',mask_tag+'.fits')),dtype=bool)
@@ -65,10 +94,10 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     # print(bin_mask.shape,specula.xp.sum(1-bin_mask))
 
 
-    # # Regularized influence functions
+    # # # Regularized influence functions
     # iffs = regularize_mat(iffs, thr=1e-2)  # was 2e/4
 
-    print(int(specula.xp.sum(1-bin_mask)),iffs.shape)
+    print(int(specula.xp.sum(1-bin_mask)),specula.xp.size(bin_mask),iffs.shape)
     IF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))]) # bin_pup_mask
     unobsIF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))])
 
@@ -98,6 +127,8 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     #     dtype=specula.xp.float32
     # )
 
+    thr = 1e+4
+
     kl_basis, m2c, _ = make_modal_base_from_ifs_fft(
         pupil_mask=specula.xp.array(1-bin_mask),
         diameter=D,
@@ -106,7 +137,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
         L0=L0,
         zern_modes=zern_modes,
         oversampling=oversampling,
-        if_max_condition_number=1e+3,
+        if_max_condition_number=thr,
         xp=specula.xp,
         dtype=specula.xp.float32
     )
@@ -124,10 +155,6 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     kl_basis_inv = specula.xp.linalg.pinv(kl_basis)
 
     ##########################################################    
-    os.makedirs(root_dir, exist_ok=True)
-
-    # initialize calibration manager
-    calib_manager = CalibManager(root_dir)
 
     # tags
     ifunc_tag = tag+'_ifunc'
@@ -152,7 +179,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
 
     # Create IFunc object and save
     ifunc_obj = IFunc(
-        ifunc=IF,
+        ifunc=IF.T,
         mask=(1-bin_mask).astype(specula.xp.uint8) # bin_pup_mask
     )
     ifunc_obj.save(ifunc_filename, overwrite=True)
@@ -168,7 +195,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     # inverse influence function object for modal analysis
     print(f"\nSaving inverse modal base...")
     ifunc_inv_obj = IFuncInv(
-        ifunc_inv=kl_basis_inv,
+        ifunc_inv=kl_basis_inv.T,
         mask=(1-bin_mask).astype(specula.xp.uint8) # bin_pup_mask
     )
     ifunc_inv_obj.save(base_inv_filename, overwrite=True)
@@ -187,7 +214,8 @@ if __name__ == "__main__":
     data_path = '/raid1/mmenessini/calibration/EKARUS/data'
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
 
-    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='reordered_unobs_DM468', Npix=160, D=D, obsratio=0.0)
+    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='meas_obs_DM468',#'simul_unobs_DM468',#'reordered_unobs_DM468'
+                     Npix=160, D=D, obsratio=0.32)
 
 
 

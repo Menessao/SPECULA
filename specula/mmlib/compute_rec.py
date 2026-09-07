@@ -100,10 +100,12 @@ if __name__ == "__main__":
 
     Nmodes = 400
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
-    tag = 'pyr5.0_onbench_crop_measIF' #'pyr5.0_onsky_measIF_dm468'
+    tag = 'pyr5.0_dm468_40x40_obs' #'pyr5.0_onsky_measIF_dm468'
     rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
-    tag = 'pyr5.0_onbench_crop' #'pyr5.0_onsky_dm468'
-    rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
+    # tag = 'pyr5.0_onbench_crop_measIF' #'pyr5.0_onsky_measIF_dm468'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
+    # tag = 'pyr5.0_onbench_crop' #'pyr5.0_onsky_dm468'
+    # rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
 
 
     # Nmodes = 400

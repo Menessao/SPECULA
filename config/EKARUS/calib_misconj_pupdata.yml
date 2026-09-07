@@ -1,0 +1,32 @@
+
+
+pyr_override:
+  mod_amp:           10.0   # Modulation radius (in lambda/D units)
+  # inputs:
+  #   in_ef: 'prop.out_source_ngs_ef'
+  
+dm_override:
+  height:         0  
+  nmodes:         400
+  inputs:
+    in_command:   'dm_command.output'
+
+main_override:
+  total_time:  0.002
+
+dm_command:
+  class: 'WaveGenerator'
+  constant: 0.0
+  output_size: 400
+
+data_store_override:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/results/EKARUS'             # Data result directory: 'store_dir'/TN/
+  create_tn: false
+  inputs:
+    input_list: ['frameB-pyr.out_i']
+
+# Remove unnecessary components to avoid issues and speed up the calibration
+remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'pyr_slopes',
+         'filter', 'dm_mode_res', #'data_store', # 'pupilstop',
+            'psf', 'pyr_modalrec', 'atmo_modes']

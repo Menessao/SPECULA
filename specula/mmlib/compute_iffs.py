@@ -63,7 +63,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     # Actuator slaving (disable edge actuators outside pupil)
     doSlaving = False             # Enable slaving (very simple slaving)
     slavingThr = 0.1             # Threshold for master actuators
-    oversampling = 4           # Minimum oversampling for FFT computations
+    oversampling = 6           # Minimum oversampling for FFT computations
 
     # Computation parameters
     dtype = specula.xp.float32   # Use current device precision
@@ -76,13 +76,13 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     print(f"r0 = {r0}m, L0 = {L0}m")
 
 
-    if pupil_mask_tag is not None:
-        fname = os.path.join(root_dir,'pupilstop/'+pupil_mask_tag+f'_{pupil_pixels:1.0f}pixels.fits')
-        hdu = fits.open(fname)
-        pupil_mask = hdu[1].data
-    else:
-        pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0, obsratio=obsratio)
-        fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask,overwrite=True)
+    # if pupil_mask_tag is not None:
+    #     fname = os.path.join(root_dir,'pupilstop/'+pupil_mask_tag+f'_{pupil_pixels:1.0f}pixels.fits')
+    #     hdu = fits.open(fname)
+    #     pupil_mask = hdu[1].data
+    # else:
+    pupil_mask = make_mask(np_size=pupil_pixels, diaratio=diaratio, obsratio=obsratio)
+    fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask,overwrite=True)
         
     # unobs_pupil_mask = make_mask(np_size=pupil_pixels, diaratio=1.0)
 
@@ -328,7 +328,9 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='simul_DM468', pupil_pixels=Npix, n_acts=24,
     #                                       geom='alpao', r0=3e-2, obsratio=0.0, D=1.82)
+    compute_and_save_influence_functions(ekarus_dir,tag='simul_obs32_dia98_DM468', pupil_pixels=Npix, n_acts=24,
+                                          geom='alpao', r0=5e-2, obsratio=0.32, diaratio=0.98, D=1.82)
     compute_and_save_influence_functions(ekarus_dir,tag='simul_unobs_DM468', pupil_pixels=Npix, n_acts=24,
-                                          geom='alpao', r0=3e-2, obsratio=0.0, D=1.82)
+                                          geom='alpao', r0=5e-2, obsratio=0.0, diaratio=1.0, D=1.82)
     # compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
     #                                       geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)

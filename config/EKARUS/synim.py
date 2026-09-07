@@ -51,6 +51,7 @@ def warp_image(ifunc,pupmask,
                flip:bool=False,
                shftX:float=0.0,shftY:float=0.0,
                shearX:float=0,shearY:float=0,
+               shearAngle:float=0,
                rot:float=0,
                mag:float=1.0,
                oldpup=ekapup):
@@ -58,36 +59,41 @@ def warp_image(ifunc,pupmask,
     ifunc_new = np.zeros([int(np.sum(pup_mask)),ifunc.shape[1]])
     img = np.zeros(ekapup.shape)
     center_y, center_x = img.shape[0]/2.0, img.shape[1]/2.0
-    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
-    shear_and_scale = AffineTransform(shear=(shearX,shearY), rotation=rot*np.pi/180, scale=mag)
+    shift_to_origin_and_rotate = AffineTransform(translation=(-center_x, -center_y),rotation=shearAngle*np.pi/180)
+    shear_derotate_and_scale = AffineTransform(shear=(shearX,shearY), rotation=(-shearAngle+rot)*np.pi/180, scale=mag)
     shift_to_center = AffineTransform(translation=(center_x+shftX, center_y+shftY))
-    trf = shift_to_origin + shear_and_scale + shift_to_center
+    trf = shift_to_origin_and_rotate
     for j in range(ifunc.shape[1]):
         img[oldpup.astype(bool)] = ifunc[:,j]
         if flip:
             img = img[::-1,:]
         warp_img = warp(img, inverse_map=trf.inverse)
+        ifunc_new[:,j] = warp_img[pup_mask]    
+    trf = shear_derotate_and_scale + shift_to_center
+    for j in range(ifunc.shape[1]):
+        img[oldpup.astype(bool)] = ifunc_new[:,j]
+        warp_img = warp(img, inverse_map=trf.inverse)
         ifunc_new[:,j] = warp_img[pup_mask]
     return ifunc_new
 
 
-def set_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearX=0.0,shearY=0.0):
+def set_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearX=0.0,shearY=0.0,shearAngle=0.0):
     auxpup = np.logical_and(og_ekapup,warp_mask(ekapup,shftX=shiftX,shftY=shiftY,mag=mag))
     warpup = warp_mask(auxpup,rot=rot,shearX=shearX,shearY=shearY)
     # ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY)
-    ifunc_new = warp_image(ifunc,warpup,flip=flip,rot=rot,shearX=shearX,shearY=shearY)
+    ifunc_new = warp_image(ifunc,warpup,flip=flip,rot=rot,shearX=shearX,shearY=shearY,shearAngle=shearAngle)
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save(f'/raid1/mmenessini/calibration/EKARUS/ifunc/{ifunc_tag}.fits', overwrite=True)
     save_pupil(warpup, '/raid1/mmenessini/calibration/EKARUS/pupilstop/', fname='DM468_160pixels_shift', Npix=160, D=1.82)
 
 
-def save_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearX=0.0,shearY=0.0):
+def save_ifunc_pars(flip=False,shiftX=0.0,shiftY=0.0,rot=0.0,mag=1.0,shearX=0.0,shearY=0.0,shearAngle=0.0):
     auxpup = np.logical_and(og_ekapup,warp_mask(ekapup,shftX=shiftX,shftY=shiftY,mag=mag))
     warpup = warp_mask(auxpup,rot=rot,shearX=shearX,shearY=shearY)
     # ifunc_new = warp_image(ifunc,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY)
     # ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,shftX=shiftX,shftY=shiftY,rot=rot,mag=mag,shearX=shearX,shearY=shearY).T
-    ifunc_new = warp_image(ifunc,warpup,flip=flip,rot=rot,shearX=shearX,shearY=shearY)
-    ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,rot=rot,shearX=shearX,shearY=shearY).T
+    ifunc_new = warp_image(ifunc,warpup,flip=flip,rot=rot,shearX=shearX,shearY=shearY,shearAngle=shearAngle)
+    ifunc_inv_new = warp_image(klinv.T,warpup,flip=flip,rot=rot,shearX=shearX,shearY=shearY,shearAngle=shearAngle).T
     ifunc_obj = IFunc(ifunc=ifunc_new.T,mask=warpup)
     ifunc_obj.save('/raid1/mmenessini/calibration/EKARUS/ifunc/dm468_ifunc_bestshift.fits', overwrite=True)
     ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv_new.T,mask=warpup)
@@ -160,7 +166,7 @@ if __name__ == "__main__":
             "}")
     write_yaml_overrides(input_string=ovdes, temp_name='temp_synim')
 
-    rot0 = 5.0
+    rot0 = 90.0
     shiftX0 = 0.0
     shiftY0 = -1.0
     mag0 = 0.97
