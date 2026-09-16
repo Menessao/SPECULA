@@ -66,13 +66,17 @@ if __name__ == "__main__":
     else:
         angle = -30
 
-    # save_lbt_pupil(Npix=220)
+    Npix = 160
+    destination_dir = '/raid1/mmenessini/calibration/SOUL/pupilstop'
+    tag = f'LBT_pupil_8m_{Npix}pixels'
+    mask = make_mask(np_size=Npix)
+    save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
 
-    diaratio = 36.5/38
-    destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
-    tag = f'Copernico_Pupil_{diaratio:1.2f}diaratio'
-    save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, diaratio=diaratio, Npix=Npix, overwrite=True)
-    aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
+    # diaratio = 36.5/38
+    # destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
+    # tag = f'Copernico_Pupil_{diaratio:1.2f}diaratio'
+    # save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, diaratio=diaratio, Npix=Npix, overwrite=True)
+    # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
 
     # data_dir = '/raid1/mmenessini/calibration/VLT'
     # destination_dir = '/raid1/mmenessini/calibration/XAO/pupilstop'

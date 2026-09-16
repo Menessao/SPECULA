@@ -3,7 +3,7 @@ main:
   class:             'SimulParams'
   root_dir:          '/raid1/mmenessini/calibration/EKARUS/'       # CalibManager root directory (all the data are in subdirectories)
   pixel_pupil:       160                   # Must match influence function computation
-  pixel_pitch:       0.011375             # [m] Pitch of the pupil phase array (1.82m/120pix)
+  pixel_pitch:       0.011375            # [m] Pitch of the pupil phase array (1.82m/160pix)
   total_time:        1.0                   # [s] Total simulation running time
   time_step:         0.002                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
@@ -79,8 +79,6 @@ pyr:
   simul_params_ref:  'main'
   pup_diam:          40. #38                    # Pupil diameter in subaps.
   pup_dist:          60.                     # Separation between pupil centers in subaps.
-  # pyr_tlt_coeff:     [[1.1328852114285715, 1.0976296414285716, 1.18185203742857142, 1.1357142857142857],
-  #                     [1.0607142857142857, 0.9545511985714286, 1.0589343157142857, 0.985]]
   pyr_tlt_coeff:     [[1.1520833372833667, 1.1116588162548362, 1.1671916659819192, 1.146550487556285],
                       [1.0678673571075679, 0.968967716126909, 1.0351018949820765, 0.9617331782524007]]
   fov:               8.8 #8.8                     # Requested field-of-view [arcsec]

@@ -1,19 +1,19 @@
 main_override:
-  total_time: 0.4
+  total_time: 0.2
 dm_override:
-  nmodes: 200
+  nmodes: 100
   ifunc_object: dm468_ifunc_shift
   m2c_object: M2C_KL_OOPAO_synthetic
 pushpull_override:
-  nmodes: 200
+  nmodes: 100
   amp: 200
 pupilstop_override:
   tag: 'DM468_160pixels_shift'
 pyr_im_calibrator_override:
-  nmodes: 200
+  nmodes: 100
   im_tag: pyr5.0_dm468_onbench_synim
   overwrite: true
 pyr_override:
   mod_amp: 5.0
-  pyr_tlt_coeff: [[1.1227635531778277, 1.0711816924375064, 1.1748214310491363, 1.1250855697126243],
-    [0.9997977924653967, 0.8922379224358873, 1.0854080667722075, 1.037476552728351]]
+  pyr_tlt_coeff: [[1.137576415499041, 1.105481227742432, 1.1601173385737145, 1.1221432137981107],
+    [1.0463793131565176, 0.9524373022367241, 1.0519332127629741, 0.9738255619117916]]

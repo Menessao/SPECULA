@@ -16,6 +16,7 @@ from specula.lib.modal_base_generator import make_modal_base_from_ifs_fft
 from specula.lib.toccd import toccd
 from specula.lib.make_mask import make_mask
 
+from specula.mmlib.save_telescope_aperture import save_pupil
 from specula import cpuArray
 
 
@@ -45,7 +46,10 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     # mask = specula.xp.array(1-fits.getdata(os.path.join(root_dir,'pupilstop','simul_obs33_dia97_DM468_160pixels.fits'))).astype(bool)
     iffs = specula.xp.array(fits.getdata('/raid1/mmenessini/calibration/EKARUS/data/reordered_DM468_iffs.fits'))
     # mask = specula.xp.array(fits.getdata(os.path.join(data_path,'IFmask.fits')),dtype=bool)
-    mask = specula.xp.array(1-fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_367pixels.fits'),dtype=bool)
+    mask = specula.xp.array(fits.getdata('/raid1/mmenessini/calibration/EKARUS/pupilstop/reordered_unobs_DM468_367pixels.fits'),dtype=bool)
+
+    mask = specula.xp.array(fits.getdata('/raid1/mmenessini/calibration/Cascading/data/20260831_142915_mask.fits'))
+    iffs = specula.xp.array(fits.getdata('/raid1/mmenessini/calibration/Cascading/data/20260831_142915_iffs.fits')).T
 
     # iffs = regularize_mat(iffs, thr=1e-2)
     # U,S,Vt = specula.xp.linalg.svd(iffs,full_matrices=False)
@@ -63,15 +67,15 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     # print("OK: " + ifunc_inv_filename + f" (inverse ifuncs: {rec.shape})")
 
     # print(int(specula.xp.sum(1-mask)),specula.xp.size(mask))
-    # X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
-    # minX = specula.xp.min(X[~mask.astype(bool)])
-    # maxX = specula.xp.max(X[~mask.astype(bool)])
-    # minY = specula.xp.min(Y[~mask.astype(bool)])
-    # maxY = specula.xp.max(Y[~mask.astype(bool)])
+    X,Y = specula.xp.mgrid[0:mask.shape[0],0:mask.shape[1]]
+    minX = specula.xp.min(X[~mask.astype(bool)])
+    maxX = specula.xp.max(X[~mask.astype(bool)])
+    minY = specula.xp.min(Y[~mask.astype(bool)])
+    maxY = specula.xp.max(Y[~mask.astype(bool)])
 
-    # crop_mask = mask[int(minX-1):int(maxX+1),:]
-    # crop_mask = crop_mask[:,int(minY-1):int(maxY+1)]
-    crop_mask = mask.copy()
+    crop_mask = mask[int(minX-1):int(maxX+1),:]
+    crop_mask = crop_mask[:,int(minY-1):int(maxY+1)]
+    # crop_mask = mask.copy()
 
 
     # print(specula.xp.sum(1-mask),specula.xp.sum(1-crop_mask),mask.shape,mask.dtype,minX,maxX,minY,maxY)
@@ -80,11 +84,12 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     aux = specula.xp.zeros(crop_mask.shape,dtype=specula.xp.float32)
 
     binned_shape = (Npix,Npix)
-    # bin_mask = toccd(specula.xp.array(crop_mask).astype(float), binned_shape, xp=specula.xp) > 0
+    bin_mask = toccd(specula.xp.array(crop_mask).astype(float), binned_shape, xp=specula.xp) > 0
+    # save_pupil(1-bin_mask,destination_dir='/raid1/mmenessini/calibration/SOUL/pupilstop/',fname='meas_pupil_160pixels',Npix=Npix,D=8.0)
     # bin_mask = (1-make_mask(np_size=Npix, diaratio=1.0, obsratio=obsratio)).astype(bool)
-    bin_mask = crop_mask.copy()
-    binned_shape = crop_mask.shape
-    Npix = binned_shape[0]
+    # bin_mask = crop_mask.copy()
+    # binned_shape = crop_mask.shape
+    # Npix = binned_shape[0]
     # print(bin_mask.shape,specula.xp.sum(1-bin_mask),specula.xp.sum(bin_mask))
     # fits.writeto(os.path.join(root_dir,'mask','bin_mask.fits'),cpuArray(bin_mask.astype(float)),overwrite=True)
     # pupil = specula.xp.array(fits.getdata(os.path.join(root_dir,'pupilstop',mask_tag+'.fits')),dtype=bool)
@@ -97,15 +102,15 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     # # # Regularized influence functions
     # iffs = regularize_mat(iffs, thr=1e-2)  # was 2e/4
 
-    print(int(specula.xp.sum(1-bin_mask)),specula.xp.size(bin_mask),iffs.shape)
+    print(int(specula.xp.sum(1-crop_mask)),specula.xp.size(bin_mask),iffs.shape)
     IF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))]) # bin_pup_mask
     unobsIF = specula.xp.zeros([Nacts,int(specula.xp.sum(1-bin_mask))])
 
     for j in range(Nacts):
-        aux[~crop_mask] = iffs[j,:]
+        aux[~crop_mask.astype(bool)] = iffs[j,:]
         bin_if = toccd(aux,binned_shape,xp=specula.xp)
-        IF[j,:] = bin_if[~bin_mask]
-        unobsIF[j,:] = bin_if[~bin_mask]
+        IF[j,:] = bin_if[~bin_mask.astype(bool)]
+        unobsIF[j,:] = bin_if[~bin_mask.astype(bool)]
 
     
     # # Regularized influence functions
@@ -127,10 +132,13 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     #     dtype=specula.xp.float32
     # )
 
+    # fits.writeto('/raid1/mmenessini/calibration/SOUL/ifunc/meas_ifunc_rebin160.fits',IF)
+    # print('Done')
+
     thr = 1e+4
 
     kl_basis, m2c, _ = make_modal_base_from_ifs_fft(
-        pupil_mask=specula.xp.array(1-bin_mask),
+        pupil_mask=specula.xp.array(bin_mask),
         diameter=D,
         influence_functions=IF, #unobsIF,
         r0=r0,
@@ -180,7 +188,7 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     # Create IFunc object and save
     ifunc_obj = IFunc(
         ifunc=IF.T,
-        mask=(1-bin_mask).astype(specula.xp.uint8) # bin_pup_mask
+        mask=(bin_mask).astype(specula.xp.uint8) # bin_pup_mask
     )
     ifunc_obj.save(ifunc_filename, overwrite=True)
     print("OK: " + ifunc_filename + f" (zonal influence functions {IF.shape})")
@@ -196,13 +204,13 @@ def postprocess_iffs(root_dir:str, data_path:str, tag:str,
     print(f"\nSaving inverse modal base...")
     ifunc_inv_obj = IFuncInv(
         ifunc_inv=kl_basis_inv.T,
-        mask=(1-bin_mask).astype(specula.xp.uint8) # bin_pup_mask
+        mask=(bin_mask).astype(specula.xp.uint8) # bin_pup_mask
     )
     ifunc_inv_obj.save(base_inv_filename, overwrite=True)
     print("OK: " + base_inv_filename + f" (inverse modal base: {kl_basis_inv.shape})")
 
     simul_params = SimulParams(pixel_pupil=Npix,pixel_pitch=D/Npix)
-    pupil_mask = Pupilstop(simul_params=simul_params, input_mask=1-bin_mask) # bin_pup_mask
+    pupil_mask = Pupilstop(simul_params=simul_params, input_mask=bin_mask) # bin_pup_mask
     fname = os.path.join(root_dir, 'pupilstop', tag+f'_{Npix:1.0f}pixels.fits')
     pupil_mask.save(fname)
     print("OK: " + fname + f" (pupil mask: {bin_mask.shape})")
@@ -214,7 +222,7 @@ if __name__ == "__main__":
     data_path = '/raid1/mmenessini/calibration/EKARUS/data'
     root_dir = '/raid1/mmenessini/calibration/EKARUS'
 
-    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='meas_obs_DM468',#'simul_unobs_DM468',#'reordered_unobs_DM468'
+    postprocess_iffs(root_dir=root_dir, data_path=data_path, tag='meas_unobs_DM468',#'simul_unobs_DM468',#'reordered_unobs_DM468'
                      Npix=160, D=D, obsratio=0.32)
 
 
