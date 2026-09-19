@@ -87,9 +87,12 @@ if __name__ == "__main__":
     # plt.imshow(aperture,origin='lower',cap='gray')
     # plt.show()
 
-    # destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
+    destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
+    Npix = 367 
+    tag = f'dm468_{Npix}pix_pupil'
+    mask = make_mask(np_size=Npix)
+    save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=1.82)
     # tag = 'copernico_pupil'
-    # Npix = 160
     # save_copernico_pupil(destination_dir, tag, overwrite=True)
     # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
     # plt.figure()

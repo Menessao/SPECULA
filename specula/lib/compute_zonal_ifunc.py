@@ -12,7 +12,8 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
                         do_mech_coupling=False, coupling_coeffs=[0.31, 0.05],
                         do_slaving=False, slaving_thr=0.1, linear_slaving=False,
                         edge_constraint_weight=0.0, search_radius_steps=2.5,
-                        obsratio=0.0, diaratio=1.0, mask=None, shrink:float = 1.0):
+                        obsratio=0.0, diaratio=1.0, mask=None, shrink:float = 1.0,
+                        margin:int=0):
     """
     Computes the ifs_cube matrix with Influence Functions using Thin Plate Splines
     
@@ -118,16 +119,17 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
         y = pol_coords[1] * xp.sin(xp.radians(pol_coords[0])) + y_c
 
     elif geom == 'alpao':
-        x, y = xp.meshgrid(xp.linspace(0, dim - 1, n_act), xp.linspace(0, dim - 1, n_act))
+        print(margin,dim)
+        x, y = xp.meshgrid(xp.linspace(margin, dim - 1 - margin, n_act), xp.linspace(margin, dim - 1 - margin, n_act))
         x, y = x.ravel(), y.ravel()
-        x_c, y_c = (dim - 1) / 2.0, (dim - 1) / 2.0 # center
+        x_c, y_c = (dim - 1 - margin) / 2.0, (dim - 1 - margin) / 2.0 # center
         rho = xp.sqrt((x-x_c)**2+(y-y_c)**2)
-        rho_max = ((dim - 1)*(9/8-n_act/(24*16)))/2 # slightly larger than (dim-1)/2, depends on n_act
+        rho_max = ((dim - 1 - 2*margin)*(9/8-n_act/(24*16)))/2 # slightly larger than (dim-1)/2, depends on n_act
         x = x[rho<=rho_max]
         y = y[rho<=rho_max]
         n_act_tot = int(xp.size(x))
         # Calculate step based on linspace spacing
-        step = float(dim - 1) / float(n_act - 1)
+        step = float(dim - 1 -2*margin) / float(n_act - 1)
 
     elif geom == 'hexagonal':
         # Determine the number of rings

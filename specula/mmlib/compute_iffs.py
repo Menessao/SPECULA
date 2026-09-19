@@ -19,7 +19,7 @@ from astropy.io import fits
 
 def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int, n_acts:int, geom:str='circular',
                                          r0:float=10e-2, L0:float=25, zern_modes:int=2, D:float=8.0,
-                                         obsratio:float=0.0, diaratio:float=1.0, doMechCoupling:bool=False,
+                                         obsratio:float=0.0, diaratio:float=1.0, doMechCoupling:bool=False, margin:int=0,
                                          couplingCoeffs=[0.31,0.05], pupil_mask_tag=None, shrink_coords:float=1.0):
     """
     Compute zonal influence functions and modal basis for the SCAO tutorial
@@ -63,7 +63,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     # Actuator slaving (disable edge actuators outside pupil)
     doSlaving = False             # Enable slaving (very simple slaving)
     slavingThr = 0.1             # Threshold for master actuators
-    oversampling = 6           # Minimum oversampling for FFT computations
+    oversampling = 4           # Minimum oversampling for FFT computations
 
     # Computation parameters
     dtype = specula.xp.float32   # Use current device precision
@@ -108,6 +108,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         xp=specula.xp,
         dtype=dtype,
         shrink=shrink_coords,
+        margin=margin,
     )
 
     if doSlaving:
@@ -116,10 +117,10 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
 
     # influence_functions = remap_on_new_mask(influence_functions,old_mask=(1-unobs_pupil_mask).astype(bool),new_mask=(1-pupil_mask).astype(bool),xp=specula.xp)
 
-    S = specula.xp.linalg.svd(influence_functions,compute_uv=False)
-    fits.writeto(os.path.join(root_dir,'ifunc','eigenvalues.fits'),cpuArray(S),overwrite=True)
-    fits.writeto(os.path.join(root_dir,'ifunc','mask.fits'),cpuArray(mask),overwrite=True)
-    fits.writeto(os.path.join(root_dir,'ifunc','act_coords.fits'),cpuArray(coords),overwrite=True)
+    # S = specula.xp.linalg.svd(influence_functions,compute_uv=False)
+    # fits.writeto(os.path.join(root_dir,'ifunc','eigenvalues.fits'),cpuArray(S),overwrite=True)
+    # fits.writeto(os.path.join(root_dir,'ifunc','mask.fits'),cpuArray(mask),overwrite=True)
+    # fits.writeto(os.path.join(root_dir,'ifunc','act_coords.fits'),cpuArray(coords),overwrite=True)
 
     # Print statistics
     n_valid_actuators = influence_functions.shape[0]
@@ -129,6 +130,15 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     print(f"Valid actuators: {n_valid_actuators}/{n_actuators**2} ({n_valid_actuators/(n_actuators**2)*100:.1f}%)")
     print(f"Pupil pixels: {int(n_pupil_pixels)}/{pupil_pixels**2} ({float(n_pupil_pixels)/(pupil_pixels**2)*100:.1f}%)")
     print(f"Influence functions shape: {influence_functions.shape}")
+
+    
+    # Create IFunc object and save
+    ifunc_obj = IFunc(
+        ifunc=influence_functions,
+        mask=pupil_mask
+    )
+    ifunc_obj.save(ifunc_filename, overwrite=True)
+    print("OK: " + ifunc_filename + " (zonal influence functions)")
 
     # Step 2: Generate modal basis (KL modes)
     print(f"\nGenerating KL modal basis...")
@@ -158,13 +168,6 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
 
     # fits.writeto(os.path.join(root_dir, 'ifunc', tag+'_turb_cov.fits'),cpuArray(singular_values['S2']),overwrite=True)
 
-    # Create IFunc object and save
-    ifunc_obj = IFunc(
-        ifunc=influence_functions,
-        mask=pupil_mask
-    )
-    ifunc_obj.save(ifunc_filename, overwrite=True)
-    print("OK: " + ifunc_filename + " (zonal influence functions)")
 
     # Create M2C object for mode-to-command matrix and save
     m2c_obj = M2C(
@@ -269,6 +272,14 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     return ifunc_obj, m2c_obj
 
 
+def save_file_to_recmat(root_dir,fname,mat):
+    calib_manager = CalibManager(root_dir)
+    mat_obj = Recmat(recmat=mat)
+    os.makedirs(os.path.join(root_dir,'rec'),exist_ok=True)
+    m2m_filename = calib_manager.filename('rec', fname)    
+    mat_obj.save(m2m_filename, overwrite=True)
+    print("Saved " + m2m_filename)
+
 def compute_and_save_dcao_matrix(root_dir,first_stage_tag:str, second_stage_tag:str, N1_modes:int, N2_modes:int): 
     calib_manager = CalibManager(root_dir)
 
@@ -321,14 +332,19 @@ if __name__ == "__main__":
 
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
-    Npix = 160
-    compute_and_save_influence_functions(soul_dir,tag='simul_s1.0_diam8.0m', pupil_pixels=Npix, n_acts=32,
-                                          geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0)
+    
+    Npix = 367
+    compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24,
+                                          geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=2)
+
+    # Npix = 160
+    # compute_and_save_influence_functions(soul_dir,tag='simul_s1.0_diam8.0m', pupil_pixels=Npix, n_acts=32,
+    #                                       geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm820', pupil_pixels=Npix, n_acts=32, #shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='dm241', pupil_pixels=Npix, n_acts=17, #shrink_coords=0.9,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
-    # compute_and_save_influence_functions(ekarus_dir,tag='dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=0.9,
+    # compute_and_save_influence_functions(ekarus_dir,tag='sym_dm468', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
     #                                       geom='alpao', r0=5e-2, pupil_mask_tag='copernico_pupil', D=1.82)
     # compute_and_save_influence_functions(ekarus_dir,tag='simul_DM468', pupil_pixels=Npix, n_acts=24,
     #                                       geom='alpao', r0=3e-2, obsratio=0.0, D=1.82)
@@ -338,3 +354,6 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=5e-2, obsratio=0.0, diaratio=1.0, D=1.82)
     # compute_and_save_influence_functions(fsoc_dir, tag='unobs', pupil_pixels=Npix, n_acts=24, shrink_coords=1.0,
     #                                       geom='alpao', r0=5e-2, obsratio=0.0, D=1.0)
+
+    # m2c = fits.getdata('/raid1/mmenessini/calibration/EKARUS/m2c/sym_dm468_m2c.fits')
+    # save_file_to_recmat(root_dir=ekarus_dir,fname='sym_dm468_m2c',mat=m2c)
