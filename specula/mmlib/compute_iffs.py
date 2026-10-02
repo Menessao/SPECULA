@@ -317,6 +317,7 @@ if __name__ == "__main__":
     xao_dir = '/raid1/mmenessini/calibration/XAO'
     soul_dir = '/raid1/mmenessini/calibration/SOUL'
     ekarus_dir = '/raid1/mmenessini/calibration/EKARUS'
+    chaos_dir = '/raid1/mmenessini/calibration/Cascading'
     fsoc_dir = '/raid1/mmenessini/calibration/FSOC'
 
     # Npix = 160
@@ -333,9 +334,13 @@ if __name__ == "__main__":
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
     
-    Npix = 367
-    compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24,
-                                          geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=2)
+    # Npix = 400
+    # compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24,
+    #                                       geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=2)
+
+    Npix = 420
+    compute_and_save_influence_functions(chaos_dir,tag=f'dm820_{Npix}pix', pupil_pixels=Npix, n_acts=32,
+                                            geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0, margin=0)
 
     # Npix = 160
     # compute_and_save_influence_functions(soul_dir,tag='simul_s1.0_diam8.0m', pupil_pixels=Npix, n_acts=32,

@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # plt.show()
 
     destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
-    Npix = 367 
+    Npix = 400 
     tag = f'dm468_{Npix}pix_pupil'
     mask = make_mask(np_size=Npix)
     save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=1.82)
@@ -98,5 +98,11 @@ if __name__ == "__main__":
     # plt.figure()
     # plt.imshow(aperture,origin='lower',cmap='gray')
     # plt.show()
+    
+    destination_dir = '/raid1/mmenessini/calibration/Cascading/pupilstop'
+    Npix = 420
+    tag = f'dm820_{Npix}pix_pupil'
+    mask = make_mask(np_size=Npix)
+    save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
 
 

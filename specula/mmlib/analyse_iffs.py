@@ -1,64 +1,58 @@
 import numpy as np
-from scipy.spatial import KDTree
 from scipy.ndimage import shift, affine_transform
 from scipy.optimize import minimize
-from scipy.interpolate import RBFInterpolator
 import matplotlib.pyplot as plt
+from astropy.io import fits
 
-# ==============================================================================
-# STEP 1: Actuator Coordinate Estimation via Peak Finding
-# ==============================================================================
+def compute_actuator_pitch(mask_shape: tuple, n_acts: int) -> float:
+    """Estimates actuator pitch for a circular grid: dim / sqrt(4 * n_acts / pi)."""
+    dim = max(mask_shape)
+    return dim / np.sqrt(4.0 * n_acts / np.pi)
+
 
 def estimate_actuator_peaks(ifs: np.ndarray, mask: np.ndarray = None, subpixel: bool = True) -> np.ndarray:
-    """Estimates (x, y) peak coordinates for each influence function."""
+    """Estimates (y, x) peak coordinates for each influence function in its native grid."""
     n_acts, h, w = ifs.shape
-    coords = np.zeros((n_acts, 2))
+    coords = np.zeros((n_acts, 2))  # Stored as [y, x]
     
     for i in range(n_acts):
-        img = ifs[i] * (mask if mask is not None else 1.0)
+        img = np.abs(ifs[i]) * (mask if mask is not None else 1.0)
+        max_val = np.max(img)
+        
+        if max_val < 1e-12:
+            coords[i] = [np.nan, np.nan]
+            continue
+            
         max_idx = np.unravel_index(np.argmax(img), img.shape)
         py, px = max_idx[0], max_idx[1]
         
         if subpixel and 1 <= py < h - 1 and 1 <= px < w - 1:
-            # 2D quadratic sub-pixel refinement
             dx = (img[py, px + 1] - img[py, px - 1]) / (2.0 * (2.0 * img[py, px] - img[py, px + 1] - img[py, px - 1] + 1e-12))
             dy = (img[py + 1, px] - img[py - 1, px]) / (2.0 * (2.0 * img[py, px] - img[py + 1, px] - img[py - 1, px] + 1e-12))
-            coords[i] = [px + np.clip(dx, -0.5, 0.5), py + np.clip(dy, -0.5, 0.5)]
+            coords[i] = [py + np.clip(dy, -0.5, 0.5), px + np.clip(dx, -0.5, 0.5)]
         else:
-            coords[i] = [float(px), float(py)]
+            coords[i] = [float(py), float(px)]
             
     return coords
 
 
-# ==============================================================================
-# STEP 2: Ring Identification (Radial) and Global Registration
-# ==============================================================================
-
-def identify_inner_actuators_radial(coords: np.ndarray, mask_shape: tuple, n_outer_rings: int = 2) -> np.ndarray:
-    """
-    Identifies inner actuators by computing radial distance from the grid center.
-    Automatically estimates actuator pitch to define the ring depth.
-    """
+def identify_inner_actuators_radial(coords: np.ndarray, mask_shape: tuple, pitch: float, n_outer_rings: int = 2) -> np.ndarray:
+    """Identifies inner actuators using radial distance from grid center."""
+    valid_mask = ~np.isnan(coords[:, 0])
     cy, cx = mask_shape[0] / 2.0, mask_shape[1] / 2.0
-    radii = np.sqrt((coords[:, 0] - cx)**2 + (coords[:, 1] - cy)**2)
     
-    # Estimate pitch as the median distance to the nearest neighbor
-    tree = KDTree(coords)
-    dists, _ = tree.query(coords, k=2) # k=2 because the 1st nearest is the point itself
-    pitch = np.median(dists[:, 1])
+    radii = np.full(len(coords), np.inf)
+    radii[valid_mask] = np.sqrt((coords[valid_mask, 0] - cy)**2 + (coords[valid_mask, 1] - cx)**2)
     
-    # Define threshold: max radius minus N rings (with a 0.5 pitch tolerance)
-    max_radius = np.max(radii)
+    max_radius = np.max(radii[valid_mask])
     threshold_radius = max_radius - (n_outer_rings - 0.5) * pitch
     
-    is_inner = radii < threshold_radius
-    return is_inner
-
+    return (radii < threshold_radius) & valid_mask
 
 def fit_similarity_transform(src_pts: np.ndarray, dst_pts: np.ndarray):
-    """Computes global similarity transformation (Scale, Rotation, Shift)."""
-    src_centroid = np.mean(src_pts, axis=0)
-    dst_centroid = np.mean(dst_pts, axis=0)
+    """Computes global similarity transformation (Scale, Rotation, Shift) mapping src -> dst."""
+    src_centroid = np.mean(src_pts, axis=0)  # [cy, cx]
+    dst_centroid = np.mean(dst_pts, axis=0)  # [cy, cx]
     
     src_centered = src_pts - src_centroid
     dst_centered = dst_pts - dst_centroid
@@ -72,171 +66,273 @@ def fit_similarity_transform(src_pts: np.ndarray, dst_pts: np.ndarray):
         R = Vt.T @ U.T
         
     scale = np.sum(S) / np.sum(src_centered**2)
-    tx_ty = dst_centroid - scale * (R @ src_centroid)
+    t_y_x = dst_centroid - scale * (R @ src_centroid)
     
-    return scale, R, tx_ty
+    return scale, R, t_y_x
 
 
-def apply_global_registration_to_ifs(sim_ifs: np.ndarray, scale: float, R: np.ndarray, tx_ty: np.ndarray, target_shape: tuple) -> np.ndarray:
-    """Warps simulated IFs to measured grid frame using similarity transform."""
+def apply_global_registration_to_ifs(sim_ifs: np.ndarray, scale: float, R: np.ndarray, t_y_x: np.ndarray, target_shape: tuple) -> np.ndarray:
+    """Warps simulated IFs into the measured grid frame [y, x]."""
     n_acts = len(sim_ifs)
     reg_sim_ifs = np.zeros((n_acts, *target_shape))
     
     inv_R = R.T / scale
-    inv_t = -inv_R @ tx_ty
+    inv_t = -inv_R @ t_y_x
     
     for i in range(n_acts):
         reg_sim_ifs[i] = affine_transform(
             sim_ifs[i], 
             matrix=inv_R, 
-            offset=inv_t[::-1], # (y, x) order for ndimage
+            offset=inv_t,
             output_shape=target_shape, 
             order=3
         )
     return reg_sim_ifs
 
 
-# ==============================================================================
-# STEP 3: Local Sub-pixel Shift and Peak Amplitude Scaling
-# ==============================================================================
-
-def optimize_actuator_shifts_and_gains(meas_ifs: np.ndarray, sim_ifs: np.ndarray, active_mask: np.ndarray, search_window: int = 15):
-    """Finds optimal (dx, dy) shifts and peak amplitude scaling factors."""
-    n_acts, h, w = sim_ifs.shape
-    shifted_sim_ifs = np.copy(sim_ifs)
-    gains = np.ones(n_acts)
-    
-    for i in range(n_acts):
-        if not active_mask[i]:
-            continue
-            
-        py, px = np.unravel_index(np.argmax(meas_ifs[i]), (h, w))
-        y_min, y_max = max(0, py - search_window), min(h, py + search_window)
-        x_min, x_max = max(0, px - search_window), min(w, px + search_window)
-        
-        meas_crop = meas_ifs[i, y_min:y_max, x_min:x_max]
-        
-        def loss(params):
-            dx, dy, amplitude = params
-            shifted_sim_crop = shift(sim_ifs[i], shift=[dy, dx], order=3)[y_min:y_max, x_min:x_max]
-            res = meas_crop - amplitude * shifted_sim_crop
-            return np.sum(res**2)
-        
-        init_amp = np.max(meas_ifs[i]) / (np.max(sim_ifs[i]) + 1e-12)
-        res = minimize(loss, x0=[0.0, 0.0, init_amp], method='L-BFGS-B', bounds=[(-3, 3), (-3, 3), (0.1, 10.0)])
-        
-        dx_opt, dy_opt, amp_opt = res.x
-        gains[i] = amp_opt
-        shifted_sim_ifs[i] = shift(sim_ifs[i], shift=[dy_opt, dx_opt], order=3)
-        
-    return shifted_sim_ifs, gains
+def transform_coordinates(coords: np.ndarray, scale: float, R: np.ndarray, t_y_x: np.ndarray) -> np.ndarray:
+    """Applies global similarity transformation directly to [y, x] coordinate array."""
+    return scale * (coords @ R.T) + t_y_x
 
 
-# ==============================================================================
-# STEP 4: Measured IF Pupil Extension via Thin Plate Spline (TPS)
-# ==============================================================================
+def _refine_actuator_shift(
+    meas_img: np.ndarray,
+    sim_img: np.ndarray,
+    py: int,
+    px: int,
+    window: int,
+    max_shift: float,
+    pad: int = 4,
+):
+    """
+    Refines the local (dy, dx) sub-pixel shift of one simulated IF against its
+    measured counterpart, using a small padded crop instead of shifting the
+    full-frame image on every optimizer evaluation. Amplitude is solved in
+    closed form (linear least squares) for each trial (dy, dx), so the
+    optimizer only searches a 2D space.
 
-def extend_measured_ifs_tps(meas_ifs: np.ndarray, meas_mask: np.ndarray, target_mask: np.ndarray) -> np.ndarray:
-    """Extends measured IFs up to target_mask using Thin Plate Spline fit."""
+    Returns (dy_opt, dx_opt, amp_opt) or None if the crop has no signal.
+    """
+    h, w = sim_img.shape
+    y_min, y_max = max(0, py - window), min(h, py + window)
+    x_min, x_max = max(0, px - window), min(w, px + window)
+
+    meas_crop = meas_img[y_min:y_max, x_min:x_max]
+
+    # Padded region so the shifted crop doesn't need samples outside it
+    y0, y1 = max(0, y_min - pad), min(h, y_max + pad)
+    x0, x1 = max(0, x_min - pad), min(w, x_max + pad)
+    sim_pad = sim_img[y0:y1, x0:x1]
+    sim_crop0 = sim_img[y_min:y_max, x_min:x_max]
+
+    if np.max(np.abs(meas_crop)) <= 1e-12 or np.max(np.abs(sim_crop0)) <= 1e-12:
+        return None
+
+    # Local slice of the padded crop that corresponds to (y_min:y_max, x_min:x_max)
+    sl_y = slice(y_min - y0, y_max - y0)
+    sl_x = slice(x_min - x0, x_max - x0)
+
+    def shifted_crop(dy, dx):
+        return shift(sim_pad, shift=[dy, dx], order=3)[sl_y, sl_x]
+
+    def loss(params):
+        dy, dx = params
+        crop = shifted_crop(dy, dx)
+        denom = np.sum(crop**2) + 1e-12
+        amp = np.sum(meas_crop * crop) / denom  # closed-form optimal amplitude
+        return np.sum((meas_crop - amp * crop)**2)
+
+    res = minimize(
+        loss,
+        x0=[0.0, 0.0],
+        bounds=[(-max_shift, max_shift), (-max_shift, max_shift)],
+        method='L-BFGS-B'
+    )
+
+    dy_opt, dx_opt = res.x
+    final_crop = shifted_crop(dy_opt, dx_opt)
+    denom = np.sum(final_crop**2) + 1e-12
+    amp_opt = np.sum(meas_crop * final_crop) / denom
+
+    return dy_opt, dx_opt, amp_opt
+
+
+def fit_amplitudes_to_sim_ifs(
+    meas_ifs: np.ndarray, 
+    meas_mask: np.ndarray, 
+    sim_ifs_registered: np.ndarray, 
+    reg_param: float = 1e-4,
+    optimize_coords: bool = True
+):
+    """
+    Fits measured IFs to registered simulated IFs, with optional per-actuator
+    sub-pixel coordinate refinement.
+
+    The coordinate refinement (phase 1) is independent across actuators -
+    each simulated IF is only ever compared to its own measured counterpart,
+    so it's decoupled from a global solve rather than being interleaved with
+    one. The amplitude/coupling fit (phase 2) is then done once, for all
+    actuators simultaneously, via a single batched linear solve instead of
+    an explicit-inverse solver rebuilt on every iteration.
+
+    Returns:
+        amplitude_matrix: (N_acts, N_acts) array of coupling weights.
+        scaled_sim_ifs: (N_acts, H, W) array of the final reconstructed IFs.
+    """
     n_acts, h, w = meas_ifs.shape
-    extended_meas_ifs = np.copy(meas_ifs)
-    
-    y_grid, x_grid = np.mgrid[0:h, 0:w]
-    valid_pts = np.column_stack((x_grid[meas_mask > 0], y_grid[meas_mask > 0]))
-    eval_pts = np.column_stack((x_grid[target_mask > 0], y_grid[target_mask > 0]))
-    
-    # Subsample valid grid points if dense to optimize TPS computation
-    fit_pts = valid_pts
-    if len(valid_pts) > 1000:
-        sub_idx = np.random.choice(len(valid_pts), size=1000, replace=False)
-        fit_pts = valid_pts[sub_idx]
+    valid_mask = meas_mask > 0
 
-    for i in range(n_acts):
-        values = meas_ifs[i][fit_pts[:, 1], fit_pts[:, 0]]
-        tps = RBFInterpolator(fit_pts, values, kernel='thin_plate_spline', smoothing=1e-3)
-        extrapolated_vals = tps(eval_pts)
-        extended_meas_ifs[i, target_mask > 0] = extrapolated_vals
+    updated_sim_ifs = np.copy(sim_ifs_registered)
+
+    # Estimate actuator pitch for shift constraints
+    pitch = max(h, w) / np.sqrt(4.0 * n_acts / np.pi)
+    max_shift = 0.5 * pitch
+    window = int(pitch)
+
+    # --- Phase 1: per-actuator sub-pixel shift refinement (independent, no
+    # global solve needed here) ---
+    if optimize_coords:
+        print("Starting per-actuator coordinate refinement...")
+        for idx in range(n_acts):
+            meas_img = meas_ifs[idx]
+            sim_img = updated_sim_ifs[idx]
+
+            py, px = np.unravel_index(np.argmax(np.abs(sim_img)), (h, w))
+            result = _refine_actuator_shift(meas_img, sim_img, py, px, window, max_shift)
+            if result is None:
+                continue
+
+            dy_opt, dx_opt, amp_opt = result
+            # dy/dx are bounded independently, so compare each axis to
+            # max_shift rather than the combined magnitude (a diagonal shift
+            # can legitimately reach up to sqrt(2) * max_shift).
+            if max(abs(dy_opt), abs(dx_opt)) > 1e-3:
+                print(f'Act {idx}: [{dx_opt:.3f}, {dy_opt:.3f}] pix')
+                updated_sim_ifs[idx] = shift(sim_img, shift=[dy_opt, dx_opt], order=3)
+
+    # --- Phase 2: single batched linear solve for all actuators' amplitudes ---
+    print("Solving for amplitude/coupling matrix...")
+    S_fit = updated_sim_ifs[:, valid_mask]           # (n_acts, n_pixels)
+    meas_fit = meas_ifs[:, valid_mask]                # (n_acts, n_pixels)
+
+    StS = S_fit @ S_fit.T                             # (n_acts, n_acts)
+    reg_I = reg_param * np.eye(n_acts) * (np.trace(StS) / n_acts)
+    rhs = S_fit @ meas_fit.T                          # (n_acts, n_acts)
+
+    # solve (StS + reg_I) @ X = rhs for X, then transpose so row i holds the
+    # amplitude vector for measured actuator i (avoids forming an explicit
+    # inverse, both faster and better conditioned)
+    amplitude_matrix = np.linalg.solve(StS + reg_I, rhs).T
+    amplitude_matrix -= amplitude_matrix.mean(axis=1, keepdims=True)
+
+    # Reconstruct the final scaled IFs across the FULL domain using the updated basis
+    scaled_sim_ifs = np.einsum('ij,jhw->ihw', amplitude_matrix, updated_sim_ifs)
+
+    return amplitude_matrix, scaled_sim_ifs
+
+
+def plot_results(meas_ifs: np.ndarray, sim_ifs: np.ndarray, pupil_center: tuple, pupil_radius: float, coords: np.ndarray):
+    """Displays measured IFs, registered simulated IFs, and the Nact x Nact TPS amplitude matrix."""
+    
+    norm_meas = (meas_ifs - np.mean(meas_ifs[abs(meas_ifs)>0])) / np.max(np.abs(meas_ifs))
+    norm_sim = (sim_ifs - np.mean(sim_ifs[abs(sim_ifs)>0]))/ np.max(np.abs(sim_ifs))
+    diff = np.sqrt(np.sum((norm_meas-norm_sim)**2,axis=0))
+    
+    sum_meas = np.sum(np.abs(norm_meas)**3, axis=0)
+    sum_sim = np.sum(np.abs(norm_sim)**3, axis=0)
+    
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
         
-    return extended_meas_ifs
-
-
-# ==============================================================================
-# FINAL PLOTTING FUNCTION
-# ==============================================================================
-
-def plot_registered_ifs(meas_extended: np.ndarray, sim_registered: np.ndarray):
-    """Plots the sum of all Influence Functions to visually verify registration."""
-    print("Generating final registration plots...")
-    
-    # Summing all IFs creates a visual "footprint" of all actuators on the pupil
-    sum_meas = np.sum(meas_extended, axis=0)
-    sum_sim = np.sum(sim_registered, axis=0)
-    
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    
-    im0 = axes[0].imshow(sum_meas, cmap='viridis', origin='lower')
-    axes[0].set_title("Extended Measured IFs (Sum)")
+    im0 = axes[0].imshow(sum_meas, cmap='viridis', origin='lower',vmin=0,vmax=1.5)
+    axes[0].set_title("Sum of cubed MEASURED iffs")
     axes[0].axis('off')
     fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
     
-    im1 = axes[1].imshow(sum_sim, cmap='viridis', origin='lower')
-    axes[1].set_title("Registered Simulated IFs (Sum)")
+    im1 = axes[1].imshow(sum_sim, cmap='viridis', origin='lower',vmin=0,vmax=1.5)
+    axes[1].set_title("Sum of cubed SIMULATED iffs")
     axes[1].axis('off')
     fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+
+    im2 = axes[2].imshow(diff * (np.sum(abs(meas_ifs),axis=0)>0), cmap='RdBu', origin='lower')
+    axes[2].plot(coords[:,1],coords[:,0],'x',c='gray',alpha=0.5,label='act coords')
+    axes[2].set_title("Difference RSS")
+    axes[2].axis('off')
+    fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+    
+    # Add pupil rims
+    for ax in axes:
+        circle = plt.Circle(pupil_center, pupil_radius, color='red', fill=False, linestyle='--', linewidth=1.5, alpha=0.8, label='Pupil Rim')
+        ax.add_patch(circle)
+        ax.legend(loc='upper right')
     
     plt.tight_layout()
     plt.show()
 
 
-# ==============================================================================
-# MAIN CALIBRATION / REGISTRATION PIPELINE
-# ==============================================================================
-
-def register_ao_influence_functions(
+def register_ao_ifs(
     meas_ifs: np.ndarray, 
     meas_mask: np.ndarray, 
     sim_ifs: np.ndarray, 
     sim_mask: np.ndarray,
     n_outer_rings: int = 2,
-    show_plots: bool = True
+    show_plots: bool = True,
+    optimize_coords: bool = False
 ):
-    print("\n--- Starting AO Influence Function Registration ---")
+    print("\n--- Starting Simplified AO Influence Function Calibration ---")
     
-    print("1. Estimating actuator peak positions...")
+    n_acts = sim_ifs.shape[0]
+    pitch_sim = compute_actuator_pitch(sim_mask.shape, n_acts)
+    
+    meas_cy, meas_cx = meas_mask.shape[0] / 2.0, meas_mask.shape[1] / 2.0
+    orig_pupil_center = (meas_cx, meas_cy)
+    y_idx, x_idx = np.where(meas_mask > 0)
+    orig_pupil_radius = np.max(np.sqrt((x_idx - meas_cx)**2 + (y_idx - meas_cy)**2)) if len(y_idx) > 0 else 0.0
+    
+    print("1. Estimating actuator peak positions on native grids [y, x]...")
     coords_meas = estimate_actuator_peaks(meas_ifs, meas_mask)
     coords_sim = estimate_actuator_peaks(sim_ifs, sim_mask)
     
     print(f"2. Identifying inner actuators (excluding outer {n_outer_rings} ring(s))...")
-    mask_shape = meas_mask.shape
-    inner_mask = identify_inner_actuators_radial(coords_sim, mask_shape, n_outer_rings=n_outer_rings)
+    inner_mask = identify_inner_actuators_radial(coords_sim, mask_shape=sim_mask.shape, pitch=pitch_sim, n_outer_rings=n_outer_rings)
     
-    print("3. Computing global similarity transform (Scale, Rotation, Shift)...")
-    scale, R, tx_ty = fit_similarity_transform(coords_sim[inner_mask], coords_meas[inner_mask])
-    print(f" -> Scale: {scale:.4f}, Shift (dx, dy): {tx_ty}")
+    print("3. Computing global registration parameters (Scale, Rotation, Shift)...")
+    scale, R, t_y_x = fit_similarity_transform(coords_sim[inner_mask], coords_meas[inner_mask])
+    rotInDeg = np.arctan2(-R[0,1],R[0,0])*180/np.pi
+    print(f'-> Scale: {scale:1.4f}, Rotation: {rotInDeg:1.1f}°, Shift [dx,dy]: [{t_y_x[0]:1.2f},{t_y_x[1]:1.2f}] pix')
     
-    print("4. Applying global registration to simulated IFs...")
-    sim_ifs_registered = apply_global_registration_to_ifs(
-        sim_ifs, scale, R, tx_ty, target_shape=meas_ifs.shape[1:]
-    )
+    print("4. Registering simulated IFs and center coordinates...")
+    target_shape = meas_ifs.shape[1:]
+    sim_ifs_registered = apply_global_registration_to_ifs(sim_ifs, scale, R, t_y_x, target_shape)
+    reg_coords_sim = transform_coordinates(coords_sim, scale, R, t_y_x)
+
+    if show_plots:
+        plot_results(meas_ifs, sim_ifs_registered, orig_pupil_center, orig_pupil_radius, reg_coords_sim)
     
-    print("5. Optimizing local sub-pixel shifts and gains for INNER actuators...")
-    sim_ifs_registered, gains = optimize_actuator_shifts_and_gains(
-        meas_ifs, sim_ifs_registered, active_mask=inner_mask
-    )
+    print("5. Computing TPS amplitude matrix across all degrees of freedom...")
+    # amplitude_matrix, sim_ifs_registered_rescaled = fit_tps_amplitude_matrix(meas_ifs, meas_mask, reg_coords_sim)
+    amplitude_matrix, scaled_sim_ifs = fit_amplitudes_to_sim_ifs(meas_ifs, meas_mask, sim_ifs_registered, optimize_coords=optimize_coords)
     
-    print("6. Extending measured IFs pupil via Thin Plate Spline (TPS)...")
-    meas_ifs_extended = extend_measured_ifs_tps(meas_ifs, meas_mask, sim_mask)
-    
-    print("7. Optimizing local sub-pixel shifts and gains for OUTER actuators...")
-    outer_mask = ~inner_mask
-    sim_ifs_registered, gains_outer = optimize_actuator_shifts_and_gains(
-        meas_ifs_extended, sim_ifs_registered, active_mask=outer_mask
-    )
-    gains[outer_mask] = gains_outer[outer_mask]
-    
-    print("--- Registration Complete! ---\n")
+    print("--- Calibration Complete! ---\n")
     
     if show_plots:
-        plot_registered_ifs(meas_ifs_extended, sim_ifs_registered)
+        plot_results(meas_ifs, scaled_sim_ifs, orig_pupil_center, orig_pupil_radius, reg_coords_sim)
+        plt.figure()
+        plt.imshow(amplitude_matrix,cmap='magma')
+        plt.colorbar()
+        plt.title('Actuator displacements matrix')
         
-    return meas_ifs_extended, sim_ifs_registered, gains
+    return scaled_sim_ifs, amplitude_matrix, reg_coords_sim
+
+def reshape3d(ifs,mask):
+    ifs2use = ifs.copy() if ifs.shape[0]<ifs.shape[1] else ifs.T
+    mask2use = mask.astype(bool) if np.sum(mask) == ifs2use.shape[1] else (1-mask).astype(bool)
+
+    ifs2use -= np.median(ifs2use,axis=1)[:,None]
+
+    nActs = np.shape(ifs2use)[0]
+    ifs2d = np.zeros([nActs,mask.shape[0],mask.shape[1]])
+    for j in range(nActs):
+        img = np.zeros(mask.shape).flatten()
+        img[mask.astype(bool).flatten()] = ifs2use[j]
+        ifs2d[j] = img.reshape(mask.shape)
+    return ifs2d, mask2use
