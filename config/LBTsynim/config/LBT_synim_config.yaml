@@ -1,0 +1,89 @@
+paths:
+  root_dir_template: /raid1/mmenessini/LBTsynIM
+  ifunc_template: ifunc/asm_v{kl}{side}_ifunc.fits
+  ifunc_inv_template: ifunc/asm_v{kl}{side}_kl_inv.fits
+  m2c_template: m2c/asm_v{kl}{side}_m2c.fits
+  pupilstop_template: pupilstop/asm_v{kl}{side}_pupilstop.fits
+  pupil_mask_template: pupils/lbt_pupmask.fits
+  pupdata_template: pupils/lbt_pupdata.fits
+  pupids_template: pupils/pup_ids.fits
+  sav_dir_template: /raid1/mmenessini/LBTsynIM/KLv{kl}{side}
+  sav_file_template: phase_matrix.sav
+  data_dir: data
+  telescope_diameter: 8.222
+systems:
+  LUCIdx:
+    side: dx
+    kl_version: 30
+    flip: false
+    xsign: 1
+    ysign: -1
+    misreg_guess:
+      rotation: -55.0
+      shift_x: 0.0
+      shift_y: 0.0
+      magnification: 1.0
+  LUCIsx:
+    side: sx
+    kl_version: 32
+    flip: false
+    xsign: -1
+    ysign: 1
+    misreg_guess:
+      rotation: 0.0
+      shift_x: 0.0
+      shift_y: 0.0
+      magnification: 1.0
+  LBTIdx:
+    side: dx
+    kl_version: 30
+    flip: true
+    xsign: 1
+    ysign: -1
+    misreg_guess:
+      rotation: -34.11609805138388
+      shift_x: 0.4247994530598515
+      shift_y: -0.8133179493356111
+      magnification: 0.9740353583768354
+  LBTIsx:
+    side: sx
+    kl_version: 32
+    flip: true
+    xsign: -1
+    ysign: 1
+    misreg_guess:
+      rotation: -147.9
+      shift_x: -0.0
+      shift_y: 0.0
+      magnification: 1.0
+registration:
+  nmodes: 100
+  delta_rotation: 0.5
+  delta_shift: 0.01
+  delta_magnification: 0.001
+  tolerance: 0.01
+  max_iterations: 20
+  main_simul_yaml: ./config/syn_soul_im.yml
+  slopes_mode_check: 30
+interaction_matrix:
+  default_modulation_radius: 3.0
+  default_nmodes: 600
+  nslopes: 2512
+  npix: 120
+  partial_correction:
+    nmodes_perfect_correction: 600
+    correction_vector_path: ''
+    n_screens_average: 70
+  pc_extra_blocks_yaml: ./config/pc_blocks.yml
+reconstructor:
+  header_template: /raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits
+  argos_default: true
+  total_commands: 672
+  total_slopes: 2848
+  iir_command_rows:
+  - 661
+  - 668
+  iir_source_modes:
+  - 0
+  - 1
+  slopes_scale: 4000000000.0

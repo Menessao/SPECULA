@@ -1,0 +1,91 @@
+main:
+  class:             'SimulParams'
+  root_dir:          '/raid1/mmenessini/calibration/SOUL/KLv30dx'   # overridden per system
+  pixel_pupil:       197                   # overridden per system/side
+  pixel_pitch:       0.041736              # overridden per system/side
+  total_time:        1.2
+  time_step:         0.001
+  zenithAngleInDeg:  0.0
+  display_server:    false
+
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       600                        # overridden per call
+  amp:          25
+  outputs:   ['output']
+
+pyr_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    600                           # overridden per call
+  im_tag:    'pyr3.0_40x40_lbti_optsynim'  # overridden per call
+  overwrite: false
+  inputs:
+    in_slopes:   'pyr_slopes.out_slopes'
+    in_commands: 'pushpull.output'
+
+source_ngs:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]
+  height:            .inf
+  magnitude:         7.0
+  wavelengthInNm:    750
+
+pupilstop:
+  class:             'Pupilstop'
+  tag:               'asm_v30dx_pupilstop'   # overridden per system/TN
+
+prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs']
+  inputs:
+    common_layer_list: ['pupilstop', 'dm.out_layer']
+  outputs:           ['out_source_ngs_ef']
+
+########################### PWFS ##############################
+pyr:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          40.
+  pup_dist:          48.
+  fov:               2.0
+  mod_amp:           3.0                   # overridden per call
+  output_resolution: 120
+  wavelengthInNm:    750
+  inputs:
+    in_ef: 'prop.out_source_ngs_ef'
+
+ocam:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]
+  dt:                0.001
+  bandw:             300
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+  readout_level:     0.4
+  emccd_gain:        600
+  quantum_eff:       0.32
+  inputs:
+    in_i:            'pyr.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes:
+  class:                  'PyrSlopec'
+  pupdata_object:         'lbt_pupdata'
+  inputs:
+    in_pixels:        'ocam.out_pixels'
+  outputs:           ['out_slopes']
+
+dm:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'asm_v30dx_ifunc'      # overridden per system/TN
+  m2c_object:        'asm_v30dx_m2c'        # overridden per system
+  height:            0
+  sign:              1
+  nmodes:            600                    # overridden per call
+  inputs:
+    in_command:      'pushpull.output'
+  outputs:           ['out_layer']
