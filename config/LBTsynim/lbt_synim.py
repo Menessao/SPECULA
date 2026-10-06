@@ -286,10 +286,6 @@ class LBTSynIM:
         """Validate and return the raw config entry for a WFS binning
         factor > 1. Raises a clear error if that binning hasn't been
         filled in yet.
-
-        TODO: only binning=1 (the default paths/interaction_matrix
-        config) is real. Fill in config['binning']['configs'][2|3|4] with
-        real CCD sizes and pupil_mask/pupdata/pupids filenames once known.
         """
         configs = self.config.get("binning", {}).get("configs", {})
         cfg = configs.get(binning, configs.get(str(binning)))
@@ -358,9 +354,6 @@ class LBTSynIM:
         ifunc_new = warp_image(self.ifunc, warped_mask, flip=self.flip,
                                 shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                 oldpup=self.pupilstop)
-        # NOTE: simplified relative to synim_sprint.py's save_ifunc_pars,
-        # which applied a warp_image(...).T followed by another .T when
-        # building the IFuncInv object -- the two transposes cancel out.
         ifunc_inv_new = warp_image(self.ifunc_inv.T, warped_mask, flip=self.flip,
                                     shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                     oldpup=self.pupilstop)
@@ -544,8 +537,6 @@ class LBTSynIM:
                                       nmodes=nmodes, im_tag=im_tag)
         raw = fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
 
-        # NOTE: xsign/ysign generalise what was a fixed (+1, -1) flip in
-        # the original get_synim -- see README "Open items" (xsign/ysign).
         aux = raw.copy()
         half = self.nslopes // 2
         aux[:half, :] = raw[half:, :] * self.xsign
