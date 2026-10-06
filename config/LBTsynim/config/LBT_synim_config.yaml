@@ -41,10 +41,10 @@ systems:
     xsign: 1
     ysign: -1
     misreg_guess:
-      rotation: -34.11609805138388
-      shift_x: 0.4247994530598515
-      shift_y: -0.8133179493356111
-      magnification: 0.9740353583768354
+      rotation: -34.12
+      shift_x: 0.42
+      shift_y: -0.81
+      magnification: 0.974
   LBTIsx:
     side: sx
     kl_version: 32
@@ -52,16 +52,16 @@ systems:
     xsign: -1
     ysign: 1
     misreg_guess:
-      rotation: -147.9
-      shift_x: -0.0
-      shift_y: 0.0
-      magnification: 1.0
+      rotation: -147.94
+      shift_x: -0.53
+      shift_y: -0.785
+      magnification: 0.995
 registration:
-  nmodes: 100
+  nmodes: 200
   delta_rotation: 0.5
   delta_shift: 0.01
   delta_magnification: 0.001
-  tolerance: 0.01
+  tolerance: 0.001
   max_iterations: 20
   main_simul_yaml: ./config/syn_soul_im.yml
   slopes_mode_check: 30

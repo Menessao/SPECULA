@@ -55,7 +55,7 @@ from specula.data_objects.ifunc_inv import IFuncInv
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.simul_params import SimulParams
 
-from specula.lib.toccd import toccd
+# from specula.lib.toccd import toccd
 
 
 VALID_SYSTEMS = ("LUCIdx", "LUCIsx", "LBTIdx", "LBTIsx")
@@ -286,6 +286,10 @@ class LBTSynIM:
         """Validate and return the raw config entry for a WFS binning
         factor > 1. Raises a clear error if that binning hasn't been
         filled in yet.
+
+        TODO: only binning=1 (the default paths/interaction_matrix
+        config) is real. Fill in config['binning']['configs'][2|3|4] with
+        real CCD sizes and pupil_mask/pupdata/pupids filenames once known.
         """
         configs = self.config.get("binning", {}).get("configs", {})
         cfg = configs.get(binning, configs.get(str(binning)))
@@ -354,6 +358,9 @@ class LBTSynIM:
         ifunc_new = warp_image(self.ifunc, warped_mask, flip=self.flip,
                                 shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                 oldpup=self.pupilstop)
+        # NOTE: simplified relative to synim_sprint.py's save_ifunc_pars,
+        # which applied a warp_image(...).T followed by another .T when
+        # building the IFuncInv object -- the two transposes cancel out.
         ifunc_inv_new = warp_image(self.ifunc_inv.T, warped_mask, flip=self.flip,
                                     shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                     oldpup=self.pupilstop)
@@ -410,10 +417,11 @@ class LBTSynIM:
                                  nmodes: int, im_tag: str, mod_amp: Optional[float] = None,
                                  binning_tags: Optional[dict] = None):
         """ Diffraction-limited push-pull calibration. """
+        m2c_tag = self.m2c_path.stem
         overrides = {
             "pyr_im_calibrator": {"im_tag": im_tag, "nmodes": nmodes, "overwrite": True},
             "pushpull": {"nmodes": nmodes},
-            "dm": {"ifunc_object": ifunc_tag, "nmodes": nmodes},
+            "dm": {"ifunc_object": ifunc_tag, "m2c_object": m2c_tag, "nmodes": nmodes},
             "pupilstop": {"tag": pupilstop_tag},
             "main": {"pixel_pupil": self.pixel_pupil, "pixel_pitch": self.pixel_pitch,
                      "root_dir": str(self.root_dir), "total_time": nmodes*0.001*2},
@@ -453,6 +461,7 @@ class LBTSynIM:
 
         extra_blocks_yaml = self.config["interaction_matrix"].get("pc_extra_blocks_yaml")
         main_yaml = self.config["registration"]["main_simul_yaml"]
+        m2c_tag = self.m2c_path.stem
 
         accum = None
         for i in range(n_avg):
@@ -460,7 +469,7 @@ class LBTSynIM:
                 "pyr_im_calibrator": {"im_tag": im_tag, "nmodes": nmodes, "overwrite": True},
                 "pushpull": {"nmodes": nmodes},
                 "pyr": {"mod_amp": mod_amp},
-                "dm": {"ifunc_object": ifunc_tag, "nmodes": nmodes},
+                "dm": {"ifunc_object": ifunc_tag, "m2c_object": m2c_tag, "nmodes": nmodes},
                 "pupilstop": {"tag": pupilstop_tag},
                 "main": {"pixel_pupil": self.pixel_pupil, "pixel_pitch": self.pixel_pitch,
                          "root_dir": str(self.root_dir), "total_time": nmodes*0.001*2},
@@ -471,6 +480,7 @@ class LBTSynIM:
                 "dm_random": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem,
                                "nmodes": nmodes_pc},
             }
+            overrides['pyr']['inputs'] = {"in_ef": 'ef_mode.out_ef'}
             if binning_tags is not None:
                 overrides["pyr"]["output_resolution"] = binning_tags["ccd_size"][0]
                 overrides["ocam"] = {"size": binning_tags["ccd_size"]}
@@ -537,6 +547,8 @@ class LBTSynIM:
                                       nmodes=nmodes, im_tag=im_tag)
         raw = fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
 
+        # NOTE: xsign/ysign generalise what was a fixed (+1, -1) flip in
+        # the original get_synim -- see README "Open items" (xsign/ysign).
         aux = raw.copy()
         half = self.nslopes // 2
         aux[:half, :] = raw[half:, :] * self.xsign

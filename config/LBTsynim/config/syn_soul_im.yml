@@ -1,6 +1,6 @@
 main:
   class:             'SimulParams'
-  root_dir:          '/raid1/mmenessini/calibration/SOUL/KLv30dx'   # overridden per system
+  root_dir:          '/raid1/mmenessini/calibration/SOUL/KL<sys>'   # overridden per system
   pixel_pupil:       197                   # overridden per system/side
   pixel_pitch:       0.041736              # overridden per system/side
   total_time:        1.2
@@ -17,7 +17,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    600                           # overridden per call
-  im_tag:    'pyr3.0_40x40_lbti_optsynim'  # overridden per call
+  im_tag:    'pyr3.0_40x40_<sys>_optsynim'  # overridden per call
   overwrite: false
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'
@@ -32,7 +32,7 @@ source_ngs:
 
 pupilstop:
   class:             'Pupilstop'
-  tag:               'asm_v30dx_pupilstop'   # overridden per system/TN
+  tag:               'asm_<sys>_pupilstop'   # overridden per system/TN
 
 prop:
   class:             'AtmoPropagation'
@@ -81,11 +81,18 @@ pyr_slopes:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'asm_v30dx_ifunc'      # overridden per system/TN
-  m2c_object:        'asm_v30dx_m2c'        # overridden per system
+  ifunc_object:      'asm_<sys>_ifunc'      # overridden per system/TN
+  m2c_object:        'asm_<sys>_m2c'        # overridden per system
   height:            0
   sign:              1
   nmodes:            600                    # overridden per call
   inputs:
     in_command:      'pushpull.output'
   outputs:           ['out_layer']
+
+# data_store:
+#   class:             'DataStore'
+#   store_dir:         '/raid1/mmenessini/LBTsynIM/output'             # Data result directory: 'store_dir'/
+#   create_tn: false
+#   inputs:
+#     input_list: ['pyr_ef-pyr.out_i']
