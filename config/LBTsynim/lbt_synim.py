@@ -546,14 +546,10 @@ class LBTSynIM:
                                       pupilstop_tag=pupilstop_file.stem,
                                       nmodes=nmodes, im_tag=im_tag)
         raw = fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
-
-        # NOTE: xsign/ysign generalise what was a fixed (+1, -1) flip in
-        # the original get_synim -- see README "Open items" (xsign/ysign).
         aux = raw.copy()
         half = self.nslopes // 2
         aux[:half, :] = raw[half:, :] * self.xsign
         aux[half:, :] = raw[:half, :] * self.ysign
-
         out = np.zeros([int(self.half_mask.sum()), nmodes])
         fimg = np.zeros(self.npix ** 2)
         for j in range(nmodes):
@@ -596,8 +592,8 @@ class LBTSynIM:
             fig.colorbar(im, ax=ax, shrink=0.6)
         fig.suptitle(f"{self.system} registration check -- TN {tn}")
         fig.tight_layout()
-        out_png = self.data_dir / f"MisRegCheck_{self.system}_{tn}.png"
-        fig.savefig(out_png, dpi=120)
+        # out_png = self.data_dir / f"MisRegCheck_{self.system}_{tn}.png"
+        # fig.savefig(out_png, dpi=120)
         return fig
 
     # ------------------------------------------------------------------
@@ -653,8 +649,8 @@ class LBTSynIM:
         shutil.copy2(self.config_path, backup_path)
 
         self.config["systems"][self.system]["misreg_guess"] = {
-            "rotation": float(alpha[0]), "shift_x": float(alpha[1]),
-            "shift_y": float(alpha[2]), "magnification": float(alpha[3]),
+            f"rotation: {float(alpha[0]):1.2f}", f"shift_x: {float(alpha[1]):1.2f}",
+            f"shift_y: {float(alpha[2]):1.2f}", f"magnification: {float(alpha[4]):1.3f}",
         }
         with open(self.config_path, "w") as f:
             yaml.safe_dump(self.config, f, sort_keys=False, default_flow_style=False)
@@ -692,7 +688,6 @@ class LBTSynIM:
         hdr["IFINVF"] = str(ifunc_inv_file)
         hdr["PUPF"] = str(pupilstop_file)
         hdr["MEASIM"] = str(measured_imat) if isinstance(measured_imat, (str, Path)) else "array_input"
-
         data = np.array([result.rotation, result.shift_x, result.shift_y, result.magnification])
         out_path = self.data_dir / f"MisReg_{self.system}_{tn}.fits"
         fits.PrimaryHDU(data=data, header=hdr).writeto(out_path, overwrite=True)
@@ -848,7 +843,8 @@ class LBTSynIM:
         header).
         """
         ic_cfg = self.config["interaction_matrix"]
-        nmodes = nmodes or ic_cfg.get("default_nmodes", 600)
+        if nmodes is None:
+            nmodes = self.m2c.shape[0]
         bin_tags = self._binning_tags(binning)
 
         ifunc_tag, ifunc_inv_tag, pupilstop_tag, reg_tn = self._latest_registered_products()
