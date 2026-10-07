@@ -1,89 +1,144 @@
+# =============================================================================
+# LBT SynIM configuration
+#
+# All {kl}/{side} placeholders below are filled in from a system's own
+# `kl_version` / `side` entry (see the `systems:` section) -- e.g. for
+# LBTIdx (side=dx, kl_version=30) `asm_v{kl}{side}_ifunc.fits` becomes
+# `asm_v30dx_ifunc.fits`. EVERY path below is a generic template filled in
+# this way inside LBTSynIM -- there are no more per-side dx:/sx: dicts.
+# =============================================================================
+
 paths:
-  root_dir_template: /raid1/mmenessini/LBTsynIM
-  ifunc_template: ifunc/asm_v{kl}{side}_ifunc.fits
-  ifunc_inv_template: ifunc/asm_v{kl}{side}_kl_inv.fits
-  m2c_template: m2c/asm_v{kl}{side}_m2c.fits
-  pupilstop_template: pupilstop/asm_v{kl}{side}_pupilstop.fits
-  pupil_mask_template: pupils/lbt_pupmask.fits
-  pupdata_template: pupils/lbt_pupdata.fits
-  pupids_template: pupils/pup_ids.fits
-  sav_dir_template: /raid1/mmenessini/LBTsynIM/KLv{kl}{side}
-  sav_file_template: phase_matrix.sav
-  data_dir: data
+  root_dir_template: '/raid1/mmenessini/calibration/SOUL/KLv{kl}{side}'
+
+  ifunc_template:      'ifunc/asm_v{kl}{side}_ifunc.fits'
+  ifunc_inv_template:  'ifunc/asm_v{kl}{side}_kl_inv.fits'
+  m2c_template:        'm2c/asm_v{kl}{side}_m2c.fits'
+  pupilstop_template:  'pupilstop/asm_v{kl}{side}_pupilstop.fits'
+  pupil_mask_template: 'pupils/lbt_pupmask.fits'
+  pupdata_template:    'pupils/lbt_pupdata.fits'
+  pupids_template:     'pupils/pup_ids.fits'
+
   telescope_diameter: 8.222
+
+  # Fallback source. If the fits files above are not found,
+  # LBTSynIM._build_calib_data_from_sav() (re)builds ifunc_inv/m2c/pupilstop
+  # from a .sav file living here.
+  sav_dir_template:  '/raid1/mmenessini/LBTData/KLv{kl}{side}'
+  sav_file_template: 'phase_matrix.sav'
+
+  # Run products (MisReg/IntMat/RecMat, diagnostic plots, temp override
+  # yamls, the PC correction vector) are written here, relative to
+  # root_dir. Empty/omitted falls back to '.output'. The registered
+  # IFunc_*/IFuncInv_*/Pupilstop_* files are NOT affected by this -- they
+  # always live under the ifunc_template/pupilstop_template directories
+  # above, since SPECULA's tag lookup needs to find them there.
+  output_dir: '.output'
+
+
 systems:
   LUCIdx:
-    side: dx
+    side: 'dx'
     kl_version: 30
     flip: false
     xsign: 1
     ysign: -1
-    misreg_guess:
-      rotation: -55.0
-      shift_x: 0.0
-      shift_y: 0.0
-      magnification: 1.0
+    misreg_guess: {rotation: -55.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
   LUCIsx:
-    side: sx
+    side: 'sx'
+    kl_version: 32
+    flip: true
+    xsign: -1
+    ysign: 1
+    misreg_guess: {rotation: 0.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
+  LBTIdx:
+    side: 'dx'
+    kl_version: 30
+    flip: true
+    xsign: 1 
+    ysign: -1
+    misreg_guess: {rotation: -34.12, shift_x: 0.42, shift_y: -0.81, magnification: 0.974}
+  LBTIsx:
+    side: 'sx'
     kl_version: 32
     flip: false
     xsign: -1
     ysign: 1
-    misreg_guess:
-      rotation: 0.0
-      shift_x: 0.0
-      shift_y: 0.0
-      magnification: 1.0
-  LBTIdx:
-    side: dx
-    kl_version: 30
-    flip: true
-    xsign: 1
-    ysign: -1
-    misreg_guess:
-      rotation: -34.12
-      shift_x: 0.42
-      shift_y: -0.81
-      magnification: 0.974
-  LBTIsx:
-    side: sx
-    kl_version: 32
-    flip: true
-    xsign: -1
-    ysign: 1
-    misreg_guess:
-      rotation: -147.94
-      shift_x: -0.53
-      shift_y: -0.785
-      magnification: 0.995
+    misreg_guess: {rotation: -147.94, shift_x: -0.53, shift_y: -0.79, magnification: 0.995}
+
 registration:
-  nmodes: 200
-  delta_rotation: 0.5
-  delta_shift: 0.01
+  nmodes: 400
+  delta_rotation: 0.5        # [deg]
+  delta_shift: 0.01          # [pix]
   delta_magnification: 0.001
-  tolerance: 0.001
+  tolerance: 1.0e-2
   max_iterations: 20
-  main_simul_yaml: ./config/syn_soul_im.yml
-  slopes_mode_check: 30
+  main_simul_yaml: './config/syn_soul_im.yml'
+  slopes_mode_check: 30 # TODO: change this to user input
+
 interaction_matrix:
   default_modulation_radius: 3.0
-  default_nmodes: 600
+  default_nmodes: 600 # TODO: change this to m2c columns
   nslopes: 2512
   npix: 120
+
   partial_correction:
-    nmodes_perfect_correction: 600
+    nmodes_perfect_correction: 649 # TODO: change this to m2c columns
+    # Optional per-mode scaling applied to those modes before commanding
+    # the DM. Empty => perfect correction (no attenuation).
     correction_vector_path: ''
+    # Number of independent atmospheric realizations averaged together.
     n_screens_average: 70
-  pc_extra_blocks_yaml: ./config/pc_blocks.yml
+  # Static SPECULA object definitions (atmo, modal analysis, DM, etc.)
+  # used only for the partial-correction case; adapted from pc_calib_yml.
+  pc_extra_blocks_yaml: './config/pc_blocks.yml'
+
 reconstructor:
-  header_template: /raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits
+  # Reference Rec FITS file whose header is used as a starting template
+  # for every system (per your instruction: same default for all systems)
+  # and for binning=1. Other binnings can override this via
+  # binning.configs.<n>.rec_header_template.
+  header_template: '/raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits'
   argos_default: true
   total_commands: 672
+  # total_slopes for bin=1; other binnings use binning.configs.<n>.total_slopes.
   total_slopes: 2848
-  iir_command_rows:
-  - 661
-  - 668
-  iir_source_modes:
-  - 0
-  - 1
-  slopes_scale: 4000000000.0
+  # Copy irr_source_modes to iir_command_rows to enable IIR filters
+  iir_command_rows: [661, 668]
+  iir_source_modes: [0, 1]
+  slopes_scale: 4.0e+9 # Argos x2, SF2WF x2, nm2m x10^9
+
+
+
+# # WFS CCD binning support for compute_interaction_matrix/compute_reconstructor.
+# # binning=1 needs no entry here -- it reuses paths.*/interaction_matrix.*
+# binning:
+#   default: 1
+#   configs:
+#     2:
+#       ccd_size: null              # e.g. [60, 60]
+#       npix: null
+#       nslopes: null
+#       total_slopes: null
+#       pupil_mask_template: 'pupils/lbt_pupmask_bin2.fits'   # placeholder filename
+#       pupdata_template:    'pupils/lbt_pupdata_bin2.fits'   # placeholder filename
+#       pupids_template:     'pupils/pup_ids_bin2.fits'       # placeholder filename
+#       rec_header_template: null   # e.g. a 'Rec_..._bin2_...fits' template
+#     3:
+#       ccd_size: null
+#       npix: null
+#       nslopes: null
+#       total_slopes: null
+#       pupil_mask_template: 'pupils/lbt_pupmask_bin3.fits'
+#       pupdata_template:    'pupils/lbt_pupdata_bin3.fits'
+#       pupids_template:     'pupils/pup_ids_bin3.fits'
+#       rec_header_template: null
+#     4:
+#       ccd_size: null
+#       npix: null
+#       nslopes: null
+#       total_slopes: null
+#       pupil_mask_template: 'pupils/lbt_pupmask_bin4.fits'
+#       pupdata_template:    'pupils/lbt_pupdata_bin4.fits'
+#       pupids_template:     'pupils/pup_ids_bin4.fits'
+#       rec_header_template: null
