@@ -19,6 +19,7 @@ source. See the main lbt_synim.py docstring for the full caveat list.
 from __future__ import annotations
 
 import subprocess
+import warnings
 from pathlib import Path
 from typing import Optional, Union
 
@@ -27,6 +28,8 @@ import yaml
 from astropy.io import fits
 from skimage.transform import AffineTransform, warp
 
+from specula import cpuArray
+from specula.data_objects.pupdata import PupData
 from specula.data_objects.simul_params import SimulParams
 from specula.data_objects.pupilstop import Pupilstop
 from specula.lib.toccd import toccd  # noqa: F401  (re-exported for lbt_synim.py)
@@ -43,18 +46,22 @@ def warp_image(ifunc, pupmask, flip: bool = False,
     (rotation + shift + magnification; no shear)."""
     pup_mask = pupmask.astype(bool)
     ifunc_new = np.zeros([int(np.sum(pup_mask)), ifunc.shape[1]])
-    img = np.zeros(oldpup.shape)
-    center_y, center_x = img.shape[0] / 2.0, img.shape[1] / 2.0
+    center_y, center_x = oldpup.shape[0] / 2.0, oldpup.shape[1] / 2.0
     shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
     rot_and_scale = AffineTransform(rotation=rot * np.pi / 180, scale=mag)
     shift_to_center = AffineTransform(translation=(center_x + shiftX, center_y + shiftY))
     trf = shift_to_origin + rot_and_scale + shift_to_center
     for j in range(ifunc.shape[1]):
+        # Fresh image per mode: re-using one image across modes while
+        # flipping it (img = img[::-1]) leaks the previous mode's values
+        # into the next whenever the pupil isn't exactly up/down
+        # symmetric -- i.e. it corrupted every mode but the first for
+        # flip=True systems (LBTIdx, LUCIsx).
+        img = np.zeros(oldpup.shape)
         img[oldpup.astype(bool)] = ifunc[:, j]
         if flip:
             img = img[::-1, :]
-        warp_img = warp(img, inverse_map=trf.inverse)
-        ifunc_new[:, j] = warp_img[pup_mask]
+        ifunc_new[:, j] = warp(img, inverse_map=trf.inverse)[pup_mask]
     return ifunc_new
 
 
@@ -69,6 +76,36 @@ def warp_mask(pup, shiftX: float = 0.0, shiftY: float = 0.0,
     trf = shift_to_origin + rot_and_scale + shift_to_center
     warp_pup = warp(pup.astype(float), inverse_map=trf.inverse) > 0.9
     return warp_pup.astype(float)
+
+
+# =============================================================================
+# pupil data
+# =============================================================================
+
+def pup_ids_from_pupdata(pupdata: Union[PupData, str, Path], n_pupils: int = 2) -> np.ndarray:
+    """Pixel indices ("pup_ids") of the pupils the slopes are rastered into,
+    from a SPECULA `PupData` object or the path of a saved one.
+
+    `PupData.ind_pup` is `[n_subap, 4]`: flat indices into the detector
+    frame (`pupdata.framesize`), one column per pyramid pupil, padded with
+    -1 where pupils have different pixel counts. `LBTSynIM._raster` places
+    the x slopes at column 0 and the y slopes at column 1, so by default
+    this returns just those first two columns.
+
+    Rows with any -1 padding in the returned columns are dropped (with a
+    warning): `np.put` with an index of -1 doesn't skip it, it silently
+    writes into the last pixel of the frame.
+
+    Returns an int array `[n_valid, n_pupils]`.
+    """
+    if not isinstance(pupdata, PupData):
+        pupdata = PupData.restore(str(pupdata))
+    ind = np.asarray(cpuArray(pupdata.ind_pup))[:, :n_pupils].astype(int)
+    valid = np.all(ind >= 0, axis=1)
+    if not valid.all():
+        warnings.warn(f"pup_ids_from_pupdata: dropped {int((~valid).sum())} of {len(ind)} rows "
+                      f"padded with -1 in the first {n_pupils} pupils.")
+    return ind[valid]
 
 
 # =============================================================================

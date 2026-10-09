@@ -70,7 +70,7 @@ systems:
     flip: true
     xsign: 1
     ysign: -1
-    misreg_guess: {rotation: -34.12, shift_x: 0.42, shift_y: -0.81, magnification: 0.974}
+    misreg_guess: {rotation: -34.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
   LBTIsx:
     side: 'sx'
     kl_version: 32

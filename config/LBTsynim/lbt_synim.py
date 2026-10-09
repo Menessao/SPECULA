@@ -36,6 +36,7 @@ from __future__ import annotations
 import datetime
 import re
 import shutil
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -55,7 +56,7 @@ from specula.data_objects.ifunc_inv import IFuncInv
 
 from specula_helpers import (
     warp_image, warp_mask, save_pupil, save_perfect_correction_vector,
-    write_overrides_yaml, run_specula, toccd,
+    pup_ids_from_pupdata, write_overrides_yaml, run_specula, toccd,
 )
 
 VALID_SYSTEMS = ("LUCIdx", "LUCIsx", "LBTIdx", "LBTIsx")
@@ -106,6 +107,8 @@ class LBTSynIM:
         sys_cfg = self.config["systems"][system]
         self.kl_version = sys_cfg["kl_version"]
         self.flip = bool(sys_cfg["flip"])
+        # NOTE: xsign/ysign are only empirically confirmed for LBTIdx/LBTIsx;
+        # LUCIdx/LUCIsx values are unconfirmed placeholders -- see the config.
         self.xsign = float(sys_cfg.get("xsign", 1.0))
         self.ysign = float(sys_cfg.get("ysign", 1.0))
         guess = sys_cfg["misreg_guess"]
@@ -139,12 +142,21 @@ class LBTSynIM:
         self.pupdata_path = self.root_dir / self._fmt(p["pupdata_template"])
         self.pupids_path = self.root_dir / self._fmt(p["pupids_template"])
 
+        # Run products (MisReg/IntMat/RecMat, diagnostic plots, temp
+        # override yamls, correction vectors) -- always relative to
+        # root_dir, falling back to root_dir/.output. The registered
+        # IFunc_*/IFuncInv_*/Pupilstop_* files stay under root_dir/ifunc/
+        # and root_dir/pupilstop/ regardless (see _save_ifunc_products),
+        # since the `specula` subprocess finds them there by tag.
         self.output_dir = self.root_dir / p.get("output_dir", ".output")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.sav_dir = Path(self._fmt(p["sav_dir_template"]))
         self.sav_file = self.sav_dir / p["sav_file_template"]
 
+        # Nominal (binning=1) optics constants -- pup_diam/pup_dist/npix
+        # get divided by `binning` in _pupil_geometry(); telescope_diameter
+        # is the same for both sides.
         optics = self.config["optics"]
         self.telescope_diameter = optics["telescope_diameter"]
         self.base_pup_diam = optics["pup_diam"]
@@ -177,7 +189,9 @@ class LBTSynIM:
             )
 
         self.pixel_pitch = self.telescope_diameter / self.pixel_pupil
-        self.default_nmodes = int(self.m2c.shape[0])
+        # The mode count is m2c's *second* axis (shape[1]) -- shape[0] is
+        # one larger (e.g. 650 vs 649) and makes SPECULA fail/mismatch.
+        self.default_nmodes = int(self.m2c.shape[1])
 
         geom = self._pupil_geometry(1)
         self.npix, self.nslopes = geom["npix"], geom["nslopes"]
@@ -242,8 +256,13 @@ class LBTSynIM:
         npix = self.base_npix // binning
         pupdata_path = self._binned(self.pupdata_path, binning)
         pupids_path = self._binned(self.pupids_path, binning)
-        pup_ids = fits.open(pupdata_path)[1].data
+        pup_ids = pup_ids_from_pupdata(pupdata_path)
         pupids = fits.getdata(pupids_path)
+        framesize = fits.getheader(pupdata_path)  # FSIZEX/FSIZEY of the PupData file
+        if (framesize.get("FSIZEX"), framesize.get("FSIZEY")) != (npix, npix):
+            warnings.warn(f"{pupdata_path.name} has frame size "
+                          f"{framesize.get('FSIZEX')}x{framesize.get('FSIZEY')}, expected "
+                          f"{npix}x{npix} for binning={binning} (optics.npix={self.base_npix}).")
         return {
             "binning": binning,
             "npix": npix,
@@ -472,15 +491,33 @@ class LBTSynIM:
             sens.append(((push - pull) / (2 * e)).flatten())
         return np.array(sens).T
 
-    def _imat_mode_to_2d(self, imat: np.ndarray, mode_idx: int, geom: dict) -> np.ndarray:
-        """Full `npix x npix` raster of one imat column (sign-corrected,
-        placed via this binning's pup_ids) -- shared by
-        `plot_registration_check`."""
-        half = geom["nslopes"] // 2
-        col = imat[: geom["nslopes"], mode_idx]
-        fimg = np.zeros(geom["npix"] ** 2)
-        return self._raster(fimg, geom["pup_ids"], col[half:] * self.xsign, col[:half] * self.ysign,
-                             geom["npix"])
+    def _imat_mode_to_2d(self, imat: np.ndarray, mode_idx: int, geom: dict,
+                          order: str) -> np.ndarray:
+        """Full `npix x npix` image of one imat column, in hardware units.
+
+        `order` is the slope ordering of `imat`'s rows:
+          * "hardware": the real system's order (measured IMs). Pixel k of
+            the top-half pupil mask, in raster order, holds row
+            `pupids[k]` -- the same mapping `_reshape_to_pupil_frame` and
+            `compute_reconstructor` use.
+          * "specula": the raw simulator order (IMs from
+            `compute_interaction_matrix`): x slopes then y slopes, rastered
+            via pup_ids with the xsign/ysign convention, and scaled by
+            `reconstructor.slopes_scale` so the values are in the same
+            units as a hardware-order IM.
+        """
+        npix, nslopes = geom["npix"], geom["nslopes"]
+        full = np.zeros((npix, npix))
+        if order == "hardware":
+            full[: npix // 2][geom["half_mask"]] = imat[geom["pupids"], mode_idx]
+        elif order == "specula":
+            half = nslopes // 2
+            col = imat[:nslopes, mode_idx] * self.config["reconstructor"].get("slopes_scale", 4.0e9)
+            full = self._raster(np.zeros(npix ** 2), geom["pup_ids"],
+                                col[half:] * self.xsign, col[:half] * self.ysign, npix)
+        else:
+            raise ValueError(f"order must be 'hardware' or 'specula', got {order!r}")
+        return full
 
     # ------------------------------------------------------------------
     # plotting
@@ -587,7 +624,7 @@ class LBTSynIM:
         misreg_path = self.output_dir / f"MisReg_{self.system}_{self.reg_tn}.fits"
         return fits.getdata(fits.getheader(misreg_path)["MEASIM"])
 
-    def _resolve_calib_imat(self, calib_imat, binning: int, nmodes:int=None) -> np.ndarray:
+    def _resolve_calib_imat(self, calib_imat, binning: int) -> np.ndarray:
         """Default: the latest IntMat matching the current registration
         and compute_interaction_matrix's own defaults -- computed if none
         exists yet."""
@@ -598,7 +635,7 @@ class LBTSynIM:
                                 f"run update_registration() first.")
         rMod = self.config["interaction_matrix"].get("default_modulation_radius", 3.0)
         cached, _ = self._cached_imat(rMod, self.default_nmodes, None, binning, self.reg_tn, {})
-        return cached if cached is not None else self.compute_interaction_matrix(rMod=rMod, binning=binning, nmodes=nmodes)
+        return cached if cached is not None else self.compute_interaction_matrix(rMod=rMod, binning=binning)
 
     @staticmethod
     def _round_alpha(alpha) -> np.ndarray:
@@ -612,28 +649,94 @@ class LBTSynIM:
         fits.writeto(path, measured, overwrite=True)
         return path
 
+    @staticmethod
+    def _patch_misreg_text(text: str, system: str, line_body: str) -> str:
+        """Return `text` with `system`'s `misreg_guess` entry replaced by
+        `line_body` (the text after the key's colon, e.g. "{rotation: ...}"),
+        touching nothing else -- comments, other systems and all other
+        sections survive byte-for-byte.
+
+        Works on the system's own block only (header line through the next
+        line indented no deeper than it), so it can never spill into a
+        neighbouring system, and replaces block-style entries (the key plus
+        its indented child lines) as well as flow-style one-liners. If the
+        system has no `misreg_guess` yet, one is appended to its block."""
+        lines = text.splitlines(keepends=True)
+        indent = lambda ln: len(ln) - len(ln.lstrip(" "))
+        is_content = lambda ln: bool(ln.strip()) and not ln.lstrip().startswith("#")
+
+        head = re.compile(rf"""^(\s*)["']?{re.escape(system)}["']?\s*:\s*(#.*)?$""")
+        i_head = next((i for i, ln in enumerate(lines) if head.match(ln.rstrip("\r\n"))), None)
+        if i_head is None:
+            raise KeyError(f"system '{system}' not found in the config")
+        head_indent = indent(lines[i_head])
+
+        # the system's block: up to the next content line indented <= its header
+        i_end = len(lines)
+        for i in range(i_head + 1, len(lines)):
+            if is_content(lines[i]) and indent(lines[i]) <= head_indent:
+                i_end = i
+                break
+        block = range(i_head + 1, i_end)
+        content = [i for i in block if is_content(lines[i])]
+        if not content:
+            raise ValueError(f"system '{system}' has an empty block in the config")
+        nl = "\r\n" if lines[i_head].endswith("\r\n") else "\n"
+
+        key = re.compile(r"""^\s*["']?misreg_guess["']?\s*:""")
+        i_key = next((i for i in content if key.match(lines[i])), None)
+        if i_key is None:  # no entry yet: append one after the block's last content line
+            new = " " * indent(lines[content[0]]) + f"misreg_guess: {line_body}{nl}"
+            lines.insert(content[-1] + 1, new)
+        else:  # replace the key line plus any (block-style / multi-line) children
+            key_indent = indent(lines[i_key])
+            i_last = i_key
+            for i in content:
+                if i > i_key and indent(lines[i]) > key_indent:
+                    i_last = i
+                elif i > i_key:
+                    break
+            lines[i_key:i_last + 1] = [" " * key_indent + f"misreg_guess: {line_body}{nl}"]
+        return "".join(lines)
+
     def _update_config_misreg(self, alpha, tn):
         """Persist the newly converged registration as this system's new
-        default initial guess. Edits just the one `misreg_guess:` line for
-        this system via a text patch (not a full yaml.safe_dump round-trip,
-        which would strip every comment in the file) -- keeps a timestamped
-        backup of the previous config alongside it."""
+        default initial guess, editing only its `misreg_guess` entry (a
+        plain yaml.safe_dump round-trip would strip every comment in the
+        file). A timestamped backup of the previous config is kept
+        alongside it, and the result is re-parsed and checked after
+        writing -- this system's values must be the new ones and every
+        other system's untouched -- otherwise the original file is
+        restored and an error raised, so a failed update is never silent."""
         backup_path = self.config_path.with_name(
             f"{self.config_path.stem}_backup_{tn}{self.config_path.suffix}")
         shutil.copy2(self.config_path, backup_path)
 
         rot, sx, sy, mag = (float(a) for a in alpha)
-        new_line = (f"    misreg_guess: {{rotation: {rot:.2f}, shift_x: {sx:.2f}, "
-                    f"shift_y: {sy:.2f}, magnification: {mag:.4f}}}")
-        pattern = re.compile(
-            rf"(^  {re.escape(self.system)}:\n(?:.*\n)*?)^    misreg_guess:.*$", re.MULTILINE)
-        text, n = pattern.subn(lambda m: m.group(1) + new_line, self.config_path.read_text(), count=1)
-        if n != 1:
-            raise RuntimeError(f"Could not find misreg_guess for {self.system} in {self.config_path}")
-        self.config_path.write_text(text)
+        body = (f"{{rotation: {rot:.2f}, shift_x: {sx:.2f}, "
+                f"shift_y: {sy:.2f}, magnification: {mag:.4f}}}")
+        expected = dict(zip(("rotation", "shift_x", "shift_y", "magnification"),
+                             (round(rot, 2), round(sx, 2), round(sy, 2), round(mag, 4))))
 
-        self.config["systems"][self.system]["misreg_guess"] = {
-            "rotation": rot, "shift_x": sx, "shift_y": sy, "magnification": mag}
+        original = self.config_path.read_text()
+        try:
+            patched = self._patch_misreg_text(original, self.system, body)
+            self.config_path.write_text(patched)
+
+            before, after = yaml.safe_load(original)["systems"], yaml.safe_load(patched)["systems"]
+            got = after[self.system]["misreg_guess"]
+            if any(abs(got[k] - v) > 1e-9 for k, v in expected.items()):
+                raise ValueError(f"re-read misreg_guess {got} != {expected}")
+            changed = [name for name in before if name != self.system and before[name] != after[name]]
+            if changed:
+                raise ValueError(f"also modified other systems: {changed}")
+        except Exception as exc:
+            self.config_path.write_text(original)
+            raise RuntimeError(f"Could not update misreg_guess for {self.system} in "
+                               f"{self.config_path} ({exc}); the config was left unchanged "
+                               f"(backup: {backup_path}).") from exc
+
+        self.config["systems"][self.system]["misreg_guess"] = expected
         self.misreg_guess = np.asarray(alpha, dtype=float)
 
     def _base_header(self) -> fits.Header:
@@ -744,13 +847,17 @@ class LBTSynIM:
         tol = reg_cfg["tolerance"]
         max_its = reg_cfg["max_iterations"]
         mode_idx = reg_cfg.get("slopes_mode_check", 30)
+
         measured = self._load_imat(measured_imat)
         refim = self._reshape_to_pupil_frame(measured, nmodes)
+
         alpha0 = self.misreg_guess.copy()
         alpha = alpha0.copy()
+
         # Reused (overwritten in place) across every iteration/finite-
         # difference call in this run, then deleted at the very end.
         tmp_tag = "tmp"
+
         err = tol + 1
         k = 0
         while err > tol and k < max_its:
@@ -763,26 +870,34 @@ class LBTSynIM:
             err = np.max(np.minimum(np.abs(dalpha) / np.abs(alpha_new), np.abs(alpha_new)))
             alpha = alpha_new
             k += 1
+
         if err > tol:
             self._cleanup_tmp_products(tmp_tag)
+            warnings.warn(f"update_registration({self.system}) did not converge after {k} iterations "
+                          f"(err={err:.3g} > tol={tol:.3g}); returning None, nothing was saved.")
             return None
+
         # Round now so the registered ifunc/pupilstop actually saved
         # below, the MisReg fits file, and the config update all agree.
         alpha = self._round_alpha(alpha)
+
         tn = _tn_now()
         ifunc_new, ifunc_inv_new, mask_new = self._register_ifunc_and_klinv(alpha)
         ifunc_file, ifunc_inv_file, pupilstop_file = self._save_ifunc_products(
             ifunc_new, ifunc_inv_new, mask_new, tn)
         meas_path = (measured_imat if isinstance(measured_imat, (str, Path))
                      else self._save_measured_imat(measured, tn))
+
         result = RegistrationResult(
             rotation=float(alpha[0]), shift_x=float(alpha[1]), shift_y=float(alpha[2]),
             magnification=float(alpha[3]), converged=True, iterations=k, tn=tn,
         )
+
         if save:
             self._save_misreg_fits(result, meas_path, reg_cfg, tn,
                                     ifunc_file, ifunc_inv_file, pupilstop_file, alpha0)
             self._update_config_misreg(alpha, tn)
+
         if show_plot and nmodes > mode_idx:
             # NOTE: both re-derived at the *converged* alpha (and the
             # initial alpha0) rather than the loop's last `synim`, which
@@ -794,6 +909,7 @@ class LBTSynIM:
                  ("Synthetic (after)", after)],
                 self.half_mask, f"{self.system} registration check -- TN {tn}",
                 f"MisRegCheck_{self.system}_{tn}.png")
+
         self._cleanup_tmp_products(tmp_tag)
         self.reg_tn = tn
         return result
@@ -847,6 +963,7 @@ class LBTSynIM:
         self._safe_unlink(self.output_dir / ("_overrides_pc.yml" if seeing is not None else "_overrides_dl.yml"))
 
         imat = fits.getdata(self._im_output_path(calib_tag))[:, :nmodes]
+
         hdr = self._base_header()
         hdr["TN"] = tn
         hdr["REGTN"] = reg_tn
@@ -859,9 +976,14 @@ class LBTSynIM:
             hdr["PCNPERF"] = pc_info["nmodes_perfect_correction"]
             hdr["PCVEC"] = pc_info["correction_vector_path"] or "NONE"
             hdr["PCNAVG"] = pc_info["n_screens_average"]
+
         out_path = self.output_dir / f"IntMat_{self.system}_{tn}.fits"
         fits.writeto(out_path, imat, header=hdr, overwrite=True)
         return imat
+
+    # kept as an alias since both names have been used for this method
+    # across earlier rounds of this spec.
+    simulate_interaction_matrix = compute_interaction_matrix
 
     def compute_reconstructor(self, imat: Union[np.ndarray, str, Path, None] = None,
                                Nmodes: Optional[int] = None,
@@ -952,7 +1074,8 @@ class LBTSynIM:
     def plot_registration_check(self, mode_idx: int,
                                  ref_imat: Union[np.ndarray, str, Path, None] = None,
                                  calib_imat: Union[np.ndarray, str, Path, None] = None,
-                                 ref_binning: int = 1, calib_binning: int = 1):
+                                 ref_binning: int = 1, calib_binning: int = 1,
+                                 ref_order: str = "hardware", calib_order: str = "specula"):
         """Visually compare one mode's slopes between a reference
         (typically measured) and a calibrated (simulated) interaction
         matrix -- a generalisation of `update_registration`'s before/after
@@ -976,18 +1099,24 @@ class LBTSynIM:
             they differ, the finer (larger-npix) one is binned down to
             match the coarser one via `toccd` before the difference is
             taken.
+        ref_order, calib_order : {"hardware", "specula"}
+            Slope ordering of the rows of each imat (see
+            `_imat_mode_to_2d`). Measured IMs are in the real system's
+            ("hardware") order, IMs from `compute_interaction_matrix` are
+            in the raw simulator ("specula") order -- hence the defaults.
+            Set them if you pass your own imats the other way round.
 
         Returns the matplotlib Figure (also saved as
         ``RegCheck_<system>_mode<mode_idx>.png``). The third panel is
         each map normalized by its own STD before differencing.
         """
         ref = self._resolve_ref_imat(ref_imat)
-        calib = self._resolve_calib_imat(calib_imat, calib_binning, nmodes=mode_idx + 1)
+        calib = self._resolve_calib_imat(calib_imat, calib_binning)
         ref_geom = self._pupil_geometry(ref_binning)
         calib_geom = self._pupil_geometry(calib_binning)
 
-        ref_2d = self._imat_mode_to_2d(ref, mode_idx, ref_geom)
-        calib_2d = self._imat_mode_to_2d(calib, mode_idx, calib_geom)
+        ref_2d = self._imat_mode_to_2d(ref, mode_idx, ref_geom, ref_order)
+        calib_2d = self._imat_mode_to_2d(calib, mode_idx, calib_geom, calib_order)
 
         # Reconcile different binnings: bin the finer side down to match
         # the coarser one (TODO: toccd's exact averaging/summing behavior
