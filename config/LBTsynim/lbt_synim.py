@@ -2,19 +2,16 @@
 lbt_synim.py
 ============
 
-Standalone utility class to simulate LBT (Large Binocular Telescope) AO
-interaction matrices and reconstructors for the 4 available systems:
+Simulate LBT (Large Binocular Telescope) AO interaction matrices and
+reconstructors for the 4 available systems:
 
     LUCIdx, LUCIsx, LBTIdx, LBTIsx
 
 built on top of the SPECULA end-to-end AO simulation package
-(https://github.com/Menessao/SPECULA/tree/xao).
-
-This generalises three scripts that used to be hand-tuned per system/side:
-
-    * synim_sprint.py       -> LBTSynIM.update_registration
-    * compute_lbt_recdx.py  -> LBTSynIM.compute_reconstructor
-    * compute_lbt_recsx.py  -> LBTSynIM.compute_reconstructor
+(https://github.com/Menessao/SPECULA/tree/xao). Low-level, stateless
+SPECULA-driving plumbing (geometric warps, saving calibration products,
+writing override yamls, running the `specula` CLI) lives in
+specula_helpers.py; this file holds the `LBTSynIM` class itself.
 
 Typical usage
 -------------
@@ -24,7 +21,14 @@ Typical usage
     misreg = lucidx.update_registration(meas_imat)
     imat   = lucidx.compute_interaction_matrix(rMod=2, seeing=1.0)
     rec    = lucidx.compute_reconstructor(imat, Nmodes=550)
+    fig    = lucidx.plot_registration_check(mode_idx=30)
 
+IMPORTANT -- no live SPECULA source in this environment: block/field
+names (DM, PyrSlopec, CCD, ModulatedPyramid, the "*_override" yaml merge
+convention, toccd's signature) are ported from the reference
+scripts/configs provided during development, not verified against
+SPECULA's current source. Sanity-check before relying on this in
+production, especially the binning overrides in `_base_overrides`.
 """
 
 from __future__ import annotations
@@ -32,18 +36,15 @@ from __future__ import annotations
 import datetime
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
-import os.path as op
 
 import numpy as np
 import yaml
 from astropy.io import fits
-from skimage.transform import AffineTransform, warp
-import matplotlib.pyplot as plt
 from scipy.io import readsav
+import matplotlib.pyplot as plt
 
 import specula
 specula.init(0)
@@ -52,18 +53,13 @@ from specula.data_objects.m2c import M2C
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.ifunc_inv import IFuncInv
 
-from specula.data_objects.pupilstop import Pupilstop
-from specula.data_objects.simul_params import SimulParams
-
-# from specula.lib.toccd import toccd
-
+from specula_helpers import (
+    warp_image, warp_mask, save_pupil, save_perfect_correction_vector,
+    write_overrides_yaml, run_specula, toccd,
+)
 
 VALID_SYSTEMS = ("LUCIdx", "LUCIsx", "LBTIdx", "LBTIsx")
 
-
-# =============================================================================
-# small module-level helpers
-# =============================================================================
 
 def _tn_now() -> str:
     """Tracking-number timestamp, e.g. '20260927_153000'."""
@@ -72,68 +68,6 @@ def _tn_now() -> str:
 
 def _side_for(system: str) -> str:
     return "dx" if system.endswith("dx") else "sx"
-
-
-def save_pupil(pupil_mask, fname:str, Npix:int, D:float):
-    simul_params = SimulParams(pixel_pupil=Npix,pixel_pitch=D/Npix)
-    pupilstop = Pupilstop(simul_params=simul_params, input_mask=pupil_mask)
-    pupilstop.save(fname+'.fits')
-
-
-def save_perfect_correction_vector(fname:str, dest_dir:str, full_path:str='', Nmodes: int = 672, Ncorrmodes: int = None):
-    """
-    Generates a correction vector with logarithmic scaling to maintain 
-    constant power-law slopes in residual turbulence PSDs.
-    """
-    if full_path == '':
-        correction = np.zeros(Nmodes)
-        correction[:Ncorrmodes] = np.ones(Ncorrmodes)
-    else:
-        correction = fits.getdata(full_path)
-    filepath = op.join(dest_dir,fname)
-    hdr = fits.Header()
-    hdr['VERSION'] = 1
-    hdr['OBJ_TYPE'] = 'BaseValue'
-    fits.writeto(filepath+'.fits', correction, hdr, overwrite=True)
-    print(f'Saved {filepath}')
-    return fname
-    
-
-def warp_image(ifunc, pupmask, flip: bool = False,
-               shiftX: float = 0.0, shiftY: float = 0.0,
-               rot: float = 0.0, mag: float = 1.0, oldpup=None):
-    """Warp a set of influence-function-like columns onto a new pupil mask.
-
-    Direct port of ``warp_image`` from synim_sprint.py, with the shear
-    terms removed.
-    """
-    pup_mask = pupmask.astype(bool)
-    ifunc_new = np.zeros([int(np.sum(pup_mask)), ifunc.shape[1]])
-    img = np.zeros(oldpup.shape)
-    center_y, center_x = img.shape[0] / 2.0, img.shape[1] / 2.0
-    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
-    rot_and_scale = AffineTransform(rotation=rot * np.pi / 180, scale=mag)
-    shift_to_center = AffineTransform(translation=(center_x + shiftX, center_y + shiftY))
-    trf = shift_to_origin + rot_and_scale + shift_to_center
-    for j in range(ifunc.shape[1]):
-        img[oldpup.astype(bool)] = ifunc[:, j]
-        if flip:
-            img = img[::-1, :]
-        warp_img = warp(img, inverse_map=trf.inverse)
-        ifunc_new[:, j] = warp_img[pup_mask]
-    return ifunc_new
-
-
-def warp_mask(pup, shiftX: float = 0.0, shiftY: float = 0.0,
-              mag: float = 1.0, rot: float = 0.0):
-    """Warp a pupil mask. Direct port of ``warp_mask`` (shear removed)."""
-    center_y, center_x = pup.shape[0] / 2.0, pup.shape[1] / 2.0
-    shift_to_origin = AffineTransform(translation=(-center_x, -center_y))
-    rot_and_scale = AffineTransform(rotation=rot * np.pi / 180, scale=mag)
-    shift_to_center = AffineTransform(translation=(center_x + shiftX, center_y + shiftY))
-    trf = shift_to_origin + rot_and_scale + shift_to_center
-    warp_pup = warp(pup.astype(float), inverse_map=trf.inverse) > 0.9
-    return warp_pup.astype(float)
 
 
 @dataclass
@@ -147,9 +81,6 @@ class RegistrationResult:
     iterations: int
     tn: str
 
-# =============================================================================
-# main class
-# =============================================================================
 
 class LBTSynIM:
     """Simulate LBT AO interaction matrices / reconstructors for one system.
@@ -184,6 +115,7 @@ class LBTSynIM:
 
         self._resolve_paths()
         self._load_calib_data()
+        self._load_latest_registration()
 
     # ------------------------------------------------------------------
     # configuration / path handling
@@ -198,6 +130,7 @@ class LBTSynIM:
     def _resolve_paths(self):
         p = self.config["paths"]
         self.root_dir = Path(self._fmt(p["root_dir_template"]))
+
         self.ifunc_path = self.root_dir / self._fmt(p["ifunc_template"])
         self.ifunc_inv_path = self.root_dir / self._fmt(p["ifunc_inv_template"])
         self.m2c_path = self.root_dir / self._fmt(p["m2c_template"])
@@ -206,13 +139,25 @@ class LBTSynIM:
         self.pupdata_path = self.root_dir / self._fmt(p["pupdata_template"])
         self.pupids_path = self.root_dir / self._fmt(p["pupids_template"])
 
-        self.data_dir = self.root_dir / p.get("data_dir", "data")
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = self.root_dir / p.get("output_dir", ".output")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.sav_dir = Path(self._fmt(p["sav_dir_template"]))
         self.sav_file = self.sav_dir / p["sav_file_template"]
-        
-        self.telescope_diameter = p.get("telescope_diameter", 8.222)
+
+        optics = self.config["optics"]
+        self.telescope_diameter = optics["telescope_diameter"]
+        self.base_pup_diam = optics["pup_diam"]
+        self.base_pup_dist = optics["pup_dist"]
+        self.base_npix = optics["npix"]
+
+    def _binned(self, path: Path, binning: int) -> Path:
+        """`path` unchanged for binning=1, or with "_{binning}x{binning}"
+        inserted before the extension for binning>1 -- the on-disk naming
+        convention for pupdata/pupids/pupil_mask variants."""
+        if binning == 1:
+            return path
+        return path.with_name(f"{path.stem}_{binning}x{binning}{path.suffix}")
 
     # ------------------------------------------------------------------
     # calibration-data loading
@@ -232,121 +177,85 @@ class LBTSynIM:
             )
 
         self.pixel_pitch = self.telescope_diameter / self.pixel_pupil
+        self.default_nmodes = int(self.m2c.shape[0])
 
-        self.pupil_mask = fits.getdata(self.pupil_mask_path).astype(bool)
-        pupdata_hdu = fits.open(self.pupdata_path)
-        self.pup_ids = pupdata_hdu[1].data              # columns 0/1 -> raster positions
-        self.pupids = fits.getdata(self.pupids_path)     # hardware slope-order indices
-
-        ic_cfg = self.config["interaction_matrix"]
-        self.npix = ic_cfg["npix"]
-        self.nslopes = ic_cfg["nslopes"]
-        self.half_mask = self.pupil_mask[: self.npix // 2, : self.npix].astype(bool)
+        geom = self._pupil_geometry(1)
+        self.npix, self.nslopes = geom["npix"], geom["nslopes"]
+        self.pup_ids, self.pupids, self.half_mask = geom["pup_ids"], geom["pupids"], geom["half_mask"]
 
     def _build_calib_data_from_sav(self):
-        """
-          1. read raw ifunc / ifunc_inv / m2c / pupilstop arrays from
-             ``self.sav_file``
-          2. save them at self.ifunc_path / self.ifunc_inv_path /
-             self.m2c_path / self.pupilstop_path (ifunc & ifunc_inv via
-             specula's IFunc/IFuncInv .save(), pupilstop via save_pupil,
-             m2c as a plain FITS array) so future calls hit the fast path
-             above
-          3. return the five arrays (ifunc, ifunc_inv, m2c, pupilstop, pixel_pupil)
-        """
+        """Read raw ifunc_inv/m2c/pupilstop out of `self.sav_file` and
+        cache them at self.ifunc_inv_path/self.m2c_path/self.pupilstop_path
+        (SPECULA's own IFuncInv/M2C/Pupilstop formats) so future __init__
+        calls hit the fast path above. `self.ifunc` itself is always read
+        directly from self.ifunc_path (not rebuilt from .sav)."""
         data = readsav(self.sav_file)
-        pixel_pupil = data['dpix']
-        mask = np.zeros(pixel_pupil**2)
-        mask[data['idx_mask']] = 1
-        pupil_mask = mask.reshape([pixel_pupil,pixel_pupil])
+        pixel_pupil = data["dpix"]
+        mask = np.zeros(pixel_pupil ** 2)
+        mask[data["idx_mask"]] = 1
+        pupil_mask = mask.reshape([pixel_pupil, pixel_pupil])
+        save_pupil(pupil_mask, str(self.pupilstop_path.with_suffix("")),
+                   Npix=pixel_pupil, D=self.telescope_diameter)
 
-        save_pupil(pupil_mask,self.pupilstop_path,Npix=pixel_pupil,D=self.telescope_diameter)
+        m2c_full = data["klm2c"]
+        act_ids = np.sum(abs(m2c_full), axis=0) > 0
+        mode_ids = np.sum(abs(m2c_full), axis=1) > 0
+        m2c = m2c_full[:, act_ids][mode_ids, :]
+        M2C(m2c=m2c).save(str(self.m2c_path))
 
-        m2c_full = data['klm2c']
-        act_ids = np.sum(abs(m2c_full),axis=0)>0
-        mode_ids = np.sum(abs(m2c_full),axis=1)>0
-        m2c = m2c_full[:,act_ids]
-        m2c = m2c[mode_ids,:]    
-        m2c_obj = M2C(m2c=m2c)
-        m2c_obj.save(self.m2c_path)
-
-        kl = data['klmatrix']
-        ifunc_inv = np.linalg.pinv(kl)
-        ifunc_inv_obj = IFuncInv(ifunc_inv=ifunc_inv,mask=pupil_mask)
-        ifunc_inv_obj.save(self.ifunc_inv_path)
+        ifunc_inv = np.linalg.pinv(data["klmatrix"])
+        IFuncInv(ifunc_inv=ifunc_inv, mask=pupil_mask).save(str(self.ifunc_inv_path))
 
         return ifunc_inv, m2c, pupil_mask, pixel_pupil
 
     # ------------------------------------------------------------------
-    # binning geometry (used only by compute_interaction_matrix /
-    # compute_reconstructor -- registration always uses the bin-1 geometry
-    # loaded above in _load_calib_data)
+    # binning geometry (used by compute_interaction_matrix /
+    # compute_reconstructor / plot_registration_check -- registration
+    # itself always uses the bin-1 geometry loaded above)
     # ------------------------------------------------------------------
-    def _binning_config(self, binning: int) -> dict:
-        """Validate and return the raw config entry for a WFS binning
-        factor > 1. Raises a clear error if that binning hasn't been
-        filled in yet.
+    def _ensure_pupil_mask(self, binning: int, pup_ids, npix: int) -> np.ndarray:
+        """Load this binning's half-pupil mask from disk, or build it from
+        `pup_ids` (every raster position it references, set True, keeping
+        the top `npix//2` rows -- same convention as the nominal mask) and
+        cache it at the standard (binned) path if it doesn't exist yet."""
+        path = self._binned(self.pupil_mask_path, binning)
+        if path.exists():
+            full_mask = fits.getdata(path).astype(bool)
+        else:
+            full_mask = np.zeros(npix * npix, dtype=bool)
+            np.put(full_mask, pup_ids[:, 0], True)
+            np.put(full_mask, pup_ids[:, 1], True)
+            full_mask = full_mask.reshape(npix, npix)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fits.writeto(path, full_mask.astype(np.uint8), overwrite=True)
+        return full_mask[: npix // 2, :npix]
 
-        TODO: only binning=1 (the default paths/interaction_matrix
-        config) is real. Fill in config['binning']['configs'][2|3|4] with
-        real CCD sizes and pupil_mask/pupdata/pupids filenames once known.
-        """
-        configs = self.config.get("binning", {}).get("configs", {})
-        cfg = configs.get(binning, configs.get(str(binning)))
-        if cfg is None:
-            raise ValueError(
-                f"No binning={binning} entry under config['binning']['configs'] "
-                f"in {self.config_path}."
-            )
-        required = ("ccd_size", "npix", "nslopes", "total_slopes",
-                    "pupil_mask_template", "pupdata_template", "pupids_template")
-        missing = [k for k in required if cfg.get(k) is None]
-        if missing:
-            raise ValueError(
-                f"binning={binning} is missing {missing} under "
-                f"config['binning']['configs'][{binning}] in {self.config_path} "
-                f"-- these are placeholders and must be filled in before this "
-                f"binning can be used."
-            )
-        return cfg
-
-    def _binning_tags(self, binning: int) -> dict:
-        """Scalar/tag info needed to run the SPECULA simulation at a given
-        binning (doesn't require loading any arrays)."""
-        if binning == 1:
-            return {
-                "ccd_size": [self.npix, self.npix],
-                "npix": self.npix,
-                "nslopes": self.nslopes,
-                "total_slopes": self.config["reconstructor"]["total_slopes"],
-                "pupdata_tag": self.pupdata_path.stem,
-                "rec_header_template": self.config["reconstructor"]["header_template"],
-            }
-        cfg = self._binning_config(binning)
+    def _pupil_geometry(self, binning: int) -> dict:
+        """Resolve every binning-dependent quantity needed to run a
+        push-pull calibration and reshape its output: the pyramid/CCD
+        sizes to override, the pupdata SPECULA tag, and the loaded
+        pup_ids/pupids/half_mask arrays. binning=1 reuses the standard
+        (un-suffixed) files; binning>1 uses the same files with
+        "_{binning}x{binning}" appended (see `_binned`) -- pupdata/pupids
+        must already exist for a given binning (real SPECULA calibration
+        products), only the pupil_mask is built on-demand if missing."""
+        npix = self.base_npix // binning
+        pupdata_path = self._binned(self.pupdata_path, binning)
+        pupids_path = self._binned(self.pupids_path, binning)
+        pup_ids = fits.open(pupdata_path)[1].data
+        pupids = fits.getdata(pupids_path)
         return {
-            "ccd_size": cfg["ccd_size"],
-            "npix": cfg["npix"],
-            "nslopes": cfg["nslopes"],
-            "total_slopes": cfg["total_slopes"],
-            "pupdata_tag": Path(self._fmt(cfg["pupdata_template"])).stem,
-            "rec_header_template": cfg.get("rec_header_template")
-                                    or self.config["reconstructor"]["header_template"],
+            "binning": binning,
+            "npix": npix,
+            "nslopes": len(pupids),
+            "ccd_size": [npix, npix],
+            "pup_diam": self.base_pup_diam / binning,
+            "pup_dist": self.base_pup_dist / binning,
+            "pupdata_tag": pupdata_path.stem,
+            "pup_ids": pup_ids,
+            "pupids": pupids,
+            "half_mask": self._ensure_pupil_mask(binning, pup_ids, npix),
         }
-
-    def _binning_arrays(self, binning: int) -> dict:
-        """Pupil-mapping arrays needed by compute_reconstructor at a given
-        binning (loads fits files; bin1 reuses what's already in memory)."""
-        if binning == 1:
-            return {"pup_ids": self.pup_ids, "pupids": self.pupids,
-                    "half_mask": self.half_mask, "npix": self.npix}
-        cfg = self._binning_config(binning)
-        npix = cfg["npix"]
-        pupil_mask = fits.getdata(self.root_dir / self._fmt(cfg["pupil_mask_template"])).astype(bool)
-        pupdata_hdu = fits.open(self.root_dir / self._fmt(cfg["pupdata_template"]))
-        pup_ids = pupdata_hdu[1].data
-        pupids = fits.getdata(self.root_dir / self._fmt(cfg["pupids_template"]))
-        half_mask = pupil_mask[: npix // 2, : npix].astype(bool)
-        return {"pup_ids": pup_ids, "pupids": pupids, "half_mask": half_mask, "npix": npix}
 
     # ------------------------------------------------------------------
     # registration warping
@@ -358,9 +267,6 @@ class LBTSynIM:
         ifunc_new = warp_image(self.ifunc, warped_mask, flip=self.flip,
                                 shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                 oldpup=self.pupilstop)
-        # NOTE: simplified relative to synim_sprint.py's save_ifunc_pars,
-        # which applied a warp_image(...).T followed by another .T when
-        # building the IFuncInv object -- the two transposes cancel out.
         ifunc_inv_new = warp_image(self.ifunc_inv.T, warped_mask, flip=self.flip,
                                     shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                     oldpup=self.pupilstop)
@@ -368,9 +274,8 @@ class LBTSynIM:
 
     def _save_ifunc_products(self, ifunc_new, ifunc_inv_new, mask_new, tag):
         """Save registered ifunc / inverse-KL / pupilstop as their own
-        SPECULA-format files, tagged with `tag`, so `compute_*` calls can
-        find "the latest registered ifunc for this system". `tag` is
-        either a real TN (permanent product) or a reused temp tag (see
+        SPECULA-format files, tagged with `tag` -- either a real TN
+        (permanent product) or a reused temp tag (see
         `_cleanup_tmp_products`)."""
         ifunc_dir = self.ifunc_path.parent
         pupilstop_dir = self.pupilstop_path.parent
@@ -381,183 +286,178 @@ class LBTSynIM:
 
         IFunc(ifunc=ifunc_new.T, mask=mask_new).save(str(ifunc_file), overwrite=True)
         IFuncInv(ifunc_inv=ifunc_inv_new, mask=mask_new).save(str(ifunc_inv_file), overwrite=True)
-        save_pupil(mask_new, str(pupilstop_dir) + "/" + pupilstop_fname,
+        save_pupil(mask_new, str(pupilstop_dir / pupilstop_fname),
                    Npix=self.pixel_pupil, D=self.telescope_diameter)
 
         return ifunc_file, ifunc_inv_file, pupilstop_dir / f"{pupilstop_fname}.fits"
 
+    @staticmethod
+    def _safe_unlink(path: Union[str, Path]):
+        """Best-effort delete -- never raises (used for temp/override files
+        that are reused/overwritten in place and only need cleaning up
+        once a run is done)."""
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _cleanup_tmp_products(self, tag: str):
-        """Best-effort removal of the temporary ifunc/ifunc_inv/pupilstop/im
-        files reused across one update_registration() run."""
-        candidates = [
-            self.ifunc_path.parent / f"IFunc_{self.system}_{tag}.fits",
-            self.ifunc_path.parent / f"IFuncInv_{self.system}_{tag}.fits",
-            self.pupilstop_path.parent / f"Pupilstop_{self.system}_{tag}.fits",
-            self._im_output_path(f"tmp_synim_{tag}"),
-        ]
-        for f in candidates:
-            try:
-                f.unlink(missing_ok=True)
-            except OSError:
-                pass
+        """Remove the temporary ifunc/ifunc_inv/pupilstop/im/override files
+        reused across one update_registration() run (all overwritten in
+        place during the run -- see `_synthetic_im` -- so there's exactly
+        one of each to remove)."""
+        for f in (self.ifunc_path.parent / f"IFunc_{self.system}_{tag}.fits",
+                  self.ifunc_path.parent / f"IFuncInv_{self.system}_{tag}.fits",
+                  self.pupilstop_path.parent / f"Pupilstop_{self.system}_{tag}.fits",
+                  self._im_output_path(f"tmp_synim_{tag}"),
+                  self.output_dir / "_overrides_dl.yml"):
+            self._safe_unlink(f)
 
     # ------------------------------------------------------------------
-    # SPECULA simulation runner
+    # running SPECULA (one merged function for both DL and PC)
     # ------------------------------------------------------------------
-    def _write_overrides_yaml(self, overrides: dict, path: Path):
-        """Write a SPECULA "*_override" yaml file from a plain nested dict."""
-        payload = {f"{k}_override": v for k, v in overrides.items()}
-        with open(str(path) + ".yml", "w") as f:
-            yaml.safe_dump(payload, f, sort_keys=False, default_flow_style=False)
-
     def _im_output_path(self, tag: str) -> Path:
         return self.root_dir / "im" / f"{tag}.fits"
 
-    def _run_specula_simulation(self, ifunc_tag: str, pupilstop_tag: str,
-                                 nmodes: int, im_tag: str, mod_amp: Optional[float] = None,
-                                 binning_tags: Optional[dict] = None):
-        """ Diffraction-limited push-pull calibration. """
-        m2c_tag = self.m2c_path.stem
+    def _base_overrides(self, geom: dict, ifunc_tag: str, nmodes: int, im_tag: str,
+                         pupilstop_tag: Optional[str] = None,
+                         mod_amp: Optional[float] = None) -> dict:
+        """Override blocks common to every push-pull run -- including the
+        binning-derived pyramid/CCD/pupdata overrides, always applied
+        (binning=1 just reproduces the nominal values, so no special-casing
+        is needed)."""
         overrides = {
             "pyr_im_calibrator": {"im_tag": im_tag, "nmodes": nmodes, "overwrite": True},
             "pushpull": {"nmodes": nmodes},
-            "dm": {"ifunc_object": ifunc_tag, "m2c_object": m2c_tag, "nmodes": nmodes},
-            "pupilstop": {"tag": pupilstop_tag},
+            "dm": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem, "nmodes": nmodes},
             "main": {"pixel_pupil": self.pixel_pupil, "pixel_pitch": self.pixel_pitch,
-                     "root_dir": str(self.root_dir), "total_time": nmodes*0.001*2},
+                     "root_dir": str(self.root_dir), "total_time": nmodes * 0.002},
+            "pyr": {"pup_diam": geom["pup_diam"], "pup_dist": geom["pup_dist"],
+                    "output_resolution": geom["npix"]},
+            "ocam": {"size": geom["ccd_size"]},
+            "pyr_slopes": {"pupdata_object": geom["pupdata_tag"]},
         }
-        pyr_override = {}
+        if pupilstop_tag is not None:
+            overrides["pupilstop"] = {"tag": pupilstop_tag}
         if mod_amp is not None:
-            pyr_override["mod_amp"] = mod_amp
-        if binning_tags is not None:
-            pyr_override["output_resolution"] = binning_tags["ccd_size"][0]
-            overrides["ocam"] = {"size": binning_tags["ccd_size"]}
-            overrides["pyr_slopes"] = {"pupdata_object": binning_tags["pupdata_tag"]}
-        if pyr_override:
-            overrides["pyr"] = pyr_override
+            overrides["pyr"]["mod_amp"] = mod_amp
+        return overrides
 
-        override_path = self.data_dir / f"_overrides_{_tn_now()}"
-        self._write_overrides_yaml(overrides, override_path)
-        main_yaml = self.config["registration"]["main_simul_yaml"]
-        subprocess.run(["specula", str(main_yaml), str(override_path) + ".yml"], check=True)
+    def _run_specula_simulation(self, ifunc_tag: str, pupilstop_tag: str, nmodes: int, im_tag: str,
+                                 mod_amp: Optional[float] = None, binning: int = 1,
+                                 seeing: Optional[float] = None,
+                                 ifunc_inv_tag: Optional[str] = None,
+                                 pc_cfg: Optional[dict] = None) -> Optional[dict]:
+        """Run one push-pull IM calibration through the `specula` CLI.
 
-    def _run_pc_specula_simulation(self, ifunc_tag: str, ifunc_inv_tag: str, pupilstop_tag: str,
-                                    nmodes: int, im_tag: str, mod_amp: float,
-                                    seeing: float, pc_cfg: dict,
-                                    binning_tags: Optional[dict] = None):
-        """Partial-correction push-pull calibration, adapted from
-        pc_calib_yml.txt / config/pc_blocks.yml.
+        Diffraction-limited when `seeing` is None (the default): a single
+        run, returns None. Partial-correction when `seeing` is given
+        (`ifunc_inv_tag`/`pc_cfg` then required): builds a correction
+        vector (perfect correction by default -- see
+        `save_perfect_correction_vector`), appends
+        `config['interaction_matrix']['pc_extra_blocks_yaml']`, averages
+        `pc_cfg['n_screens_average']` independent atmosphere realizations,
+        and returns a dict of the PC parameters used.
 
-        'Perfect correction' (empty correction_vector_path) feeds the
-        analysed atmospheric modes directly to the DM (no attenuation);
-        a non-empty path instead scales them by a per-mode correction
-        vector before commanding the DM.
+        Writes its override yaml to a fixed, reused filename
+        (`_overrides_dl.yml` / `_overrides_pc.yml`) rather than one per
+        call -- the caller deletes it once the whole operation (a full
+        `update_registration` run, or one `compute_interaction_matrix`
+        call) is done.
         """
+        geom = self._pupil_geometry(binning)
+        overrides = self._base_overrides(geom, ifunc_tag, nmodes, im_tag, pupilstop_tag, mod_amp)
+        main_yaml = self.config["registration"]["main_simul_yaml"]
+
+        if seeing is None:
+            override_path = self.output_dir / "_overrides_dl"
+            write_overrides_yaml(overrides, override_path)
+            run_specula(main_yaml, override_path)
+            return None
+
         nmodes_pc = pc_cfg["nmodes_perfect_correction"]
-        corr_vec_path = pc_cfg.get("correction_vector_path", "") or ""
+        corr_vec_path = pc_cfg.get("correction_vector_path") or ""
         n_avg = pc_cfg.get("n_screens_average", 1)
-        corr_vec_name = f'corr_vec_{_tn_now()}'
-        save_perfect_correction_vector(fname=corr_vec_name,dest_dir=self.data_dir,full_path=corr_vec_path,Nmodes=nmodes,Ncorrmodes=nmodes_pc)
+        corr_vec_name = f"corr_vec_{self.system}"
+        save_perfect_correction_vector(fname=corr_vec_name, dest_dir=str(self.output_dir),
+                                        full_path=corr_vec_path, Nmodes=nmodes, Ncorrmodes=nmodes_pc)
 
         extra_blocks_yaml = self.config["interaction_matrix"].get("pc_extra_blocks_yaml")
-        main_yaml = self.config["registration"]["main_simul_yaml"]
-        m2c_tag = self.m2c_path.stem
+        override_path = self.output_dir / "_overrides_pc"
+        overrides["pyr"]["inputs"] = {"in_ef": "ef_mode.out_ef"}  # see atmo + DM + pushpull combiner
+        overrides.update({
+            "seeing_random": {"constant": seeing},
+            "scale_random": {"constant_mul_data": corr_vec_name},
+            "modal_analysis_random": {"ifunc_inv_object": ifunc_inv_tag, "nmodes": nmodes_pc},
+            "dm_random": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem, "nmodes": nmodes_pc},
+        })
 
         accum = None
         for i in range(n_avg):
-            overrides = {
-                "pyr_im_calibrator": {"im_tag": im_tag, "nmodes": nmodes, "overwrite": True},
-                "pushpull": {"nmodes": nmodes},
-                "pyr": {"mod_amp": mod_amp},
-                "dm": {"ifunc_object": ifunc_tag, "m2c_object": m2c_tag, "nmodes": nmodes},
-                "pupilstop": {"tag": pupilstop_tag},
-                "main": {"pixel_pupil": self.pixel_pupil, "pixel_pitch": self.pixel_pitch,
-                         "root_dir": str(self.root_dir), "total_time": nmodes*0.001*2},
-                "seeing_random": {"constant": seeing},
-                "atmo_random": {"update_interval": int(nmodes*2), "seed": int(i+1)},
-                "scale_random": {"constant_mul_data": str(corr_vec_name)},
-                "modal_analysis_random": {"ifunc_inv_object": ifunc_inv_tag, "nmodes": nmodes_pc},
-                "dm_random": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem,
-                               "nmodes": nmodes_pc},
-            }
-            overrides['pyr']['inputs'] = {"in_ef": 'ef_mode.out_ef'}
-            if binning_tags is not None:
-                overrides["pyr"]["output_resolution"] = binning_tags["ccd_size"][0]
-                overrides["ocam"] = {"size": binning_tags["ccd_size"]}
-                overrides["pyr_slopes"] = {"pupdata_object": binning_tags["pupdata_tag"]}
-
-            override_path = self.data_dir / f"_overrides_pc_{_tn_now()}_{i}"
-            self._write_overrides_yaml(overrides, override_path)
-
-            cmd = ["specula", str(main_yaml)]
-            if extra_blocks_yaml:
-                cmd.append(str(extra_blocks_yaml))
-            cmd.append(str(override_path) + ".yml")
-            subprocess.run(cmd, check=True)
+            overrides["atmo_random"] = {"update_interval": int(nmodes * 2), "seed": i + 1}
+            write_overrides_yaml(overrides, override_path)
+            run_specula(main_yaml, override_path, extra_blocks_yaml)
 
             run_im = fits.getdata(self._im_output_path(im_tag))
-            accum = run_im.copy() if accum is None else accum + run_im
+            accum = run_im if accum is None else accum + run_im
 
-        averaged = accum / n_avg
-        fits.writeto(self._im_output_path(im_tag), averaged, overwrite=True)
-
-        return {
-            "nmodes_perfect_correction": nmodes_pc,
-            "correction_vector_path": corr_vec_path,
-            "n_screens_average": n_avg,
-        }
+        fits.writeto(self._im_output_path(im_tag), accum / n_avg, overwrite=True)
+        return {"nmodes_perfect_correction": nmodes_pc, "correction_vector_path": corr_vec_path,
+                "n_screens_average": n_avg}
 
     # ------------------------------------------------------------------
-    # slope re-ordering (registration-fit space only, see README)
+    # slope re-ordering
     # ------------------------------------------------------------------
+    @staticmethod
+    def _raster(fimg: np.ndarray, pup_ids, first_half, second_half, npix: int) -> np.ndarray:
+        """Place the two pupil-image halves at their raster positions
+        (`pup_ids` columns 0/1) and reshape to a 2D `npix x npix` image.
+        `fimg` is a scratch buffer reused by the caller across modes."""
+        np.put(fimg, pup_ids[:, 0], first_half)
+        np.put(fimg, pup_ids[:, 1], second_half)
+        return fimg.reshape(npix, npix)
+
     def _reshape_to_pupil_frame(self, im: np.ndarray, nmodes: int) -> np.ndarray:
         """Re-order a raw (hardware-order) IM into the 'true pupil' slope
-        ordering used for the registration sensitivity-matrix fit. Port of
-        `get_refim` in synim_sprint.py."""
+        ordering used for the registration sensitivity-matrix fit."""
         im = im[: self.nslopes, :nmodes]
         out = np.zeros([int(self.half_mask.sum()), nmodes])
         for j in range(nmodes):
             img = np.zeros(self.half_mask.size)
             img[self.half_mask.flatten()] = im[self.pupids, j]
-            img = img.reshape(self.half_mask.shape)
-            out[:, j] = img[self.half_mask]
+            out[:, j] = img.reshape(self.half_mask.shape)[self.half_mask]
         return out
 
     def _synthetic_im(self, alpha, nmodes: int, tmp_tag: Optional[str] = None) -> np.ndarray:
-        """
-        Register ifunc/pupil by alpha, run one push-pull SPECULA
-        calibration, and return the result reshaped into the same 'true
-        pupil' ordering as `_reshape_to_pupil_frame`. Port of `get_synim`
-        in synim_sprint.py.
+        """Register ifunc/pupil by alpha, run one push-pull SPECULA
+        calibration (always at the bin-1 geometry), and return the result
+        reshaped into the same 'true pupil' ordering as
+        `_reshape_to_pupil_frame`.
 
         `tmp_tag`, when given, is reused across every call within one
-        `update_registration()` run so the (many) intermediate ifunc /
-        pupilstop / im files it produces overwrite each other in place
-        rather than littering disk with one timestamped set per iteration
-        per finite-difference parameter (they're cleaned up at the end of
-        `update_registration` regardless).
-        """
+        `update_registration()` run so the intermediate files it produces
+        overwrite each other in place instead of littering disk."""
         ifunc_new, ifunc_inv_new, mask_new = self._register_ifunc_and_klinv(alpha)
-        tag = tmp_tag or f"tmp"#_{_tn_now()}"
+        tag = tmp_tag or "tmp"
         ifunc_file, _, pupilstop_file = self._save_ifunc_products(
             ifunc_new, ifunc_inv_new, mask_new, tag)
         im_tag = f"tmp_synim_{tag}"
-        self._run_specula_simulation(ifunc_tag=ifunc_file.stem,
-                                      pupilstop_tag=pupilstop_file.stem,
+        self._run_specula_simulation(ifunc_tag=ifunc_file.stem, pupilstop_tag=pupilstop_file.stem,
                                       nmodes=nmodes, im_tag=im_tag)
         raw = fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
-        aux = raw.copy()
+
+        # NOTE: xsign/ysign generalise what was once a fixed (+1, -1) flip
+        # (unconfirmed for LUCIdx/LUCIsx -- see the config).
         half = self.nslopes // 2
+        aux = raw.copy()
         aux[:half, :] = raw[half:, :] * self.xsign
         aux[half:, :] = raw[:half, :] * self.ysign
+
         out = np.zeros([int(self.half_mask.sum()), nmodes])
         fimg = np.zeros(self.npix ** 2)
         for j in range(nmodes):
-            np.put(fimg, self.pup_ids[:, 0], aux[:half, j])
-            np.put(fimg, self.pup_ids[:, 1], aux[half:, j])
-            f2d = fimg.reshape([self.npix, self.npix])
-            fcut = f2d[: self.npix // 2, : self.npix]
-            out[:, j] = fcut[self.half_mask]
+            f2d = self._raster(fimg, self.pup_ids, aux[:half, j], aux[half:, j], self.npix)
+            out[:, j] = f2d[: self.npix // 2, : self.npix][self.half_mask]
         return out
 
     def _sensitivity_matrix(self, alpha, eps, nmodes, tmp_tag):
@@ -572,28 +472,37 @@ class LBTSynIM:
             sens.append(((push - pull) / (2 * e)).flatten())
         return np.array(sens).T
 
-    def _mode_slope_map(self, slopes_1d: np.ndarray) -> np.ndarray:
-        """Reconstruct a 1D 'true pupil frame' slope vector into a 2D image
-        for display. Port of `show_im_slopes_idx` in the plotting notebook."""
-        img = np.zeros(self.half_mask.size)
-        img[self.half_mask.flatten()] = slopes_1d
-        return img.reshape(self.half_mask.shape)
+    def _imat_mode_to_2d(self, imat: np.ndarray, mode_idx: int, geom: dict) -> np.ndarray:
+        """Full `npix x npix` raster of one imat column (sign-corrected,
+        placed via this binning's pup_ids) -- shared by
+        `plot_registration_check`."""
+        half = geom["nslopes"] // 2
+        col = imat[: geom["nslopes"], mode_idx]
+        fimg = np.zeros(geom["npix"] ** 2)
+        return self._raster(fimg, geom["pup_ids"], col[half:] * self.xsign, col[:half] * self.ysign,
+                             geom["npix"])
 
-    def _plot_mode_slopes_check(self, refim_mode, before_mode, after_mode, tn, mode_idx):
-        fig, axes = plt.subplots(1, 3, figsize=(13, 4))
-        panels = [("Measured", refim_mode),
-                  ("Synthetic (before)", before_mode),
-                  ("Synthetic (after)", after_mode)]
-        for ax, (title, data) in zip(axes, panels):
-            img = self._mode_slope_map(data)
+    # ------------------------------------------------------------------
+    # plotting
+    # ------------------------------------------------------------------
+    def _plot_slope_panels(self, panels, half_mask, title: str, out_name: Optional[str] = None):
+        """Render a row of masked 2D slope-map panels, each built from a
+        1D 'true pupil frame' vector via `half_mask`. Shared by
+        `update_registration`'s before/after check and
+        `plot_registration_check`."""
+        fig, axes = plt.subplots(1, len(panels), figsize=(4.3 * len(panels), 4))
+        for ax, (panel_title, data) in zip(np.atleast_1d(axes), panels):
+            img = np.zeros(half_mask.size)
+            img[half_mask.flatten()] = data
+            img = img.reshape(half_mask.shape)
             im = ax.imshow(np.ma.masked_array(img, mask=img == 0), origin="lower", cmap="RdBu")
-            ax.set_title(f"{title}\nmode {mode_idx}")
+            ax.set_title(panel_title)
             ax.axis("off")
             fig.colorbar(im, ax=ax, shrink=0.6)
-        fig.suptitle(f"{self.system} registration check -- TN {tn}")
+        fig.suptitle(title)
         fig.tight_layout()
-        # out_png = self.data_dir / f"MisRegCheck_{self.system}_{tn}.png"
-        # fig.savefig(out_png, dpi=120)
+        if out_name:
+            fig.savefig(self.output_dir / out_name, dpi=120)
         return fig
 
     # ------------------------------------------------------------------
@@ -615,59 +524,135 @@ class LBTSynIM:
         m = re.search(r"(\d{8}_\d{6})", Path(path).stem)
         return m.group(1) if m else None
 
-    def _latest_registered_products(self):
-        # NOTE: the "[0-9]*" glob (rather than "*") deliberately excludes
-        # the "tmp_..." reused-temp-tag files from _synthetic_im, which
-        # always start with a letter, not a digit.
-        ifunc_path = self._find_latest(self.ifunc_path.parent, f"IFunc_{self.system}_[0-9]*.fits")
-        ifunc_inv_path = self._find_latest(self.ifunc_path.parent, f"IFuncInv_{self.system}_[0-9]*.fits")
-        pupilstop_path = self._find_latest(self.pupilstop_path.parent, f"Pupilstop_{self.system}_[0-9]*.fits")
-        if not (ifunc_path and ifunc_inv_path and pupilstop_path):
+    def _load_latest_registration(self):
+        """Cache this system's current registration TN as `self.reg_tn`
+        (or None if `update_registration()` has never succeeded for it).
+        Updated again on every successful `update_registration()` call."""
+        path = self._find_latest(self.ifunc_path.parent, f"IFunc_{self.system}_[0-9]*.fits")
+        self.reg_tn = self._tn_from_filename(path) if path else None
+
+    def _registered_tags(self):
+        """ifunc/ifunc_inv/pupilstop SPECULA tags for the current
+        registration (`self.reg_tn`). Raises if none exists yet."""
+        if self.reg_tn is None:
             raise FileNotFoundError(
                 f"No registered ifunc/pupilstop found for {self.system} -- "
-                f"run update_registration() first."
-            )
-        tn = self._tn_from_filename(ifunc_path)
-        return ifunc_path.stem, ifunc_inv_path.stem, pupilstop_path.stem, tn
+                f"run update_registration() first.")
+        suffix = f"{self.system}_{self.reg_tn}"
+        return f"IFunc_{suffix}", f"IFuncInv_{suffix}", f"Pupilstop_{suffix}", self.reg_tn
 
     def _resolve_imat(self, imat):
         if imat is None:
-            path = self._find_latest(self.data_dir, f"IntMat_{self.system}_[0-9]*.fits")
+            path = self._find_latest(self.output_dir, f"IntMat_{self.system}_[0-9]*.fits")
             if path is None:
-                raise FileNotFoundError(f"No IntMat found for {self.system} in {self.data_dir}")
+                raise FileNotFoundError(f"No IntMat found for {self.system} in {self.output_dir}")
             return fits.getdata(path), path, self._tn_from_filename(path)
         if isinstance(imat, (str, Path)):
             return fits.getdata(imat), Path(imat), self._tn_from_filename(Path(imat))
         return np.asarray(imat), None, None
 
+    def _cached_imat(self, rMod, nmodes, seeing, binning, reg_tn, pc_cfg):
+        """Return (array, path) of an existing IntMat for this system whose
+        header matches every parameter of the requested call -- including
+        REGTN, so a new `update_registration()` run always invalidates the
+        cache -- or (None, None) if there's no match."""
+        want_pc = seeing is not None
+        for path in sorted(self.output_dir.glob(f"IntMat_{self.system}_[0-9]*.fits"), reverse=True):
+            hdr = fits.getheader(path)
+            if (hdr.get("REGTN") != reg_tn or hdr.get("NMODES") != nmodes or
+                    hdr.get("BINNING", 1) != binning or
+                    abs(hdr.get("RMOD", -1) - rMod) > 1e-9 or
+                    bool(hdr.get("ISPC", False)) != want_pc):
+                continue
+            if want_pc and (
+                    abs(hdr.get("SEEING", -1) - seeing) > 1e-9 or
+                    hdr.get("PCNPERF") != pc_cfg.get("nmodes_perfect_correction") or
+                    (hdr.get("PCVEC") or "NONE") != (pc_cfg.get("correction_vector_path") or "NONE") or
+                    hdr.get("PCNAVG") != pc_cfg.get("n_screens_average", 1)):
+                continue
+            return fits.getdata(path), path
+        return None, None
+
+    def _resolve_ref_imat(self, ref_imat) -> np.ndarray:
+        """Default: the imat used in the current registration's (self.reg_tn)
+        update_registration() call, found via that MisReg file's MEASIM
+        header entry (rather than a separately-tracked path, so a
+        user-supplied path and a freshly-saved array both resolve the
+        same way)."""
+        if ref_imat is not None:
+            return self._load_imat(ref_imat)
+        if self.reg_tn is None:
+            raise RuntimeError(f"No registration on record for {self.system} -- "
+                                f"run update_registration() or pass ref_imat explicitly.")
+        misreg_path = self.output_dir / f"MisReg_{self.system}_{self.reg_tn}.fits"
+        return fits.getdata(fits.getheader(misreg_path)["MEASIM"])
+
+    def _resolve_calib_imat(self, calib_imat, binning: int, nmodes:int=None) -> np.ndarray:
+        """Default: the latest IntMat matching the current registration
+        and compute_interaction_matrix's own defaults -- computed if none
+        exists yet."""
+        if calib_imat is not None:
+            return self._load_imat(calib_imat)
+        if self.reg_tn is None:
+            raise RuntimeError(f"No registration on record for {self.system} -- "
+                                f"run update_registration() first.")
+        rMod = self.config["interaction_matrix"].get("default_modulation_radius", 3.0)
+        cached, _ = self._cached_imat(rMod, self.default_nmodes, None, binning, self.reg_tn, {})
+        return cached if cached is not None else self.compute_interaction_matrix(rMod=rMod, binning=binning, nmodes=nmodes)
+
+    @staticmethod
+    def _round_alpha(alpha) -> np.ndarray:
+        """Round registration params to the precision they're saved at
+        everywhere (2 decimals for rotation/shifts, 4 for magnification)."""
+        return np.array([round(float(alpha[0]), 2), round(float(alpha[1]), 2),
+                          round(float(alpha[2]), 2), round(float(alpha[3]), 4)])
+
+    def _save_measured_imat(self, measured: np.ndarray, tn: str) -> Path:
+        path = self.output_dir / f"MeasIM_{self.system}_{tn}.fits"
+        fits.writeto(path, measured, overwrite=True)
+        return path
+
     def _update_config_misreg(self, alpha, tn):
-        """Persist the newly converged registration as the system's new
-        default initial guess, keeping a timestamped backup of the
-        previous config alongside it."""
+        """Persist the newly converged registration as this system's new
+        default initial guess. Edits just the one `misreg_guess:` line for
+        this system via a text patch (not a full yaml.safe_dump round-trip,
+        which would strip every comment in the file) -- keeps a timestamped
+        backup of the previous config alongside it."""
         backup_path = self.config_path.with_name(
             f"{self.config_path.stem}_backup_{tn}{self.config_path.suffix}")
         shutil.copy2(self.config_path, backup_path)
 
+        rot, sx, sy, mag = (float(a) for a in alpha)
+        new_line = (f"    misreg_guess: {{rotation: {rot:.2f}, shift_x: {sx:.2f}, "
+                    f"shift_y: {sy:.2f}, magnification: {mag:.4f}}}")
+        pattern = re.compile(
+            rf"(^  {re.escape(self.system)}:\n(?:.*\n)*?)^    misreg_guess:.*$", re.MULTILINE)
+        text, n = pattern.subn(lambda m: m.group(1) + new_line, self.config_path.read_text(), count=1)
+        if n != 1:
+            raise RuntimeError(f"Could not find misreg_guess for {self.system} in {self.config_path}")
+        self.config_path.write_text(text)
+
         self.config["systems"][self.system]["misreg_guess"] = {
-            f"rotation: {float(alpha[0]):1.2f}", f"shift_x: {float(alpha[1]):1.2f}",
-            f"shift_y: {float(alpha[2]):1.2f}", f"magnification: {float(alpha[4]):1.3f}",
-        }
-        with open(self.config_path, "w") as f:
-            yaml.safe_dump(self.config, f, sort_keys=False, default_flow_style=False)
+            "rotation": rot, "shift_x": sx, "shift_y": sy, "magnification": mag}
         self.misreg_guess = np.asarray(alpha, dtype=float)
 
-    def _save_misreg_fits(self, result: RegistrationResult, measured_imat, reg_cfg, tn,
-                           ifunc_file, ifunc_inv_file, pupilstop_file, alpha0):
+    def _base_header(self) -> fits.Header:
+        """Fields common to every fits product this class writes."""
         hdr = fits.Header()
-        hdr['SYNTH'] = True
         hdr["SYSTEM"] = self.system
         hdr["SIDE"] = self.side
         hdr["KLVER"] = self.kl_version
-        hdr["FLIP"] = self.flip
         hdr["XSIGN"] = self.xsign
         hdr["YSIGN"] = self.ysign
-        hdr["TN"] = tn
+        hdr["SYNTH"] = True
         hdr["DATE"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return hdr
+
+    def _save_misreg_fits(self, result: RegistrationResult, meas_path: Path, reg_cfg, tn,
+                           ifunc_file, ifunc_inv_file, pupilstop_file, alpha0):
+        hdr = self._base_header()
+        hdr["FLIP"] = self.flip
+        hdr["TN"] = tn
         hdr["NMODES"] = reg_cfg["nmodes"]
         hdr["DROT"] = reg_cfg["delta_rotation"]
         hdr["DSHIFT"] = reg_cfg["delta_shift"]
@@ -687,32 +672,25 @@ class LBTSynIM:
         hdr["IFUNCF"] = str(ifunc_file)
         hdr["IFINVF"] = str(ifunc_inv_file)
         hdr["PUPF"] = str(pupilstop_file)
-        hdr["MEASIM"] = str(measured_imat) if isinstance(measured_imat, (str, Path)) else "array_input"
+        hdr["MEASIM"] = str(meas_path)
+
         data = np.array([result.rotation, result.shift_x, result.shift_y, result.magnification])
-        out_path = self.data_dir / f"MisReg_{self.system}_{tn}.fits"
+        out_path = self.output_dir / f"MisReg_{self.system}_{tn}.fits"
         fits.PrimaryHDU(data=data, header=hdr).writeto(out_path, overwrite=True)
         return out_path
 
-    def _build_rec_header(self, rec_cfg, Nmodes, argos, imat_tn, tn, binning, bin_tags):
-        template_path = bin_tags.get("rec_header_template") or rec_cfg["header_template"]
-        hdr = fits.getheader(template_path).copy()
+    def _build_rec_header(self, rec_cfg, Nmodes, argos, imat_tn, tn, binning):
+        hdr = fits.getheader(rec_cfg["header_template"]).copy()
+        hdr.update(self._base_header())  # SYSTEM/SIDE/KLVER/XSIGN/YSIGN/SYNTH/DATE
         hdr["BINNING"] = binning
-        hdr["CCDSZX"] = bin_tags["ccd_size"][0]
-        hdr["CCDSZY"] = bin_tags["ccd_size"][1]
         hdr["IM_MODES"] = Nmodes
         hdr["M2C"] = f"KL_v{self.kl_version}"
         hdr["ORIG_REC"] = "synth_rec"
         hdr["C_DIST_F"] = "synth_pp"
         hdr["M_DIST_F"] = "synth_pp"
-        hdr["DATE"] = datetime.datetime.now().strftime("%Y-%m-%d")
-        hdr["SYSTEM"] = self.system
-        hdr["SIDE"] = self.side
         hdr["ARGOS"] = argos
-        hdr["XSIGN"] = self.xsign
-        hdr["YSIGN"] = self.ysign
         hdr["IMATTN"] = imat_tn or "unknown"
         hdr["RECTN"] = tn
-        hdr["SYNTH"] = True
         return hdr
 
     # ==================================================================
@@ -726,22 +704,29 @@ class LBTSynIM:
         influence functions and a measured interaction matrix. Always
         operates at the default (bin-1) WFS geometry.
 
-        On convergence: saves the registration parameters to
-        ``MisReg_<system>_<TN>.fits`` (header only), saves the registered
-        influence functions / inverse KL / pupil mask as their own
-        SPECULA-format files (``IFunc_<system>_<TN>.fits`` /
-        ``IFuncInv_<system>_<TN>.fits`` / ``Pupilstop_<system>_<TN>.fits``),
-        overwrites this system's `misreg_guess` in the config file (keeping
-        a timestamped backup), and produces a before/after slope-map plot
-        for the configured check mode (default: mode 30).
+        On convergence: rounds the result (2 decimals for
+        rotation/shifts, 4 for magnification), saves it to
+        ``MisReg_<system>_<TN>.fits`` (header + a 4-element data array),
+        saves the registered influence functions / inverse KL / pupil
+        mask as their own SPECULA-format files
+        (``IFunc_<system>_<TN>.fits`` / ``IFuncInv_<system>_<TN>.fits`` /
+        ``Pupilstop_<system>_<TN>.fits``), saves `measured_imat` itself as
+        ``MeasIM_<system>_<TN>.fits`` if it wasn't already a file,
+        overwrites this system's `misreg_guess` in the config file
+        (keeping a timestamped backup), updates `self.reg_tn`, and
+        produces a before/after slope-map plot for the configured check
+        mode (default: mode 30).
 
         Parameters
         ----------
         measured_imat : ndarray or path
             Measured interaction matrix (hardware slope order).
         save : bool
-            Whether to write the MisReg/IFunc/IFuncInv/pupilstop files and
-            update the config (default True).
+            Whether to write the MisReg fits file and update the config
+            (default True). The registered ifunc/pupilstop/measured-imat
+            files and `self.reg_tn` are always saved/updated regardless,
+            since later calls (`compute_interaction_matrix`,
+            `plot_registration_check`) depend on them.
         show_plot : bool
             Whether to produce the before/after slope-map check (default True).
 
@@ -759,18 +744,13 @@ class LBTSynIM:
         tol = reg_cfg["tolerance"]
         max_its = reg_cfg["max_iterations"]
         mode_idx = reg_cfg.get("slopes_mode_check", 30)
-
         measured = self._load_imat(measured_imat)
         refim = self._reshape_to_pupil_frame(measured, nmodes)
-
         alpha0 = self.misreg_guess.copy()
         alpha = alpha0.copy()
-
-        # Reused across every iteration/finite-difference call in this run
-        # so intermediate products overwrite each other instead of
-        # littering disk -- see _synthetic_im / _cleanup_tmp_products.
-        tmp_tag = f"tmp"#_{_tn_now()}"
-
+        # Reused (overwritten in place) across every iteration/finite-
+        # difference call in this run, then deleted at the very end.
+        tmp_tag = "tmp"
         err = tol + 1
         k = 0
         while err > tol and k < max_its:
@@ -783,32 +763,39 @@ class LBTSynIM:
             err = np.max(np.minimum(np.abs(dalpha) / np.abs(alpha_new), np.abs(alpha_new)))
             alpha = alpha_new
             k += 1
-
         if err > tol:
             self._cleanup_tmp_products(tmp_tag)
             return None
-
+        # Round now so the registered ifunc/pupilstop actually saved
+        # below, the MisReg fits file, and the config update all agree.
+        alpha = self._round_alpha(alpha)
         tn = _tn_now()
         ifunc_new, ifunc_inv_new, mask_new = self._register_ifunc_and_klinv(alpha)
         ifunc_file, ifunc_inv_file, pupilstop_file = self._save_ifunc_products(
             ifunc_new, ifunc_inv_new, mask_new, tn)
-
+        meas_path = (measured_imat if isinstance(measured_imat, (str, Path))
+                     else self._save_measured_imat(measured, tn))
         result = RegistrationResult(
             rotation=float(alpha[0]), shift_x=float(alpha[1]), shift_y=float(alpha[2]),
             magnification=float(alpha[3]), converged=True, iterations=k, tn=tn,
         )
-
         if save:
-            self._save_misreg_fits(result, measured_imat, reg_cfg, tn,
+            self._save_misreg_fits(result, meas_path, reg_cfg, tn,
                                     ifunc_file, ifunc_inv_file, pupilstop_file, alpha0)
             self._update_config_misreg(alpha, tn)
-
         if show_plot and nmodes > mode_idx:
+            # NOTE: both re-derived at the *converged* alpha (and the
+            # initial alpha0) rather than the loop's last `synim`, which
+            # corresponds to the second-to-last iterate, not the final one.
             before = self._synthetic_im(alpha0, nmodes, tmp_tag=tmp_tag)[:, mode_idx]
             after = self._synthetic_im(alpha, nmodes, tmp_tag=tmp_tag)[:, mode_idx]
-            self._plot_mode_slopes_check(refim[:, mode_idx], before, after, tn, mode_idx)
-
+            self._plot_slope_panels(
+                [("Measured", refim[:, mode_idx]), ("Synthetic (before)", before),
+                 ("Synthetic (after)", after)],
+                self.half_mask, f"{self.system} registration check -- TN {tn}",
+                f"MisRegCheck_{self.system}_{tn}.png")
         self._cleanup_tmp_products(tmp_tag)
+        self.reg_tn = tn
         return result
 
     def compute_interaction_matrix(self, rMod: float = 3.0,
@@ -816,7 +803,7 @@ class LBTSynIM:
                                     nmodes: Optional[int] = None,
                                     binning: int = 1) -> np.ndarray:
         """Simulate the interaction matrix for this system, using the
-        latest registered influence functions (see `update_registration`).
+        current registration (`self.reg_tn` -- see `update_registration`).
 
         Parameters
         ----------
@@ -827,75 +814,62 @@ class LBTSynIM:
             that seeing value instead of a diffraction-limited one, using
             the `interaction_matrix.partial_correction` config section.
         nmodes : int, optional
-            Number of modes to calibrate. Defaults to
-            `interaction_matrix.default_nmodes`.
+            Number of modes to calibrate. Defaults to `self.default_nmodes`
+            (the m2c's own mode count).
         binning : int
-            WFS CCD binning factor: 1 (default), 2, 3 or 4. Selects the CCD
-            size and pupil-mapping files from `config['binning']['configs']`
-            (binning=1 reuses the system's default paths). TODO(user):
-            2/3/4 are placeholders until real CCD sizes / pupil files are
-            filled in.
+            WFS CCD binning factor: 1 (default), 2, 3 or 4. pyr.pup_diam/
+            pup_dist/output_resolution, ocam.size, and pyr_slopes.pupdata_object
+            all scale with it automatically -- see `_pupil_geometry`.
 
         Returns
         -------
         The interaction matrix (also saved as
         ``IntMat_<system>_<TN>.fits``, with all relevant parameters in the
-        header).
+        header). If an existing IntMat already matches every parameter of
+        this call -- including the registration used -- it's loaded and
+        returned directly instead of recomputing.
         """
         ic_cfg = self.config["interaction_matrix"]
-        if nmodes is None:
-            nmodes = self.m2c.shape[0]
-        bin_tags = self._binning_tags(binning)
+        nmodes = nmodes or self.default_nmodes
+        pc_cfg = ic_cfg.get("partial_correction", {})
 
-        ifunc_tag, ifunc_inv_tag, pupilstop_tag, reg_tn = self._latest_registered_products()
+        ifunc_tag, ifunc_inv_tag, pupilstop_tag, reg_tn = self._registered_tags()
+
+        cached, _ = self._cached_imat(rMod, nmodes, seeing, binning, reg_tn, pc_cfg)
+        if cached is not None:
+            return cached
 
         tn = _tn_now()
         calib_tag = f"_calib_{self.system}_{tn}"
-
-        pc_info = None
-        if seeing is None:
-            self._run_specula_simulation(ifunc_tag=ifunc_tag, pupilstop_tag=pupilstop_tag,
-                                          nmodes=nmodes, im_tag=calib_tag, mod_amp=rMod,
-                                          binning_tags=bin_tags if binning != 1 else None)
-        else:
-            pc_cfg = ic_cfg["partial_correction"]
-            pc_info = self._run_pc_specula_simulation(
-                ifunc_tag=ifunc_tag, ifunc_inv_tag=ifunc_inv_tag, pupilstop_tag=pupilstop_tag,
-                nmodes=nmodes, im_tag=calib_tag, mod_amp=rMod, seeing=seeing, pc_cfg=pc_cfg,
-                binning_tags=bin_tags if binning != 1 else None)
+        pc_info = self._run_specula_simulation(
+            ifunc_tag=ifunc_tag, pupilstop_tag=pupilstop_tag, nmodes=nmodes, im_tag=calib_tag,
+            mod_amp=rMod, binning=binning, seeing=seeing, ifunc_inv_tag=ifunc_inv_tag, pc_cfg=pc_cfg)
+        self._safe_unlink(self.output_dir / ("_overrides_pc.yml" if seeing is not None else "_overrides_dl.yml"))
 
         imat = fits.getdata(self._im_output_path(calib_tag))[:, :nmodes]
-
-        hdr = fits.Header()
-        hdr["SYSTEM"] = self.system
-        hdr["SIDE"] = self.side
-        hdr["KLVER"] = self.kl_version
+        hdr = self._base_header()
         hdr["TN"] = tn
-        hdr["REGTN"] = reg_tn or "unknown"
+        hdr["REGTN"] = reg_tn
         hdr["RMOD"] = rMod
         hdr["NMODES"] = nmodes
         hdr["SEEING"] = seeing if seeing is not None else -1.0
         hdr["ISPC"] = seeing is not None
         hdr["BINNING"] = binning
-        hdr["CCDSZX"] = bin_tags["ccd_size"][0]
-        hdr["CCDSZY"] = bin_tags["ccd_size"][1]
         if pc_info is not None:
             hdr["PCNPERF"] = pc_info["nmodes_perfect_correction"]
             hdr["PCVEC"] = pc_info["correction_vector_path"] or "NONE"
             hdr["PCNAVG"] = pc_info["n_screens_average"]
-        hdr["DATE"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        out_path = self.data_dir / f"IntMat_{self.system}_{tn}.fits"
+        out_path = self.output_dir / f"IntMat_{self.system}_{tn}.fits"
         fits.writeto(out_path, imat, header=hdr, overwrite=True)
         return imat
-
 
     def compute_reconstructor(self, imat: Union[np.ndarray, str, Path, None] = None,
                                Nmodes: Optional[int] = None,
                                argos: Optional[bool] = None,
-                               binning: int = 1) -> np.ndarray:
+                               binning: int = 1,
+                               output_dir: Union[str, Path, None] = None) -> np.ndarray:
         """Compute the reconstructor for this system from an interaction
-        matrix (generalises compute_lbt_recdx.py / compute_lbt_recsx.py).
+        matrix.
 
         Parameters
         ----------
@@ -911,9 +885,12 @@ class LBTSynIM:
             `reconstructor.argos_default` in the config (True).
         binning : int
             WFS CCD binning factor the `imat` was computed at: 1 (default),
-            2, 3 or 4. Must match what was used in
-            `compute_interaction_matrix`, since it selects the matching
-            pupil-mapping arrays. TODO(user): 2/3/4 are placeholders.
+            2, 3 or 4 -- selects the matching pupdata/pupids/pupil_mask
+            (see `_pupil_geometry`). `total_commands`/`total_slopes`/the
+            Rec header template stay constant regardless of binning.
+        output_dir : str, Path, or None
+            Full directory to write ``RecMat_<system>_<TN>.fits`` into.
+            Defaults to this system's output folder (``root_dir/.output``).
 
         Returns
         -------
@@ -925,22 +902,19 @@ class LBTSynIM:
         if argos is None:
             argos = rec_cfg.get("argos_default", True)
 
-        bin_tags = self._binning_tags(binning)
-        bin_arrays = self._binning_arrays(binning)
-        npix = bin_arrays["npix"]
-        nslopes = bin_tags["nslopes"]
-        pup_ids = bin_arrays["pup_ids"]
-        pupids = bin_arrays["pupids"]
-        half_mask = bin_arrays["half_mask"]
-        total_commands = rec_cfg["total_commands"]
-        total_slopes = bin_tags["total_slopes"]
+        geom = self._pupil_geometry(binning)
+        npix, nslopes = geom["npix"], geom["nslopes"]
+        pup_ids, pupids, half_mask = geom["pup_ids"], geom["pupids"], geom["half_mask"]
+        total_commands, total_slopes = rec_cfg["total_commands"], rec_cfg["total_slopes"]
 
         imat_arr, _, imat_tn = self._resolve_imat(imat)
         if Nmodes is None:
             Nmodes = imat_arr.shape[1]
-        imat_arr = imat_arr[:, :Nmodes]
+        imat_arr = imat_arr[:, :Nmodes]  # only reshuffle the columns we keep
 
         half = nslopes // 2
+        # NOTE: xsign/ysign generalise what used to be a `side`-conditional
+        # sign flip (unconfirmed for LUCIdx/LUCIsx -- see the config).
         aux = np.zeros_like(imat_arr)
         aux[:half, :] = imat_arr[half:, :] * self.xsign
         aux[half:, :] = imat_arr[:half, :] * self.ysign
@@ -949,30 +923,88 @@ class LBTSynIM:
         IM = np.zeros_like(imat_arr)
         fimg = np.zeros(npix ** 2)
         for i in range(Nmodes):
-            np.put(fimg, pup_ids[:, 0], aux[:half, i])
-            np.put(fimg, pup_ids[:, 1], aux[half:, i])
-            f2d = fimg.reshape([npix, npix])
+            f2d = self._raster(fimg, pup_ids, aux[:half, i], aux[half:, i], npix)
             img = f2d[: npix // 2, :]
             IM[pupids, i] = img.flatten()[half_mask.flatten()]
 
         IMinv = np.linalg.pinv(IM[:nslopes, :Nmodes])
-        Rec = np.pad(IMinv, pad_width=((0, total_commands - Nmodes),
-                                        (0, total_slopes - nslopes)),
-                     mode="constant", constant_values=0.0)
+        Rec = np.pad(IMinv, ((0, total_commands - Nmodes), (0, total_slopes - nslopes)))
 
+        # Row 661 <- mode 0, row 668 <- mode 1 (falls back to mode 0 if
+        # Nmodes < 2, i.e. mode 1 doesn't exist).
         iir_rows = rec_cfg["iir_command_rows"]
         iir_source_modes = rec_cfg.get("iir_source_modes", [0] * len(iir_rows))
         for row, mode in zip(iir_rows, iir_source_modes):
             src_mode = mode if mode < IMinv.shape[0] else 0
-            Rec[row, :] = np.pad(IMinv[src_mode, :], pad_width=(0, total_slopes - nslopes),
-                                  mode="constant", constant_values=0.0)
+            Rec[row, :] = np.pad(IMinv[src_mode, :], (0, total_slopes - nslopes))
 
         Rec = Rec.astype(">f4")
         if argos:
             Rec /= 2
 
         tn = _tn_now()
-        hdr = self._build_rec_header(rec_cfg, Nmodes, argos, imat_tn, tn, binning, bin_tags)
-        out_path = self.data_dir / f"RecMat_{self.system}_{tn}.fits"
-        fits.writeto(out_path, Rec, header=hdr, overwrite=True)
+        hdr = self._build_rec_header(rec_cfg, Nmodes, argos, imat_tn, tn, binning)
+        out_dir = Path(output_dir) if output_dir is not None else self.output_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fits.writeto(out_dir / f"RecMat_{self.system}_{tn}.fits", Rec, header=hdr, overwrite=True)
         return Rec
+
+    def plot_registration_check(self, mode_idx: int,
+                                 ref_imat: Union[np.ndarray, str, Path, None] = None,
+                                 calib_imat: Union[np.ndarray, str, Path, None] = None,
+                                 ref_binning: int = 1, calib_binning: int = 1):
+        """Visually compare one mode's slopes between a reference
+        (typically measured) and a calibrated (simulated) interaction
+        matrix -- a generalisation of `update_registration`'s before/after
+        check that works from saved products instead of the live fit.
+
+        Parameters
+        ----------
+        mode_idx : int
+            Mode/column index to visualize.
+        ref_imat : ndarray, path, or None
+            Reference interaction matrix. Defaults to the imat used in the
+            current registration's (`self.reg_tn`) `update_registration()`
+            call.
+        calib_imat : ndarray, path, or None
+            Calibrated interaction matrix. Defaults to the latest IntMat
+            matching the current registration and
+            `compute_interaction_matrix`'s own defaults -- computed if
+            none exists yet.
+        ref_binning, calib_binning : int
+            WFS binning each imat was computed at (default 1 each). If
+            they differ, the finer (larger-npix) one is binned down to
+            match the coarser one via `toccd` before the difference is
+            taken.
+
+        Returns the matplotlib Figure (also saved as
+        ``RegCheck_<system>_mode<mode_idx>.png``). The third panel is
+        each map normalized by its own STD before differencing.
+        """
+        ref = self._resolve_ref_imat(ref_imat)
+        calib = self._resolve_calib_imat(calib_imat, calib_binning, nmodes=mode_idx + 1)
+        ref_geom = self._pupil_geometry(ref_binning)
+        calib_geom = self._pupil_geometry(calib_binning)
+
+        ref_2d = self._imat_mode_to_2d(ref, mode_idx, ref_geom)
+        calib_2d = self._imat_mode_to_2d(calib, mode_idx, calib_geom)
+
+        # Reconcile different binnings: bin the finer side down to match
+        # the coarser one (TODO: toccd's exact averaging/summing behavior
+        # is unverified -- no live SPECULA source in this environment).
+        if ref_geom["npix"] > calib_geom["npix"]:
+            ref_2d, mask_geom = toccd(ref_2d, (calib_geom["npix"],) * 2), calib_geom
+        elif calib_geom["npix"] > ref_geom["npix"]:
+            calib_2d, mask_geom = toccd(calib_2d, (ref_geom["npix"],) * 2), ref_geom
+        else:
+            mask_geom = ref_geom
+
+        half_mask, npix = mask_geom["half_mask"], mask_geom["npix"]
+        ref_1d = ref_2d[: npix // 2, :][half_mask]
+        calib_1d = calib_2d[: npix // 2, :][half_mask]
+        diff_1d = ref_1d / ref_1d.std() - calib_1d / calib_1d.std()
+
+        return self._plot_slope_panels(
+            [("Reference", ref_1d), ("Calibrated", calib_1d), ("Difference (normalized)", diff_1d)],
+            half_mask, f"{self.system} IM check -- mode {mode_idx}",
+            f"RegCheck_{self.system}_mode{mode_idx}.png")

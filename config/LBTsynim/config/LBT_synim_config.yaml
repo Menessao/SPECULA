@@ -1,89 +1,121 @@
+# =============================================================================
+# LBT SynIM configuration
+#
+# All {kl}/{side} placeholders below are filled in from a system's own
+# `kl_version` / `side` entry (see the `systems:` section) -- e.g. for
+# LBTIdx (side=dx, kl_version=30) `asm_v{kl}{side}_ifunc.fits` becomes
+# `asm_v30dx_ifunc.fits`. EVERY path below is a generic template filled in
+# this way inside LBTSynIM -- there are no per-side dx:/sx: dicts.
+#
+# Binning (compute_interaction_matrix/compute_reconstructor's `binning`
+# argument, 1/2/3/4) needs NO separate config table: LBTSynIM derives
+# everything from the values below --
+#   - pyr.pup_diam / pyr.pup_dist / pyr.output_resolution / ocam.size all
+#     divide by `binning`
+#   - pyr_slopes.pupdata_object becomes 'lbt_pupdata_{bin}x{bin}' (bin>1)
+#     or 'lbt_pupdata' (bin=1)
+#   - pupdata_template / pupids_template below get "_{bin}x{bin}" appended
+#     the same way for bin>1 (these are real SPECULA calibration products
+#     and must already exist on disk for whichever binning you use)
+#   - the pupil_mask is the only one built automatically if missing, from
+#     pupdata's pup_ids (see LBTSynIM._ensure_pupil_mask)
+# =============================================================================
+
 paths:
-  root_dir_template: /raid1/mmenessini/LBTsynIM/
-  ifunc_template: ifunc/asm_v{kl}{side}_ifunc.fits
-  ifunc_inv_template: ifunc/asm_v{kl}{side}_kl_inv.fits
-  m2c_template: m2c/asm_v{kl}{side}_m2c.fits
-  pupilstop_template: pupilstop/asm_v{kl}{side}_pupilstop.fits
-  pupil_mask_template: pupils/lbt_pupmask.fits
-  pupdata_template: pupils/lbt_pupdata.fits
-  pupids_template: pupils/pup_ids.fits
+  root_dir_template: '/raid1/mmenessini/LBTsynIM'
+
+  ifunc_template:      'ifunc/asm_v{kl}{side}_ifunc.fits'
+  ifunc_inv_template:  'ifunc/asm_v{kl}{side}_kl_inv.fits'
+  m2c_template:        'm2c/asm_v{kl}{side}_m2c.fits'
+  pupilstop_template:  'pupilstop/asm_v{kl}{side}_pupilstop.fits'
+  pupil_mask_template: 'pupils/lbt_pupmask.fits'
+  pupdata_template:    'pupils/lbt_pupdata.fits'
+  pupids_template:     'pupils/pup_ids.fits'
+
+  sav_dir_template:  '/raid1/mmenessini/LBTData/KLv{kl}{side}'
+  sav_file_template: 'phase_matrix.sav'
+
+  # Run products (MisReg/IntMat/RecMat, diagnostic plots, temp overrides,
+  # correction vectors) -- always relative to root_dir.
+  output_dir: '.output'
+
+# Nominal (binning=1) optics constants. telescope_diameter is shared by
+# both sides; pup_diam/pup_dist/npix are the pyramid/CCD values at bin=1
+# (40 / 48 / 120) and get divided by `binning` at call time.
+optics:
   telescope_diameter: 8.222
-  sav_dir_template: /raid1/mmenessini/LBTsynIM/KLv{kl}{side}
-  sav_file_template: phase_matrix.sav
-  output_dir: .output
+  pup_diam: 40.0
+  pup_dist: 48.0
+  npix: 120
+
+
 systems:
   LUCIdx:
-    side: dx
+    side: 'dx'
     kl_version: 30
     flip: false
     xsign: 1
     ysign: -1
-    misreg_guess:
-      rotation: -55.38430218864757
-      shift_x: -0.7917028413002551
-      shift_y: -1.23699151730269
-      magnification: 0.9998498776461888
+    misreg_guess: {rotation: -55.39, shift_x: -0.77, shift_y: -1.24, magnification: 0.9999}
   LUCIsx:
-    side: sx
+    side: 'sx'
     kl_version: 32
     flip: true
     xsign: -1
     ysign: 1
-    misreg_guess:
-      rotation: 0.0
-      shift_x: 0.0
-      shift_y: 0.0
-      magnification: 1.0
+    misreg_guess: {rotation: 0.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
   LBTIdx:
-    side: dx
+    side: 'dx'
     kl_version: 30
     flip: true
     xsign: 1
     ysign: -1
-    misreg_guess:
-      rotation: -34.12
-      shift_x: 0.42
-      shift_y: -0.81
-      magnification: 0.974
+    misreg_guess: {rotation: -34.12, shift_x: 0.42, shift_y: -0.81, magnification: 0.974}
   LBTIsx:
-    side: sx
+    side: 'sx'
     kl_version: 32
     flip: false
     xsign: -1
     ysign: 1
-    misreg_guess:
-      rotation: -147.94
-      shift_x: -0.53
-      shift_y: -0.79
-      magnification: 0.995
+    misreg_guess: {rotation: -148.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
+
+
 registration:
-  nmodes: 400
-  delta_rotation: 0.5
-  delta_shift: 0.01
+  nmodes: 500
+  delta_rotation: 0.5        # [deg]
+  delta_shift: 0.01          # [pix]
   delta_magnification: 0.001
-  tolerance: 0.01
+  tolerance: 1.0e-2
   max_iterations: 20
-  main_simul_yaml: ./config/syn_soul_im.yml
+  main_simul_yaml: './config/syn_soul_im.yml'
   slopes_mode_check: 30
+
 interaction_matrix:
   default_modulation_radius: 3.0
-  default_nmodes: 600
-  nslopes: 2512
-  npix: 120
+
   partial_correction:
-    nmodes_perfect_correction: 649
-    correction_vector_path: ''
+    nmodes_perfect_correction: 500
+    # Optional per-mode scaling applied to those modes before commanding
+    # the DM. Empty => perfect correction (no attenuation).
+    correction_vector_path: './data/corr_vec_20260609_192600.fits'
+    # Number of independent atmospheric realizations averaged together.
     n_screens_average: 70
-  pc_extra_blocks_yaml: ./config/pc_blocks.yml
+  # Static SPECULA object definitions (atmo, modal analysis, DM, etc.)
+  # used only for the partial-correction case; adapted from pc_calib_yml.
+  pc_extra_blocks_yaml: './config/pc_blocks.yml'
+
 reconstructor:
-  header_template: /raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits
+  # Reference Rec FITS file whose header is used as a starting template
+  # for every system and every binning (assumed constant across binning).
+  header_template: '/raid1/mmenessini/calibration/SOUL/KLv30dx/data/Rec_LUCI2_IIR_bin1_500modes.fits'
   argos_default: true
+  # Fixed real-time-computer frame size -- constant across binning.
   total_commands: 672
   total_slopes: 2848
-  iir_command_rows:
-  - 661
-  - 668
-  iir_source_modes:
-  - 0
-  - 1
-  slopes_scale: 4000000000.0
+  iir_command_rows: [661, 668]
+  # Parallel to iir_command_rows: which IMinv row (0-indexed mode) feeds
+  # each IIR command row. Row 661 <- mode 0, row 668 <- mode 1 (falls back
+  # to mode 0 at runtime if Nmodes < 2). TODO(user): confirm mode 1 isn't
+  # otherwise reserved/excluded from the standard IMinv->Rec padding.
+  iir_source_modes: [0, 1]
+  slopes_scale: 4.0e+9
