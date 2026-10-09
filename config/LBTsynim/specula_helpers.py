@@ -120,23 +120,19 @@ def save_pupil(pupil_mask, fname: str, Npix: int, D: float):
     pupilstop.save(fname + ".fits")
 
 
-def save_perfect_correction_vector(fname: str, dest_dir: str, full_path: str = "",
-                                    Nmodes: int = 672, Ncorrmodes: Optional[int] = None) -> str:
-    """Build (or copy) a per-mode PC correction vector and save it as a
-    SPECULA BaseValue-tagged fits file. Empty `full_path` (the default)
-    builds a perfect-correction vector: 1.0 for the first `Ncorrmodes`
-    modes, 0.0 beyond -- avoids ever needing to select/deselect whether
-    `scale_random` is wired in (see lbt_synim.py)."""
-    if full_path:
-        correction = fits.getdata(full_path)
-    else:
-        correction = np.zeros(Nmodes)
-        correction[:Ncorrmodes] = 1.0
-    filepath = Path(dest_dir) / fname
+def save_perfect_correction_vector(fname: str, dest_dir: str, Nmodes: int = 672,
+                                    Ncorrmodes: Optional[int] = None) -> str:
+    """Save a perfect-correction vector (1.0 for the first `Ncorrmodes`
+    modes, 0.0 up to `Nmodes`; all ones if `Ncorrmodes` is None) as a SPECULA
+    BaseValue-tagged fits file `dest_dir/fname.fits`. This is only the
+    fallback for when no correction vector file is configured -- a
+    user-provided vector is used as-is, never copied through here."""
+    correction = np.zeros(Nmodes)
+    correction[:Ncorrmodes] = 1.0
     hdr = fits.Header()
     hdr["VERSION"] = 1
     hdr["OBJ_TYPE"] = "BaseValue"
-    fits.writeto(str(filepath) + ".fits", correction, hdr, overwrite=True)
+    fits.writeto(str(Path(dest_dir) / fname) + ".fits", correction, hdr, overwrite=True)
     return fname
 
 

@@ -22,7 +22,7 @@
 # =============================================================================
 
 paths:
-  root_dir_template: '/raid1/mmenessini/LBTsynIM'
+  root_dir_template: '/raid1/mmenessini/LBTsynIM' # YOUR PATH TO DATA FILES HERE
 
   ifunc_template:      'ifunc/asm_v{kl}{side}_ifunc.fits'
   ifunc_inv_template:  'ifunc/asm_v{kl}{side}_kl_inv.fits'
@@ -32,7 +32,7 @@ paths:
   pupdata_template:    'pupils/lbt_pupdata.fits'
   pupids_template:     'pupils/pup_ids.fits'
 
-  sav_dir_template:  '/raid1/mmenessini/LBTData/KLv{kl}{side}'
+  sav_dir_template:  '/raid1/mmenessini/LBTData/KLv{kl}{side}' # YOUR PATH TO SAV KL FILES HERE
   sav_file_template: 'phase_matrix.sav'
 
   # Run products (MisReg/IntMat/RecMat, diagnostic plots, temp overrides,
@@ -70,34 +70,39 @@ systems:
     flip: true
     xsign: 1
     ysign: -1
-    misreg_guess: {rotation: -34.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
+    misreg_guess: {rotation: -34.12, shift_x: 0.42, shift_y: -0.81, magnification: 0.974}
   LBTIsx:
     side: 'sx'
     kl_version: 32
     flip: false
     xsign: -1
     ysign: 1
-    misreg_guess: {rotation: -148.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
+    misreg_guess: {rotation: -147.94, shift_x: -0.53, shift_y: -0.79, magnification: 0.995}
 
 
 registration:
-  nmodes: 500
+  nmodes: 400
   delta_rotation: 0.5        # [deg]
   delta_shift: 0.01          # [pix]
   delta_magnification: 0.001
   tolerance: 1.0e-2
-  max_iterations: 20
+  max_iterations: 10
   main_simul_yaml: './config/syn_soul_im.yml'
   slopes_mode_check: 30
 
 interaction_matrix:
   default_modulation_radius: 3.0
+  # Computed IMs are saved in the real system's ("hardware") convention --
+  # same row order and signs as a measured IM, so they can be compared,
+  # registered against and turned into reconstructors interchangeably.
+  # This factor converts SPECULA slope units to hardware units.
+  slopes_scale: 4.0e+9
 
   partial_correction:
     nmodes_perfect_correction: 500
     # Optional per-mode scaling applied to those modes before commanding
     # the DM. Empty => perfect correction (no attenuation).
-    correction_vector_path: './data/corr_vec_20260609_192600.fits'
+    correction_vector_path: '' #'./data/corr_vec_20260609_192600.fits'
     # Number of independent atmospheric realizations averaged together.
     n_screens_average: 70
   # Static SPECULA object definitions (atmo, modal analysis, DM, etc.)
@@ -118,4 +123,3 @@ reconstructor:
   # to mode 0 at runtime if Nmodes < 2). TODO(user): confirm mode 1 isn't
   # otherwise reserved/excluded from the standard IMinv->Rec padding.
   iir_source_modes: [0, 1]
-  slopes_scale: 4.0e+9

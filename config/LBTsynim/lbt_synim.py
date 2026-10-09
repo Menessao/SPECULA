@@ -116,6 +116,7 @@ class LBTSynIM:
             guess["rotation"], guess["shift_x"], guess["shift_y"], guess["magnification"],
         ], dtype=float)
 
+        self._geom_cache = {}
         self._resolve_paths()
         self._load_calib_data()
         self._load_latest_registration()
@@ -162,6 +163,11 @@ class LBTSynIM:
         self.base_pup_diam = optics["pup_diam"]
         self.base_pup_dist = optics["pup_dist"]
         self.base_npix = optics["npix"]
+
+        # Computed IMs are saved in the real system's ("hardware") convention,
+        # which includes this scale (SPECULA slope units -> hardware units).
+        self.slopes_scale = float(self.config["interaction_matrix"].get(
+            "slopes_scale", self.config["reconstructor"].get("slopes_scale", 4.0e9)))
 
     def _binned(self, path: Path, binning: int) -> Path:
         """`path` unchanged for binning=1, or with "_{binning}x{binning}"
@@ -246,13 +252,25 @@ class LBTSynIM:
 
     def _pupil_geometry(self, binning: int) -> dict:
         """Resolve every binning-dependent quantity needed to run a
-        push-pull calibration and reshape its output: the pyramid/CCD
-        sizes to override, the pupdata SPECULA tag, and the loaded
-        pup_ids/pupids/half_mask arrays. binning=1 reuses the standard
-        (un-suffixed) files; binning>1 uses the same files with
-        "_{binning}x{binning}" appended (see `_binned`) -- pupdata/pupids
-        must already exist for a given binning (real SPECULA calibration
-        products), only the pupil_mask is built on-demand if missing."""
+        push-pull calibration and to convert its output: the pyramid/CCD
+        sizes to override, the pupdata SPECULA tag, the loaded
+        pup_ids/pupids/half_mask arrays, and the mapping from a raw
+        SPECULA slope row to its pupil pixel and hardware row (see below).
+        binning=1 reuses the standard (un-suffixed) files; binning>1 uses
+        the same files with "_{binning}x{binning}" appended (see
+        `_binned`) -- pupdata/pupids must already exist for a given
+        binning (real SPECULA calibration products), only the pupil_mask
+        is built on-demand if missing. Memoized per binning, so after
+        regenerating any of these files in a session, create a new LBTSynIM.
+
+        Mapping of a raw SPECULA slope vector (rows [half:] = x slopes on
+        pupil 0 with `xsign`, rows [:half] = y slopes on pupil 1 with
+        `ysign`, each in `pup_ids` order): row r sits on pupil pixel
+        `pixel[r]`, whose rank among the top-half pupil pixels (raster
+        order) is `kidx[r]`; the hardware row of that pixel is
+        `pupids[kidx[r]]`. `sign[r]` is xsign/ysign for that row."""
+        if binning in self._geom_cache:
+            return self._geom_cache[binning]
         npix = self.base_npix // binning
         pupdata_path = self._binned(self.pupdata_path, binning)
         pupids_path = self._binned(self.pupids_path, binning)
@@ -263,7 +281,18 @@ class LBTSynIM:
             warnings.warn(f"{pupdata_path.name} has frame size "
                           f"{framesize.get('FSIZEX')}x{framesize.get('FSIZEY')}, expected "
                           f"{npix}x{npix} for binning={binning} (optics.npix={self.base_npix}).")
-        return {
+
+        half_mask = self._ensure_pupil_mask(binning, pup_ids, npix)
+        half = len(pup_ids)
+        if len(pupids) != 2 * half:
+            raise ValueError(f"{pupids_path.name} has {len(pupids)} entries but {pupdata_path.name} "
+                             f"has {half} subapertures (expected {2 * half}: one x and one y slope each).")
+        pixel = np.concatenate([pup_ids[:, 1], pup_ids[:, 0]])
+        flat_mask = half_mask.ravel()
+        if pixel.max() >= flat_mask.size or not flat_mask[pixel].all():
+            raise ValueError(f"The pupil mask for binning={binning} does not cover every pixel in "
+                             f"{pupdata_path.name} (pupils 0 and 1, top half of the frame).")
+        geom = {
             "binning": binning,
             "npix": npix,
             "nslopes": len(pupids),
@@ -273,8 +302,21 @@ class LBTSynIM:
             "pupdata_tag": pupdata_path.stem,
             "pup_ids": pup_ids,
             "pupids": pupids,
-            "half_mask": self._ensure_pupil_mask(binning, pup_ids, npix),
+            "half_mask": half_mask,
+            "kidx": (np.cumsum(flat_mask) - 1)[pixel],
+            "sign": np.concatenate([np.full(half, self.ysign), np.full(half, self.xsign)]),
         }
+        self._geom_cache[binning] = geom
+        return geom
+
+    def _specula_to_hardware(self, raw: np.ndarray, geom: dict) -> np.ndarray:
+        """Raw simulator IM -> the real system's ("hardware") convention:
+        rows permuted to hardware order, xsign/ysign applied, and scaled by
+        `slopes_scale` so the values are in hardware units. Exactly
+        invertible (permutation, signs and a constant)."""
+        out = np.zeros((geom["nslopes"], raw.shape[1]))
+        out[geom["pupids"][geom["kidx"]]] = raw[: geom["nslopes"]] * geom["sign"][:, None] * self.slopes_scale
+        return out
 
     # ------------------------------------------------------------------
     # registration warping
@@ -397,16 +439,14 @@ class LBTSynIM:
         nmodes_pc = pc_cfg["nmodes_perfect_correction"]
         corr_vec_path = pc_cfg.get("correction_vector_path") or ""
         n_avg = pc_cfg.get("n_screens_average", 1)
-        corr_vec_name = f"corr_vec_{self.system}"
-        save_perfect_correction_vector(fname=corr_vec_name, dest_dir=str(self.output_dir),
-                                        full_path=corr_vec_path, Nmodes=nmodes, Ncorrmodes=nmodes_pc)
+        corr_vec_tag = self._correction_vector_tag(corr_vec_path, nmodes_pc)
 
         extra_blocks_yaml = self.config["interaction_matrix"].get("pc_extra_blocks_yaml")
         override_path = self.output_dir / "_overrides_pc"
         overrides["pyr"]["inputs"] = {"in_ef": "ef_mode.out_ef"}  # see atmo + DM + pushpull combiner
         overrides.update({
             "seeing_random": {"constant": seeing},
-            "scale_random": {"constant_mul_data": corr_vec_name},
+            "scale_random": {"constant_mul_data": corr_vec_tag},
             "modal_analysis_random": {"ifunc_inv_object": ifunc_inv_tag, "nmodes": nmodes_pc},
             "dm_random": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem, "nmodes": nmodes_pc},
         })
@@ -422,36 +462,56 @@ class LBTSynIM:
 
         fits.writeto(self._im_output_path(im_tag), accum / n_avg, overwrite=True)
         return {"nmodes_perfect_correction": nmodes_pc, "correction_vector_path": corr_vec_path,
-                "n_screens_average": n_avg}
+                "correction_vector_stamp": self._file_stamp(corr_vec_path), "n_screens_average": n_avg}
+
+    def _correction_vector_tag(self, corr_vec_path: str, nmodes_pc: int) -> str:
+        """`scale_random.constant_mul_data` value for a PC run. The
+        configured `correction_vector_path` (a full file path) is used
+        as-is -- not copied, not regenerated. Only when none is configured
+        is a perfect-correction vector (ones for the `nmodes_pc` analysed
+        modes) generated as `<system>_corr_vec.fits` in the output folder
+        and used as the fallback. A configured path that does not exist is
+        an error, not a silent fallback to perfect correction.
+
+        Returns the file's full path without ".fits" (the way SPECULA tags
+        are written). TODO(user): if your SPECULA resolves this tag only
+        relative to its data directory, return `path.stem` here instead --
+        this is the single place that decides it."""
+        if corr_vec_path:
+            path = Path(corr_vec_path)
+            if not path.is_file():
+                raise FileNotFoundError(f"correction_vector_path {corr_vec_path} does not exist.")
+        else:
+            name = f"{self.system}_corr_vec"
+            save_perfect_correction_vector(name, str(self.output_dir), Nmodes=nmodes_pc)
+            path = self.output_dir / f"{name}.fits"
+        return str(path.with_suffix(""))
+
+    @staticmethod
+    def _file_stamp(path: Union[str, Path, None]) -> int:
+        """Modification time of `path` (0 if none/missing) -- recorded in IM
+        headers so editing a correction vector in place invalidates the cache."""
+        try:
+            return int(Path(path).stat().st_mtime) if path else 0
+        except OSError:
+            return 0
 
     # ------------------------------------------------------------------
     # slope re-ordering
     # ------------------------------------------------------------------
-    @staticmethod
-    def _raster(fimg: np.ndarray, pup_ids, first_half, second_half, npix: int) -> np.ndarray:
-        """Place the two pupil-image halves at their raster positions
-        (`pup_ids` columns 0/1) and reshape to a 2D `npix x npix` image.
-        `fimg` is a scratch buffer reused by the caller across modes."""
-        np.put(fimg, pup_ids[:, 0], first_half)
-        np.put(fimg, pup_ids[:, 1], second_half)
-        return fimg.reshape(npix, npix)
-
     def _reshape_to_pupil_frame(self, im: np.ndarray, nmodes: int) -> np.ndarray:
-        """Re-order a raw (hardware-order) IM into the 'true pupil' slope
-        ordering used for the registration sensitivity-matrix fit."""
-        im = im[: self.nslopes, :nmodes]
-        out = np.zeros([int(self.half_mask.sum()), nmodes])
-        for j in range(nmodes):
-            img = np.zeros(self.half_mask.size)
-            img[self.half_mask.flatten()] = im[self.pupids, j]
-            out[:, j] = img.reshape(self.half_mask.shape)[self.half_mask]
-        return out
+        """Hardware-order IM -> the 'true pupil' frame used for the
+        registration fit: row k is the k-th pupil pixel (raster order), i.e.
+        the hardware row `pupids[k]`."""
+        return im[: self.nslopes][self.pupids, :nmodes]
 
     def _synthetic_im(self, alpha, nmodes: int, tmp_tag: Optional[str] = None) -> np.ndarray:
         """Register ifunc/pupil by alpha, run one push-pull SPECULA
         calibration (always at the bin-1 geometry), and return the result
-        reshaped into the same 'true pupil' ordering as
-        `_reshape_to_pupil_frame`.
+        in the same 'true pupil' frame as `_reshape_to_pupil_frame` (so
+        rows are directly comparable with the measured IM's). The
+        hardware scale is left out: the fit is scale-invariant and this
+        keeps the numbers O(1).
 
         `tmp_tag`, when given, is reused across every call within one
         `update_registration()` run so the intermediate files it produces
@@ -465,18 +525,9 @@ class LBTSynIM:
                                       nmodes=nmodes, im_tag=im_tag)
         raw = fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
 
-        # NOTE: xsign/ysign generalise what was once a fixed (+1, -1) flip
-        # (unconfirmed for LUCIdx/LUCIsx -- see the config).
-        half = self.nslopes // 2
-        aux = raw.copy()
-        aux[:half, :] = raw[half:, :] * self.xsign
-        aux[half:, :] = raw[:half, :] * self.ysign
-
-        out = np.zeros([int(self.half_mask.sum()), nmodes])
-        fimg = np.zeros(self.npix ** 2)
-        for j in range(nmodes):
-            f2d = self._raster(fimg, self.pup_ids, aux[:half, j], aux[half:, j], self.npix)
-            out[:, j] = f2d[: self.npix // 2, : self.npix][self.half_mask]
+        geom = self._pupil_geometry(1)
+        out = np.zeros((geom["nslopes"], nmodes))
+        out[geom["kidx"]] = raw[: geom["nslopes"]] * geom["sign"][:, None]
         return out
 
     def _sensitivity_matrix(self, alpha, eps, nmodes, tmp_tag):
@@ -491,32 +542,12 @@ class LBTSynIM:
             sens.append(((push - pull) / (2 * e)).flatten())
         return np.array(sens).T
 
-    def _imat_mode_to_2d(self, imat: np.ndarray, mode_idx: int, geom: dict,
-                          order: str) -> np.ndarray:
-        """Full `npix x npix` image of one imat column, in hardware units.
-
-        `order` is the slope ordering of `imat`'s rows:
-          * "hardware": the real system's order (measured IMs). Pixel k of
-            the top-half pupil mask, in raster order, holds row
-            `pupids[k]` -- the same mapping `_reshape_to_pupil_frame` and
-            `compute_reconstructor` use.
-          * "specula": the raw simulator order (IMs from
-            `compute_interaction_matrix`): x slopes then y slopes, rastered
-            via pup_ids with the xsign/ysign convention, and scaled by
-            `reconstructor.slopes_scale` so the values are in the same
-            units as a hardware-order IM.
-        """
-        npix, nslopes = geom["npix"], geom["nslopes"]
-        full = np.zeros((npix, npix))
-        if order == "hardware":
-            full[: npix // 2][geom["half_mask"]] = imat[geom["pupids"], mode_idx]
-        elif order == "specula":
-            half = nslopes // 2
-            col = imat[:nslopes, mode_idx] * self.config["reconstructor"].get("slopes_scale", 4.0e9)
-            full = self._raster(np.zeros(npix ** 2), geom["pup_ids"],
-                                col[half:] * self.xsign, col[:half] * self.ysign, npix)
-        else:
-            raise ValueError(f"order must be 'hardware' or 'specula', got {order!r}")
+    def _imat_mode_to_2d(self, imat: np.ndarray, mode_idx: int, geom: dict) -> np.ndarray:
+        """Full `npix x npix` image of one (hardware-order) imat column:
+        pixel k of the top-half pupil mask, in raster order, holds row
+        `pupids[k]`."""
+        full = np.zeros((geom["npix"], geom["npix"]))
+        full[: geom["npix"] // 2][geom["half_mask"]] = imat[geom["pupids"], mode_idx]
         return full
 
     # ------------------------------------------------------------------
@@ -546,8 +577,24 @@ class LBTSynIM:
     # misc small helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _load_imat(imat: Union[np.ndarray, str, Path]) -> np.ndarray:
+    def _is_hardware_imat(path: Union[str, Path]) -> bool:
+        """Every IM handled here is in the real system's ("hardware")
+        convention. IMs written by this class (`IntMat_<system>_<TN>.fits`)
+        carry ORDER='hardware' in their header; one of those WITHOUT it was
+        saved in raw SPECULA order before that convention existed and is
+        refused. Any other file -- e.g. a measured IM, whatever it is called
+        (even `IntMat_<TN>.fits`) -- has no ORDER key and is hardware order
+        by definition."""
+        order = fits.getheader(path).get("ORDER")
+        own_name = re.match(rf"IntMat_({'|'.join(VALID_SYSTEMS)})_\d{{8}}_\d{{6}}$", Path(path).stem)
+        return order == "hardware" or (order is None and not own_name)
+
+    def _load_imat(self, imat: Union[np.ndarray, str, Path]) -> np.ndarray:
         if isinstance(imat, (str, Path)):
+            if not self._is_hardware_imat(imat):
+                raise ValueError(f"{imat} was saved in raw SPECULA order (no ORDER='hardware' in "
+                                 f"its header) -- delete it and recompute it with "
+                                 f"compute_interaction_matrix().")
             return fits.getdata(imat)
         return np.asarray(imat)
 
@@ -568,73 +615,110 @@ class LBTSynIM:
         path = self._find_latest(self.ifunc_path.parent, f"IFunc_{self.system}_[0-9]*.fits")
         self.reg_tn = self._tn_from_filename(path) if path else None
 
+    def _registration_key(self) -> str:
+        """Identifier of the registration IMs are simulated with (recorded
+        as REGTN): the TN of the current registration or -- if
+        `update_registration()` has never been run -- a key built from the
+        `misreg_guess` parameters in the config file, so editing them
+        (and creating a new LBTSynIM) gives a new key."""
+        if self.reg_tn is not None:
+            return self.reg_tn
+        a = self._round_alpha(self.misreg_guess)
+        return f"cfg_{a[0]:.2f}_{a[1]:.2f}_{a[2]:.2f}_{a[3]:.4f}".replace(".", "p").replace("-", "n")
+
     def _registered_tags(self):
-        """ifunc/ifunc_inv/pupilstop SPECULA tags for the current
-        registration (`self.reg_tn`). Raises if none exists yet."""
+        """ifunc/ifunc_inv/pupilstop SPECULA tags (and the registration key)
+        of the registration to simulate with: the current one
+        (`self.reg_tn`) or, if `update_registration()` has never been run,
+        the one defined by the config file's `misreg_guess` -- warped and
+        saved on first use (with the same 2/2/2/4-decimal rounding as every
+        saved registration), so IMs can be simulated and checked before any
+        registration exists."""
+        key = self._registration_key()
+        suffix = f"{self.system}_{key}"
+        tags = f"IFunc_{suffix}", f"IFuncInv_{suffix}", f"Pupilstop_{suffix}"
         if self.reg_tn is None:
-            raise FileNotFoundError(
-                f"No registered ifunc/pupilstop found for {self.system} -- "
-                f"run update_registration() first.")
-        suffix = f"{self.system}_{self.reg_tn}"
-        return f"IFunc_{suffix}", f"IFuncInv_{suffix}", f"Pupilstop_{suffix}", self.reg_tn
+            files = (self.ifunc_path.parent / f"{tags[0]}.fits", self.ifunc_path.parent / f"{tags[1]}.fits",
+                     self.pupilstop_path.parent / f"{tags[2]}.fits")
+            if not all(f.exists() for f in files):
+                self._save_ifunc_products(*self._register_ifunc_and_klinv(self._round_alpha(self.misreg_guess)), key)
+        return (*tags, key)
 
     def _resolve_imat(self, imat):
         if imat is None:
-            path = self._find_latest(self.output_dir, f"IntMat_{self.system}_[0-9]*.fits")
-            if path is None:
-                raise FileNotFoundError(f"No IntMat found for {self.system} in {self.output_dir}")
-            return fits.getdata(path), path, self._tn_from_filename(path)
+            for path in sorted(self.output_dir.glob(f"IntMat_{self.system}_[0-9]*.fits"), reverse=True):
+                if self._is_hardware_imat(path):
+                    return fits.getdata(path), path, self._tn_from_filename(path)
+            raise FileNotFoundError(f"No (hardware-order) IntMat found for {self.system} in {self.output_dir}")
         if isinstance(imat, (str, Path)):
-            return fits.getdata(imat), Path(imat), self._tn_from_filename(Path(imat))
+            return self._load_imat(imat), Path(imat), self._tn_from_filename(Path(imat))
         return np.asarray(imat), None, None
 
     def _cached_imat(self, rMod, nmodes, seeing, binning, reg_tn, pc_cfg):
         """Return (array, path) of an existing IntMat for this system whose
         header matches every parameter of the requested call -- including
-        REGTN, so a new `update_registration()` run always invalidates the
-        cache -- or (None, None) if there's no match."""
+        REGTN (so a new `update_registration()` run always invalidates the
+        cache), the hardware convention it was saved in (ORDER, SLOPESCL,
+        XSIGN, YSIGN) and, for PC, the correction vector file -- or
+        (None, None) if there's no match."""
         want_pc = seeing is not None
         for path in sorted(self.output_dir.glob(f"IntMat_{self.system}_[0-9]*.fits"), reverse=True):
             hdr = fits.getheader(path)
-            if (hdr.get("REGTN") != reg_tn or hdr.get("NMODES") != nmodes or
-                    hdr.get("BINNING", 1) != binning or
+            if (hdr.get("ORDER") != "hardware" or hdr.get("REGTN") != reg_tn or
+                    hdr.get("NMODES") != nmodes or hdr.get("BINNING", 1) != binning or
                     abs(hdr.get("RMOD", -1) - rMod) > 1e-9 or
-                    bool(hdr.get("ISPC", False)) != want_pc):
+                    bool(hdr.get("ISPC", False)) != want_pc or
+                    abs(hdr.get("SLOPESCL", 0.0) - self.slopes_scale) > 1e-6 * self.slopes_scale or
+                    hdr.get("XSIGN") != self.xsign or hdr.get("YSIGN") != self.ysign):
                 continue
             if want_pc and (
                     abs(hdr.get("SEEING", -1) - seeing) > 1e-9 or
                     hdr.get("PCNPERF") != pc_cfg.get("nmodes_perfect_correction") or
                     (hdr.get("PCVEC") or "NONE") != (pc_cfg.get("correction_vector_path") or "NONE") or
+                    hdr.get("PCVECMT", 0) != self._file_stamp(pc_cfg.get("correction_vector_path")) or
                     hdr.get("PCNAVG") != pc_cfg.get("n_screens_average", 1)):
                 continue
             return fits.getdata(path), path
         return None, None
 
     def _resolve_ref_imat(self, ref_imat) -> np.ndarray:
-        """Default: the imat used in the current registration's (self.reg_tn)
-        update_registration() call, found via that MisReg file's MEASIM
-        header entry (rather than a separately-tracked path, so a
-        user-supplied path and a freshly-saved array both resolve the
-        same way)."""
+        """Default: the (measured) imat used in the current registration's
+        (self.reg_tn) update_registration() call. Looked up first via the
+        MEASIM entry of that registration's MisReg file (so a user-supplied
+        path and a freshly-saved array both resolve the same way), then via
+        the MeasIM_<system>_<TN>.fits copy saved when it was given as an
+        array. If neither exists (registration made by an older version, with
+        save=False, or the output folder was moved/cleaned) the error says
+        so -- pass `ref_imat` explicitly then."""
         if ref_imat is not None:
             return self._load_imat(ref_imat)
         if self.reg_tn is None:
             raise RuntimeError(f"No registration on record for {self.system} -- "
                                 f"run update_registration() or pass ref_imat explicitly.")
         misreg_path = self.output_dir / f"MisReg_{self.system}_{self.reg_tn}.fits"
-        return fits.getdata(fits.getheader(misreg_path)["MEASIM"])
+        saved_copy = self.output_dir / f"MeasIM_{self.system}_{self.reg_tn}.fits"
+        if misreg_path.exists():
+            recorded = fits.getheader(misreg_path).get("MEASIM")
+            if recorded and Path(str(recorded)).exists():
+                return self._load_imat(Path(str(recorded)))
+        if saved_copy.exists():
+            return fits.getdata(saved_copy)
+        raise FileNotFoundError(
+            f"Can't find the measured imat used for {self.system}'s current registration "
+            f"({self.reg_tn}): looked for the MEASIM entry of {misreg_path}"
+            f"{'' if misreg_path.exists() else ' (file missing)'} and for {saved_copy}. "
+            f"The registration may predate these files, have been made with save=False, or the "
+            f"output folder was moved/cleaned -- pass ref_imat explicitly (your measured IM).")
 
     def _resolve_calib_imat(self, calib_imat, binning: int) -> np.ndarray:
-        """Default: the latest IntMat matching the current registration
-        and compute_interaction_matrix's own defaults -- computed if none
-        exists yet."""
+        """Default: the latest IntMat matching the current registration (or
+        the config file's parameters if none has been run) and
+        compute_interaction_matrix's own defaults -- computed if none exists
+        yet."""
         if calib_imat is not None:
             return self._load_imat(calib_imat)
-        if self.reg_tn is None:
-            raise RuntimeError(f"No registration on record for {self.system} -- "
-                                f"run update_registration() first.")
         rMod = self.config["interaction_matrix"].get("default_modulation_radius", 3.0)
-        cached, _ = self._cached_imat(rMod, self.default_nmodes, None, binning, self.reg_tn, {})
+        cached, _ = self._cached_imat(rMod, self.default_nmodes, None, binning, self._registration_key(), {})
         return cached if cached is not None else self.compute_interaction_matrix(rMod=rMod, binning=binning)
 
     @staticmethod
@@ -919,7 +1003,16 @@ class LBTSynIM:
                                     nmodes: Optional[int] = None,
                                     binning: int = 1) -> np.ndarray:
         """Simulate the interaction matrix for this system, using the
-        current registration (`self.reg_tn` -- see `update_registration`).
+        current registration (`self.reg_tn` -- see `update_registration`)
+        or, if none has been run yet, the registration parameters in the
+        config file (`misreg_guess`).
+
+        The returned/saved IM is in the real system's ("hardware")
+        convention, the same as a measured IM: rows in hardware order
+        (`pupids`), xsign/ysign applied, scaled by `slopes_scale`. So
+        computed and measured IMs can be compared, registered against and
+        turned into reconstructors interchangeably. (The raw simulator
+        output stays in `root_dir/im/_calib_<system>_<TN>.fits`.)
 
         Parameters
         ----------
@@ -928,14 +1021,17 @@ class LBTSynIM:
         seeing : float, optional
             If given (arcsec), calibrates a partial-correction (PC) IM for
             that seeing value instead of a diffraction-limited one, using
-            the `interaction_matrix.partial_correction` config section.
+            the `interaction_matrix.partial_correction` config section
+            (`correction_vector_path`, if set, is used as-is; otherwise
+            perfect correction).
         nmodes : int, optional
             Number of modes to calibrate. Defaults to `self.default_nmodes`
             (the m2c's own mode count).
         binning : int
             WFS CCD binning factor: 1 (default), 2, 3 or 4. pyr.pup_diam/
             pup_dist/output_resolution, ocam.size, and pyr_slopes.pupdata_object
-            all scale with it automatically -- see `_pupil_geometry`.
+            all scale with it automatically, and the rows are ordered with
+            that binning's `pup_ids_{bin}x{bin}.fits` -- see `_pupil_geometry`.
 
         Returns
         -------
@@ -949,11 +1045,11 @@ class LBTSynIM:
         nmodes = nmodes or self.default_nmodes
         pc_cfg = ic_cfg.get("partial_correction", {})
 
-        ifunc_tag, ifunc_inv_tag, pupilstop_tag, reg_tn = self._registered_tags()
-
+        reg_tn = self._registration_key()
         cached, _ = self._cached_imat(rMod, nmodes, seeing, binning, reg_tn, pc_cfg)
         if cached is not None:
             return cached
+        ifunc_tag, ifunc_inv_tag, pupilstop_tag, _ = self._registered_tags()  # warps/saves on first use if needed
 
         tn = _tn_now()
         calib_tag = f"_calib_{self.system}_{tn}"
@@ -962,9 +1058,12 @@ class LBTSynIM:
             mod_amp=rMod, binning=binning, seeing=seeing, ifunc_inv_tag=ifunc_inv_tag, pc_cfg=pc_cfg)
         self._safe_unlink(self.output_dir / ("_overrides_pc.yml" if seeing is not None else "_overrides_dl.yml"))
 
-        imat = fits.getdata(self._im_output_path(calib_tag))[:, :nmodes]
+        raw = fits.getdata(self._im_output_path(calib_tag))[:, :nmodes]
+        imat = self._specula_to_hardware(raw, self._pupil_geometry(binning))
 
         hdr = self._base_header()
+        hdr["ORDER"] = "hardware"
+        hdr["SLOPESCL"] = self.slopes_scale
         hdr["TN"] = tn
         hdr["REGTN"] = reg_tn
         hdr["RMOD"] = rMod
@@ -975,6 +1074,7 @@ class LBTSynIM:
         if pc_info is not None:
             hdr["PCNPERF"] = pc_info["nmodes_perfect_correction"]
             hdr["PCVEC"] = pc_info["correction_vector_path"] or "NONE"
+            hdr["PCVECMT"] = pc_info["correction_vector_stamp"]
             hdr["PCNAVG"] = pc_info["n_screens_average"]
 
         out_path = self.output_dir / f"IntMat_{self.system}_{tn}.fits"
@@ -991,14 +1091,16 @@ class LBTSynIM:
                                binning: int = 1,
                                output_dir: Union[str, Path, None] = None) -> np.ndarray:
         """Compute the reconstructor for this system from an interaction
-        matrix.
+        matrix in the real system's ("hardware") convention -- the pseudo-
+        inverse, padded to the real-time computer's frame, with the IIR rows
+        and the ARGOS half-gain applied. Computed and measured IMs are
+        treated identically (no re-ordering or scaling happens here).
 
         Parameters
         ----------
         imat : ndarray, path, or None
-            Interaction matrix (hardware slope order) or its full path.
-            Defaults to the latest ``IntMat_<system>_*.fits`` for this
-            system.
+            Interaction matrix (hardware order) or its full path. Defaults
+            to the latest ``IntMat_<system>_*.fits`` for this system.
         Nmodes : int, optional
             Number of modes to keep in the reconstructor. Defaults to the
             number of columns in `imat`.
@@ -1007,9 +1109,9 @@ class LBTSynIM:
             `reconstructor.argos_default` in the config (True).
         binning : int
             WFS CCD binning factor the `imat` was computed at: 1 (default),
-            2, 3 or 4 -- selects the matching pupdata/pupids/pupil_mask
-            (see `_pupil_geometry`). `total_commands`/`total_slopes`/the
-            Rec header template stay constant regardless of binning.
+            2, 3 or 4 -- only used to check the number of slopes and for the
+            header. `total_commands`/`total_slopes`/the Rec header template
+            stay constant regardless of binning.
         output_dir : str, Path, or None
             Full directory to write ``RecMat_<system>_<TN>.fits`` into.
             Defaults to this system's output folder (``root_dir/.output``).
@@ -1023,33 +1125,16 @@ class LBTSynIM:
         rec_cfg = self.config["reconstructor"]
         if argos is None:
             argos = rec_cfg.get("argos_default", True)
-
-        geom = self._pupil_geometry(binning)
-        npix, nslopes = geom["npix"], geom["nslopes"]
-        pup_ids, pupids, half_mask = geom["pup_ids"], geom["pupids"], geom["half_mask"]
+        nslopes = self._pupil_geometry(binning)["nslopes"]
         total_commands, total_slopes = rec_cfg["total_commands"], rec_cfg["total_slopes"]
 
         imat_arr, _, imat_tn = self._resolve_imat(imat)
+        if imat_arr.shape[0] != nslopes:
+            raise ValueError(f"imat has {imat_arr.shape[0]} rows, expected {nslopes} slopes for binning={binning}.")
         if Nmodes is None:
             Nmodes = imat_arr.shape[1]
-        imat_arr = imat_arr[:, :Nmodes]  # only reshuffle the columns we keep
 
-        half = nslopes // 2
-        # NOTE: xsign/ysign generalise what used to be a `side`-conditional
-        # sign flip (unconfirmed for LUCIdx/LUCIsx -- see the config).
-        aux = np.zeros_like(imat_arr)
-        aux[:half, :] = imat_arr[half:, :] * self.xsign
-        aux[half:, :] = imat_arr[:half, :] * self.ysign
-        aux *= rec_cfg.get("slopes_scale", 4.0e9)
-
-        IM = np.zeros_like(imat_arr)
-        fimg = np.zeros(npix ** 2)
-        for i in range(Nmodes):
-            f2d = self._raster(fimg, pup_ids, aux[:half, i], aux[half:, i], npix)
-            img = f2d[: npix // 2, :]
-            IM[pupids, i] = img.flatten()[half_mask.flatten()]
-
-        IMinv = np.linalg.pinv(IM[:nslopes, :Nmodes])
+        IMinv = np.linalg.pinv(imat_arr[:, :Nmodes])
         Rec = np.pad(IMinv, ((0, total_commands - Nmodes), (0, total_slopes - nslopes)))
 
         # Row 661 <- mode 0, row 668 <- mode 1 (falls back to mode 0 if
@@ -1074,8 +1159,7 @@ class LBTSynIM:
     def plot_registration_check(self, mode_idx: int,
                                  ref_imat: Union[np.ndarray, str, Path, None] = None,
                                  calib_imat: Union[np.ndarray, str, Path, None] = None,
-                                 ref_binning: int = 1, calib_binning: int = 1,
-                                 ref_order: str = "hardware", calib_order: str = "specula"):
+                                 ref_binning: int = 1, calib_binning: int = 1):
         """Visually compare one mode's slopes between a reference
         (typically measured) and a calibrated (simulated) interaction
         matrix -- a generalisation of `update_registration`'s before/after
@@ -1088,10 +1172,12 @@ class LBTSynIM:
         ref_imat : ndarray, path, or None
             Reference interaction matrix. Defaults to the imat used in the
             current registration's (`self.reg_tn`) `update_registration()`
-            call.
+            call -- so pass it explicitly (e.g. a measured IM) if no
+            registration has been run yet.
         calib_imat : ndarray, path, or None
             Calibrated interaction matrix. Defaults to the latest IntMat
-            matching the current registration and
+            matching the current registration -- or, if none has been run
+            yet, the registration parameters in the config file -- and
             `compute_interaction_matrix`'s own defaults -- computed if
             none exists yet.
         ref_binning, calib_binning : int
@@ -1099,12 +1185,8 @@ class LBTSynIM:
             they differ, the finer (larger-npix) one is binned down to
             match the coarser one via `toccd` before the difference is
             taken.
-        ref_order, calib_order : {"hardware", "specula"}
-            Slope ordering of the rows of each imat (see
-            `_imat_mode_to_2d`). Measured IMs are in the real system's
-            ("hardware") order, IMs from `compute_interaction_matrix` are
-            in the raw simulator ("specula") order -- hence the defaults.
-            Set them if you pass your own imats the other way round.
+        Both imats are in the real system's ("hardware") convention, as
+        measured IMs and `compute_interaction_matrix` outputs both are.
 
         Returns the matplotlib Figure (also saved as
         ``RegCheck_<system>_mode<mode_idx>.png``). The third panel is
@@ -1115,8 +1197,8 @@ class LBTSynIM:
         ref_geom = self._pupil_geometry(ref_binning)
         calib_geom = self._pupil_geometry(calib_binning)
 
-        ref_2d = self._imat_mode_to_2d(ref, mode_idx, ref_geom, ref_order)
-        calib_2d = self._imat_mode_to_2d(calib, mode_idx, calib_geom, calib_order)
+        ref_2d = self._imat_mode_to_2d(ref, mode_idx, ref_geom)
+        calib_2d = self._imat_mode_to_2d(calib, mode_idx, calib_geom)
 
         # Reconcile different binnings: bin the finer side down to match
         # the coarser one (TODO: toccd's exact averaging/summing behavior
