@@ -34,6 +34,7 @@ production, especially the binning overrides in `_base_overrides`.
 from __future__ import annotations
 
 import datetime
+import os
 import re
 import shutil
 import warnings
@@ -62,6 +63,12 @@ from specula_helpers import (
 VALID_SYSTEMS = ("LUCIdx", "LUCIsx", "LBTIdx", "LBTIsx")
 
 
+def _abs(path: Union[str, Path]) -> Path:
+    """Absolute version of `path` (relative ones are taken relative to the
+    current working directory, `~` is expanded) -- without touching the disk."""
+    return Path(os.path.abspath(os.path.expanduser(str(path))))
+
+
 def _tn_now() -> str:
     """Tracking-number timestamp, e.g. '20260927_153000'."""
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -83,6 +90,57 @@ class RegistrationResult:
     tn: str
 
 
+@dataclass
+class InitialRegistration:
+    """Result of `LBTSynIM.initial_registration()`."""
+    flip: bool
+    rotation: float              # [deg] after the coarse-to-fine refinement
+    rotation_from_tilts: float   # [deg] estimate from the tilt modes, before the refinement
+    flip_residuals: dict         # {flip: relative residual of the few-mode IM after the tilt rotation}
+    tilt_modes: tuple
+    tilt_angle_spread: float     # [deg] disagreement between the two tilts, chosen flip (~0 when right)
+    stages: list                 # (nmodes, rotation step [deg], rotation [deg], iterations, converged)
+
+
+@dataclass
+class MisregistrationMatrix:
+    """One mode's slopes linearised around the current registration, in the
+    real system's ("hardware") convention and units -- rows in hardware
+    order, xsign/ysign applied, scaled by `slopes_scale` -- so a column of a
+    measured IM can be used directly:
+
+        slopes(alpha) ~= s0 + S @ (alpha - alpha0)
+
+    with alpha = (rotation [degrees], shift_x [pixels], shift_y [pixels]).
+    """
+    mode: int
+    S: np.ndarray            # (nslopes, 3): d slopes / d (rotation per DEGREE, shift_x per PIXEL, shift_y per PIXEL)
+    R: np.ndarray            # (3, nslopes): pinv(S)
+    s0: np.ndarray           # (nslopes,): slopes at alpha0
+    alpha0: np.ndarray       # (3,): rotation [deg], shift_x [px], shift_y [px] of the linearisation point
+    sensitivity: np.ndarray  # (3,): |S column| / |s0|, per degree / per pixel
+    path: Optional[Path] = None
+
+    def estimate(self, measured, gain: Optional[float] = None, n_iter: int = 2) -> np.ndarray:
+        """Rotation [degrees], shift_x [pixels], shift_y [pixels] that make
+        this mode's slopes match `measured` -- the mode's column of a
+        measured IM (hardware order and units, like every IM here).
+
+        measured ~ gain * (s0 + S @ (alpha - alpha0)): the (positive) optical
+        gain is estimated unless given, then alpha = alpha0 + R @
+        (measured / gain - s0), refined `n_iter` times. Only valid near
+        `alpha0` (it is a linearisation)."""
+        m = np.asarray(measured, dtype=float).ravel()
+        if m.size != self.s0.size:
+            raise ValueError(f"measured has {m.size} slopes, expected {self.s0.size}.")
+        model = self.s0
+        for _ in range(1 if gain is not None else n_iter):
+            g = gain if gain is not None else max(float(m @ model) / float(model @ model), 1e-30)
+            delta = self.R @ (m / g - self.s0)
+            model = self.s0 + self.S @ delta
+        return self.alpha0 + delta
+
+
 class LBTSynIM:
     """Simulate LBT AO interaction matrices / reconstructors for one system.
 
@@ -101,7 +159,7 @@ class LBTSynIM:
 
         self.system = system
         self.side = _side_for(system)
-        self.config_path = Path(config_path)
+        self.config_path = _abs(config_path)
         self._load_config()
 
         sys_cfg = self.config["systems"][system]
@@ -127,13 +185,31 @@ class LBTSynIM:
     def _load_config(self):
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
+        self._absolutize_config_paths()
+
+    def _absolutize_config_paths(self):
+        """Resolve every file path given in the config to an absolute one,
+        once, here: relative ones mean "relative to the folder Python was
+        started from". They are handed to the `specula` CLI and recorded in
+        file headers, and notebooks change directory, so they must not stay
+        relative."""
+        cfg = self.config
+
+        def absolute(section, key):
+            if section.get(key):
+                section[key] = str(_abs(section[key]))
+
+        absolute(cfg["registration"], "main_simul_yaml")
+        absolute(cfg["interaction_matrix"], "pc_extra_blocks_yaml")
+        absolute(cfg["interaction_matrix"].get("partial_correction", {}), "correction_vector_path")
+        absolute(cfg["reconstructor"], "header_template")
 
     def _fmt(self, template: str) -> str:
         return template.format(kl=self.kl_version, side=self.side)
 
     def _resolve_paths(self):
         p = self.config["paths"]
-        self.root_dir = Path(self._fmt(p["root_dir_template"]))
+        self.root_dir = _abs(self._fmt(p["root_dir_template"]))
 
         self.ifunc_path = self.root_dir / self._fmt(p["ifunc_template"])
         self.ifunc_inv_path = self.root_dir / self._fmt(p["ifunc_inv_template"])
@@ -144,15 +220,17 @@ class LBTSynIM:
         self.pupids_path = self.root_dir / self._fmt(p["pupids_template"])
 
         # Run products (MisReg/IntMat/RecMat, diagnostic plots, temp
-        # override yamls, correction vectors) -- always relative to
-        # root_dir, falling back to root_dir/.output. The registered
-        # IFunc_*/IFuncInv_*/Pupilstop_* files stay under root_dir/ifunc/
-        # and root_dir/pupilstop/ regardless (see _save_ifunc_products),
-        # since the `specula` subprocess finds them there by tag.
-        self.output_dir = self.root_dir / p.get("output_dir", ".output")
+        # override yamls, correction vectors): `paths.output_dir`, absolute
+        # or relative to the folder Python was started from (default
+        # ./output) -- never inside root_dir. Only what the `specula`
+        # subprocess must find by tag stays under root_dir: the registered
+        # IFunc_*/IFuncInv_*/Pupilstop_* files (root_dir/ifunc/ and
+        # root_dir/pupilstop/, see _save_ifunc_products) and SPECULA's own
+        # root_dir/im/ outputs.
+        self.output_dir = _abs(p.get("output_dir") or "output")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.sav_dir = Path(self._fmt(p["sav_dir_template"]))
+        self.sav_dir = _abs(self._fmt(p["sav_dir_template"]))
         self.sav_file = self.sav_dir / p["sav_file_template"]
 
         # Nominal (binning=1) optics constants -- pup_diam/pup_dist/npix
@@ -304,6 +382,8 @@ class LBTSynIM:
             "pupids": pupids,
             "half_mask": half_mask,
             "kidx": (np.cumsum(flat_mask) - 1)[pixel],
+            "k0": (np.cumsum(flat_mask) - 1)[pup_ids[:, 0]],   # raster index of each pupil-0 pixel
+            "k1": (np.cumsum(flat_mask) - 1)[pup_ids[:, 1]],   # ... and of each pupil-1 pixel
             "sign": np.concatenate([np.full(half, self.ysign), np.full(half, self.xsign)]),
         }
         self._geom_cache[binning] = geom
@@ -321,14 +401,16 @@ class LBTSynIM:
     # ------------------------------------------------------------------
     # registration warping
     # ------------------------------------------------------------------
-    def _register_ifunc_and_klinv(self, alpha):
-        """Warp ifunc / inverse-KL by alpha = [rot, shiftX, shiftY, mag]."""
+    def _register_ifunc_and_klinv(self, alpha, flip: Optional[bool] = None):
+        """Warp ifunc / inverse-KL by alpha = [rot, shiftX, shiftY, mag]
+        (with `flip` instead of `self.flip` if given)."""
+        flip = self.flip if flip is None else flip
         rot, shiftX, shiftY, mag = alpha
         warped_mask = warp_mask(self.pupilstop, shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag)
-        ifunc_new = warp_image(self.ifunc, warped_mask, flip=self.flip,
+        ifunc_new = warp_image(self.ifunc, warped_mask, flip=flip,
                                 shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                 oldpup=self.pupilstop)
-        ifunc_inv_new = warp_image(self.ifunc_inv.T, warped_mask, flip=self.flip,
+        ifunc_inv_new = warp_image(self.ifunc_inv.T, warped_mask, flip=flip,
                                     shiftX=shiftX, shiftY=shiftY, rot=rot, mag=mag,
                                     oldpup=self.pupilstop)
         return ifunc_new, ifunc_inv_new, warped_mask
@@ -382,15 +464,22 @@ class LBTSynIM:
 
     def _base_overrides(self, geom: dict, ifunc_tag: str, nmodes: int, im_tag: str,
                          pupilstop_tag: Optional[str] = None,
-                         mod_amp: Optional[float] = None) -> dict:
+                         mod_amp: Optional[float] = None,
+                         first_mode: int = 0, dm_nmodes: Optional[int] = None) -> dict:
         """Override blocks common to every push-pull run -- including the
         binning-derived pyramid/CCD/pupdata overrides, always applied
         (binning=1 just reproduces the nominal values, so no special-casing
-        is needed)."""
+        is needed).
+
+        `nmodes` modes are pushed, starting at `first_mode` (push-pull
+        generator and calibrator only). The DM does not know about
+        `first_mode` -- it must keep enough modes to reach it, so
+        `dm_nmodes` (default `nmodes`) is set independently."""
         overrides = {
             "pyr_im_calibrator": {"im_tag": im_tag, "nmodes": nmodes, "overwrite": True},
             "pushpull": {"nmodes": nmodes},
-            "dm": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem, "nmodes": nmodes},
+            "dm": {"ifunc_object": ifunc_tag, "m2c_object": self.m2c_path.stem,
+                   "nmodes": nmodes if dm_nmodes is None else dm_nmodes},
             "main": {"pixel_pupil": self.pixel_pupil, "pixel_pitch": self.pixel_pitch,
                      "root_dir": str(self.root_dir), "total_time": nmodes * 0.002},
             "pyr": {"pup_diam": geom["pup_diam"], "pup_dist": geom["pup_dist"],
@@ -398,6 +487,8 @@ class LBTSynIM:
             "ocam": {"size": geom["ccd_size"]},
             "pyr_slopes": {"pupdata_object": geom["pupdata_tag"]},
         }
+        if first_mode:
+            overrides["pushpull"]["first_mode"] = first_mode
         if pupilstop_tag is not None:
             overrides["pupilstop"] = {"tag": pupilstop_tag}
         if mod_amp is not None:
@@ -408,8 +499,11 @@ class LBTSynIM:
                                  mod_amp: Optional[float] = None, binning: int = 1,
                                  seeing: Optional[float] = None,
                                  ifunc_inv_tag: Optional[str] = None,
-                                 pc_cfg: Optional[dict] = None) -> Optional[dict]:
-        """Run one push-pull IM calibration through the `specula` CLI.
+                                 pc_cfg: Optional[dict] = None,
+                                 first_mode: int = 0) -> Optional[dict]:
+        """Run one push-pull IM calibration through the `specula` CLI:
+        `nmodes` modes starting at `first_mode` (the DM keeps all
+        `default_nmodes` modes then, so it can reach them).
 
         Diffraction-limited when `seeing` is None (the default): a single
         run, returns None. Partial-correction when `seeing` is given
@@ -427,7 +521,8 @@ class LBTSynIM:
         call) is done.
         """
         geom = self._pupil_geometry(binning)
-        overrides = self._base_overrides(geom, ifunc_tag, nmodes, im_tag, pupilstop_tag, mod_amp)
+        overrides = self._base_overrides(geom, ifunc_tag, nmodes, im_tag, pupilstop_tag, mod_amp, first_mode,
+                                         self.default_nmodes if first_mode else None)
         main_yaml = self.config["registration"]["main_simul_yaml"]
 
         if seeing is None:
@@ -505,42 +600,81 @@ class LBTSynIM:
         the hardware row `pupids[k]`."""
         return im[: self.nslopes][self.pupids, :nmodes]
 
-    def _synthetic_im(self, alpha, nmodes: int, tmp_tag: Optional[str] = None) -> np.ndarray:
-        """Register ifunc/pupil by alpha, run one push-pull SPECULA
-        calibration (always at the bin-1 geometry), and return the result
-        in the same 'true pupil' frame as `_reshape_to_pupil_frame` (so
-        rows are directly comparable with the measured IM's). The
-        hardware scale is left out: the fit is scale-invariant and this
-        keeps the numbers O(1).
-
-        `tmp_tag`, when given, is reused across every call within one
-        `update_registration()` run so the intermediate files it produces
-        overwrite each other in place instead of littering disk."""
-        ifunc_new, ifunc_inv_new, mask_new = self._register_ifunc_and_klinv(alpha)
-        tag = tmp_tag or "tmp"
+    def _simulate_raw(self, alpha, nmodes: int, tmp_tag: str = "tmp",
+                       flip: Optional[bool] = None, first_mode: int = 0) -> np.ndarray:
+        """Register ifunc/pupil by alpha (and `flip`), run one push-pull
+        SPECULA calibration at the bin-1 geometry (`nmodes` modes from
+        `first_mode`), and return the raw simulator IM `(nslopes, nmodes)`.
+        `tmp_tag` is reused across calls so the intermediate files overwrite
+        each other in place."""
+        ifunc_new, ifunc_inv_new, mask_new = self._register_ifunc_and_klinv(alpha, flip=flip)
         ifunc_file, _, pupilstop_file = self._save_ifunc_products(
-            ifunc_new, ifunc_inv_new, mask_new, tag)
-        im_tag = f"tmp_synim_{tag}"
+            ifunc_new, ifunc_inv_new, mask_new, tmp_tag)
+        im_tag = f"tmp_synim_{tmp_tag}"
         self._run_specula_simulation(ifunc_tag=ifunc_file.stem, pupilstop_tag=pupilstop_file.stem,
-                                      nmodes=nmodes, im_tag=im_tag)
-        raw = fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
+                                      nmodes=nmodes, im_tag=im_tag, first_mode=first_mode)
+        return fits.getdata(self._im_output_path(im_tag))[:, :nmodes]
 
+    def _synthetic_im(self, alpha, nmodes: int, tmp_tag: Optional[str] = None) -> np.ndarray:
+        """`_simulate_raw` converted to the same 'true pupil' frame as
+        `_reshape_to_pupil_frame` (so rows are directly comparable with the
+        measured IM's). The hardware scale is left out: the fit is
+        scale-invariant and this keeps the numbers O(1)."""
+        raw = self._simulate_raw(alpha, nmodes, tmp_tag or "tmp")
         geom = self._pupil_geometry(1)
         out = np.zeros((geom["nslopes"], nmodes))
         out[geom["kidx"]] = raw[: geom["nslopes"]] * geom["sign"][:, None]
         return out
 
     def _sensitivity_matrix(self, alpha, eps, nmodes, tmp_tag):
+        """d(synthetic IM)/d(parameter) by central differences, one column
+        per parameter with a non-zero step in `eps`: a parameter whose step
+        is 0 is not fitted and is left out of the matrix."""
         sens = []
-        for k, e in enumerate(eps):
+        for k in np.flatnonzero(eps):
             a_plus = alpha.copy()
-            a_plus[k] += e
+            a_plus[k] += eps[k]
             push = self._synthetic_im(a_plus, nmodes, tmp_tag=tmp_tag)
             a_minus = alpha.copy()
-            a_minus[k] -= e
+            a_minus[k] -= eps[k]
             pull = self._synthetic_im(a_minus, nmodes, tmp_tag=tmp_tag)
-            sens.append(((push - pull) / (2 * e)).flatten())
+            sens.append(((push - pull) / (2 * eps[k])).flatten())
         return np.array(sens).T
+
+    def _fit_registration(self, refim, alpha0, eps, nmodes, tol, max_its, tmp_tag,
+                           max_step=None, err_scale=None):
+        """Gauss-Newton fit of the registration parameters
+        alpha = [rotation, shift_x, shift_y, magnification] to the measured
+        frame `refim`, using the first `nmodes` modes. Only parameters with
+        a non-zero step in `eps` are fitted (and enter the sensitivity
+        matrix); the others stay at `alpha0`.
+        Convergence: `err` < `tol`, where `err` is the largest of
+        min(relative, absolute) change of the fitted parameters -- or, with
+        `err_scale`, their largest change divided by that scale. `max_step`
+        caps the update per iteration. Returns (alpha, err, iterations)."""
+        alpha, free = np.array(alpha0, dtype=float), np.flatnonzero(eps)
+        if free.size == 0:
+            raise ValueError("every registration step is 0: nothing to fit")
+        refim = refim[:, :nmodes]
+        err, k = tol + 1, 0
+        while err > tol and k < max_its:
+            sens = self._sensitivity_matrix(alpha, eps, nmodes, tmp_tag)
+            synim = self._synthetic_im(alpha, nmodes, tmp_tag=tmp_tag)
+            gain = np.diag(np.linalg.pinv(synim) @ refim)
+            residual = (refim @ np.diag(1 / gain)) - synim
+            dalpha = np.linalg.pinv(sens) @ residual.flatten()
+            if max_step is not None:
+                dalpha = np.clip(dalpha, -max_step, max_step)
+            alpha_new = alpha.copy()
+            alpha_new[free] += dalpha
+            if err_scale is None:
+                new = np.maximum(np.abs(alpha_new[free]), 1e-12)
+                err = np.max(np.minimum(np.abs(dalpha) / new, np.abs(alpha_new[free])))
+            else:
+                err = np.max(np.abs(dalpha)) / err_scale
+            alpha = alpha_new
+            k += 1
+        return alpha, err, k
 
     def _imat_mode_to_2d(self, imat: np.ndarray, mode_idx: int, geom: dict) -> np.ndarray:
         """Full `npix x npix` image of one (hardware-order) imat column:
@@ -619,12 +753,13 @@ class LBTSynIM:
         """Identifier of the registration IMs are simulated with (recorded
         as REGTN): the TN of the current registration or -- if
         `update_registration()` has never been run -- a key built from the
-        `misreg_guess` parameters in the config file, so editing them
-        (and creating a new LBTSynIM) gives a new key."""
+        `misreg_guess` parameters and `flip` in the config file, so
+        editing them (and creating a new LBTSynIM) gives a new key."""
         if self.reg_tn is not None:
             return self.reg_tn
         a = self._round_alpha(self.misreg_guess)
-        return f"cfg_{a[0]:.2f}_{a[1]:.2f}_{a[2]:.2f}_{a[3]:.4f}".replace(".", "p").replace("-", "n")
+        key = f"{a[0]:.2f}_{a[1]:.2f}_{a[2]:.2f}_{a[3]:.4f}".replace(".", "p").replace("-", "n")
+        return f"cfg_flip{int(self.flip)}_{key}"   # flip changes the warped products too
 
     def _registered_tags(self):
         """ifunc/ifunc_inv/pupilstop SPECULA tags (and the registration key)
@@ -734,17 +869,19 @@ class LBTSynIM:
         return path
 
     @staticmethod
-    def _patch_misreg_text(text: str, system: str, line_body: str) -> str:
-        """Return `text` with `system`'s `misreg_guess` entry replaced by
-        `line_body` (the text after the key's colon, e.g. "{rotation: ...}"),
-        touching nothing else -- comments, other systems and all other
-        sections survive byte-for-byte.
+    def _patch_system_text(text: str, system: str, key: str, body: str,
+                            comment: Optional[str] = None) -> str:
+        """Return `text` with `system`'s `key` entry set to `body` (the text
+        after the colon, e.g. "{rotation: ...}", "true", "-1"), touching
+        nothing else -- other keys, other systems and all other sections
+        survive byte-for-byte. A trailing comment of the replaced line is
+        replaced by `comment` (dropped if None).
 
         Works on the system's own block only (header line through the next
         line indented no deeper than it), so it can never spill into a
         neighbouring system, and replaces block-style entries (the key plus
-        its indented child lines) as well as flow-style one-liners. If the
-        system has no `misreg_guess` yet, one is appended to its block."""
+        its indented child lines) as well as one-liners. If the system has
+        no such key yet, it is appended to its block."""
         lines = text.splitlines(keepends=True)
         indent = lambda ln: len(ln) - len(ln.lstrip(" "))
         is_content = lambda ln: bool(ln.strip()) and not ln.lstrip().startswith("#")
@@ -761,16 +898,16 @@ class LBTSynIM:
             if is_content(lines[i]) and indent(lines[i]) <= head_indent:
                 i_end = i
                 break
-        block = range(i_head + 1, i_end)
-        content = [i for i in block if is_content(lines[i])]
+        content = [i for i in range(i_head + 1, i_end) if is_content(lines[i])]
         if not content:
             raise ValueError(f"system '{system}' has an empty block in the config")
         nl = "\r\n" if lines[i_head].endswith("\r\n") else "\n"
+        suffix = f"  # {comment}" if comment else ""
 
-        key = re.compile(r"""^\s*["']?misreg_guess["']?\s*:""")
-        i_key = next((i for i in content if key.match(lines[i])), None)
+        key_re = re.compile(rf"""^\s*["']?{re.escape(key)}["']?\s*:""")
+        i_key = next((i for i in content if key_re.match(lines[i])), None)
         if i_key is None:  # no entry yet: append one after the block's last content line
-            new = " " * indent(lines[content[0]]) + f"misreg_guess: {line_body}{nl}"
+            new = " " * indent(lines[content[0]]) + f"{key}: {body}{suffix}{nl}"
             lines.insert(content[-1] + 1, new)
         else:  # replace the key line plus any (block-style / multi-line) children
             key_indent = indent(lines[i_key])
@@ -780,47 +917,66 @@ class LBTSynIM:
                     i_last = i
                 elif i > i_key:
                     break
-            lines[i_key:i_last + 1] = [" " * key_indent + f"misreg_guess: {line_body}{nl}"]
+            lines[i_key:i_last + 1] = [" " * key_indent + f"{key}: {body}{suffix}{nl}"]
         return "".join(lines)
 
-    def _update_config_misreg(self, alpha, tn):
-        """Persist the newly converged registration as this system's new
-        default initial guess, editing only its `misreg_guess` entry (a
-        plain yaml.safe_dump round-trip would strip every comment in the
-        file). A timestamped backup of the previous config is kept
-        alongside it, and the result is re-parsed and checked after
-        writing -- this system's values must be the new ones and every
-        other system's untouched -- otherwise the original file is
-        restored and an error raised, so a failed update is never silent."""
+    @staticmethod
+    def _yaml_body(value) -> str:
+        """Config text for a value: the registration dict with 2/2/2/4
+        decimals, booleans as true/false, whole numbers as integers."""
+        if isinstance(value, dict):
+            return (f"{{rotation: {value['rotation']:.2f}, shift_x: {value['shift_x']:.2f}, "
+                    f"shift_y: {value['shift_y']:.2f}, magnification: {value['magnification']:.4f}}}")
+        if isinstance(value, (bool, np.bool_)):
+            return "true" if value else "false"
+        return str(int(value)) if float(value).is_integer() else str(value)
+
+    def _update_config(self, updates: dict, tn: str, comment: Optional[str] = None):
+        """Write `updates` ({key: value}, keys of this system's config block;
+        `misreg_guess` as a dict) into the config file, editing only those
+        entries (a plain yaml.safe_dump round-trip would strip every comment
+        in the file). A timestamped backup of the previous config is kept
+        alongside it, and the result is re-parsed and checked after writing
+        -- this system's values must be the new ones and every other
+        system's untouched -- otherwise the original file is restored and an
+        error raised, so a failed update is never silent."""
         backup_path = self.config_path.with_name(
             f"{self.config_path.stem}_backup_{tn}{self.config_path.suffix}")
         shutil.copy2(self.config_path, backup_path)
 
-        rot, sx, sy, mag = (float(a) for a in alpha)
-        body = (f"{{rotation: {rot:.2f}, shift_x: {sx:.2f}, "
-                f"shift_y: {sy:.2f}, magnification: {mag:.4f}}}")
-        expected = dict(zip(("rotation", "shift_x", "shift_y", "magnification"),
-                             (round(rot, 2), round(sx, 2), round(sy, 2), round(mag, 4))))
-
         original = self.config_path.read_text()
         try:
-            patched = self._patch_misreg_text(original, self.system, body)
+            patched = original
+            for key, value in updates.items():
+                patched = self._patch_system_text(patched, self.system, key, self._yaml_body(value),
+                                                   None if key == "misreg_guess" else comment)
             self.config_path.write_text(patched)
 
             before, after = yaml.safe_load(original)["systems"], yaml.safe_load(patched)["systems"]
-            got = after[self.system]["misreg_guess"]
-            if any(abs(got[k] - v) > 1e-9 for k, v in expected.items()):
-                raise ValueError(f"re-read misreg_guess {got} != {expected}")
+            for key, value in updates.items():
+                got = after[self.system][key]
+                wrong = (any(abs(got[k] - v) > 1e-9 for k, v in value.items()) if isinstance(value, dict)
+                         else got != value)
+                if wrong:
+                    raise ValueError(f"re-read {key} {got} != {value}")
             changed = [name for name in before if name != self.system and before[name] != after[name]]
             if changed:
                 raise ValueError(f"also modified other systems: {changed}")
         except Exception as exc:
             self.config_path.write_text(original)
-            raise RuntimeError(f"Could not update misreg_guess for {self.system} in "
+            raise RuntimeError(f"Could not update {', '.join(updates)} for {self.system} in "
                                f"{self.config_path} ({exc}); the config was left unchanged "
                                f"(backup: {backup_path}).") from exc
 
-        self.config["systems"][self.system]["misreg_guess"] = expected
+        self.config["systems"][self.system].update(updates)
+
+    def _update_config_misreg(self, alpha, tn):
+        """Persist the newly converged registration as this system's new
+        default initial guess (see `_update_config`)."""
+        rot, sx, sy, mag = (float(a) for a in alpha)
+        expected = dict(zip(("rotation", "shift_x", "shift_y", "magnification"),
+                             (round(rot, 2), round(sx, 2), round(sy, 2), round(mag, 4))))
+        self._update_config({"misreg_guess": expected}, tn)
         self.misreg_guess = np.asarray(alpha, dtype=float)
 
     def _base_header(self) -> fits.Header:
@@ -879,6 +1035,44 @@ class LBTSynIM:
         hdr["IMATTN"] = imat_tn or "unknown"
         hdr["RECTN"] = tn
         return hdr
+
+    # ------------------------------------------------------------------
+    # initial registration: helpers (slopes per subaperture j on the two
+    # pupils: raw rows [half:] -> pupil 0 with xsign, rows [:half] -> pupil 1 with ysign)
+    # ------------------------------------------------------------------
+    def _pupil_pair(self, raw: np.ndarray):
+        """Raw simulator slopes -> (pupil 0, pupil 1) slope vectors per
+        subaperture, with the configured signs."""
+        half = raw.shape[0] // 2
+        return self.xsign * raw[half:], self.ysign * raw[:half]
+
+    @staticmethod
+    def _tilt_modes(A, B) -> tuple:
+        """The two modes with the largest mean slope: tip and tilt have
+        uniform slopes, the other low-order modes (defocus, astigmatisms)
+        average to zero. (Coma also has a net slope -- give `tilt_modes`
+        explicitly if the calibrated modes include it.)"""
+        return tuple(sorted(np.argsort(np.hypot(A.mean(0), B.mean(0)))[-2:].tolist()))
+
+    @staticmethod
+    def _vector_angles(P0, P1, modes) -> np.ndarray:
+        """Angle [deg] of the point (mean slope on pupil 0, mean slope on
+        pupil 1) of each of `modes`."""
+        return np.degrees(np.arctan2(P1[:, list(modes)].mean(0), P0[:, list(modes)].mean(0)))
+
+    @staticmethod
+    def _wrap(angle):
+        """Angle(s) in degrees wrapped to [-180, 180)."""
+        return (np.asarray(angle, dtype=float) + 180.0) % 360.0 - 180.0
+
+    @staticmethod
+    def _pair_residual(sim_pair, meas_pair) -> float:
+        """Relative residual between simulated and measured slope vectors of
+        a few modes, with one NON-NEGATIVE gain per mode: a free signed gain
+        would absorb exactly the sign errors a wrong flip causes."""
+        sim, meas = np.concatenate(sim_pair), np.concatenate(meas_pair)
+        gain = np.maximum(0.0, (sim * meas).sum(0) / ((sim * sim).sum(0) + 1e-30))
+        return float(np.linalg.norm(meas - sim * gain) / (np.linalg.norm(meas) + 1e-30))
 
     # ==================================================================
     # PUBLIC API
@@ -942,18 +1136,7 @@ class LBTSynIM:
         # difference call in this run, then deleted at the very end.
         tmp_tag = "tmp"
 
-        err = tol + 1
-        k = 0
-        while err > tol and k < max_its:
-            sens = self._sensitivity_matrix(alpha, eps, nmodes, tmp_tag)
-            synim = self._synthetic_im(alpha, nmodes, tmp_tag=tmp_tag)
-            gain = np.diag(np.linalg.pinv(synim) @ refim)
-            residual = (refim @ np.diag(1 / gain)) - synim
-            dalpha = np.linalg.pinv(sens) @ residual.flatten()
-            alpha_new = alpha + dalpha
-            err = np.max(np.minimum(np.abs(dalpha) / np.abs(alpha_new), np.abs(alpha_new)))
-            alpha = alpha_new
-            k += 1
+        alpha, err, k = self._fit_registration(refim, alpha, eps, nmodes, tol, max_its, tmp_tag)
 
         if err > tol:
             self._cleanup_tmp_products(tmp_tag)
@@ -969,7 +1152,7 @@ class LBTSynIM:
         ifunc_new, ifunc_inv_new, mask_new = self._register_ifunc_and_klinv(alpha)
         ifunc_file, ifunc_inv_file, pupilstop_file = self._save_ifunc_products(
             ifunc_new, ifunc_inv_new, mask_new, tn)
-        meas_path = (measured_imat if isinstance(measured_imat, (str, Path))
+        meas_path = (_abs(measured_imat) if isinstance(measured_imat, (str, Path))
                      else self._save_measured_imat(measured, tn))
 
         result = RegistrationResult(
@@ -997,6 +1180,230 @@ class LBTSynIM:
         self._cleanup_tmp_products(tmp_tag)
         self.reg_tn = tn
         return result
+
+    def initial_registration(self, measured_imat: Union[np.ndarray, str, Path],
+                              save: bool = True) -> InitialRegistration:
+        """Starting point for a NEW registration, from a measured IM -- run
+        this before `update_registration` (whose linearised fit needs it).
+        `xsign`, `ysign` and the x/y order are taken as configured; `flip`
+        and the rotation are found:
+
+        1. Simulate a few modes (`initial_registration.calibration_modes`, 5)
+           at the current registration.
+        2. Rotation from the two tilt modes: the mean slopes of a tilt give a
+           point in the (pupil-0, pupil-1) plane; the angle between the
+           simulated and the measured point is the rotation, averaged over
+           the two tilts. Both senses of the rotation are simulated and the
+           lower residual kept (the sign convention of `rot` is not assumed).
+        3. Repeat with `flip` negated; the flip with the lower residual wins.
+        4. Rotation-only fit with the standard registration algorithm
+           (shifts and magnification have step 0, so they are not fitted),
+           coarse to fine: `initial_registration.stages` = [number of modes,
+           rotation step in degrees], e.g. 10 modes / 5 deg first, then more
+           modes and a smaller step.
+
+        Sets `flip` and `misreg_guess` on this object (`reg_tn` is reset so
+        IMs now use this starting point) and, if `save`, writes them to the
+        config file (comments kept, backup next to it). Then check it with
+        `plot_registration_check` and run `update_registration`.
+
+        Parameters
+        ----------
+        measured_imat : ndarray or path
+            Measured IM (hardware order) with at least as many modes as the
+            largest stage.
+        save : bool
+            Write the result to the config file (default True).
+        """
+        cfg = {"calibration_modes": 5, "tilt_modes": None, "max_iterations": 10,
+               "stages": [[10, 5.0], [20, 2.0], [50, 1.0], [100, 0.5]],
+               **self.config.get("initial_registration", {})}
+        nc = int(cfg["calibration_modes"])
+        measured = self._load_imat(measured_imat)
+        if measured.shape[1] < nc:
+            raise ValueError(f"the measured IM has {measured.shape[1]} modes, calibration_modes is {nc}.")
+        geom = self._pupil_geometry(1)
+        half = geom["nslopes"] // 2
+        stages = [(min(int(n), measured.shape[1]), float(step)) for n, step in cfg["stages"]]
+
+        # measured slopes per subaperture j on pupil 0 / pupil 1: [j, mode]
+        frame = measured[: geom["nslopes"]][geom["pupids"]]
+        meas_pair = (frame[geom["k0"]][:, :nc], frame[geom["k1"]][:, :nc])
+
+        alpha0 = self.misreg_guess.copy()
+        start = (self.flip, self.misreg_guess.copy(), self.reg_tn)
+        tmp_tag = "tmp"
+        try:
+            # 1) simulate at the current registration, find the tilt modes
+            raw = {self.flip: self._simulate_raw(alpha0, nc, tmp_tag)}
+            tilts = (tuple(cfg["tilt_modes"]) if cfg["tilt_modes"]
+                     else self._tilt_modes(raw[self.flip][half:], raw[self.flip][:half]))
+            meas_angle = self._vector_angles(*meas_pair, tilts)
+
+            # 2-3) rotation from the tilts for each flip; the lower residual picks the flip
+            trials = {}
+            for flip in (self.flip, not self.flip):
+                if flip not in raw:
+                    raw[flip] = self._simulate_raw(alpha0, nc, tmp_tag, flip=flip)
+                d = self._wrap(meas_angle - self._vector_angles(*self._pupil_pair(raw[flip]), tilts))
+                delta = float(np.degrees(np.angle(np.exp(1j * np.radians(d)).sum())))
+                best = (self._pair_residual(self._pupil_pair(raw[flip]), meas_pair), float(alpha0[0]))
+                if abs(delta) > 0.05:
+                    for sense in (1.0, -1.0):
+                        a = alpha0.copy()
+                        a[0] = alpha0[0] + sense * delta
+                        sim = self._pupil_pair(self._simulate_raw(a, nc, tmp_tag, flip=flip))
+                        res = self._pair_residual(sim, meas_pair)
+                        if res < best[0]:
+                            best = (res, float(a[0]))
+                trials[flip] = {"residual": best[0], "rotation": best[1],
+                                "spread": abs(float(self._wrap(d[0] - d[1])))}
+            flip = min(trials, key=lambda f: trials[f]["residual"])
+            residuals = {f: round(t["residual"], 3) for f, t in trials.items()}
+            if trials[flip]["residual"] > 0.8 * trials[not flip]["residual"]:
+                warnings.warn(f"initial_registration({self.system}): the two flip values give similar "
+                              f"residuals {residuals} -- flip is ambiguous.")
+            elif trials[flip]["residual"] > 0.5:
+                warnings.warn(f"initial_registration({self.system}): neither flip fits well {residuals} -- "
+                              f"check xsign/ysign, the tilt modes and the measured IM.")
+
+            # 4) coarse-to-fine, rotation-only refinement (steps of 0 are not fitted)
+            self.flip = flip
+            refim = self._reshape_to_pupil_frame(measured, max(n for n, _ in stages))
+            alpha = alpha0.copy()
+            alpha[0] = trials[flip]["rotation"]
+            log = []
+            for nmodes, step in stages:
+                alpha, err, its = self._fit_registration(
+                    refim, alpha, np.array([step, 0.0, 0.0, 0.0]), nmodes, tol=0.1,
+                    max_its=int(cfg["max_iterations"]), tmp_tag=tmp_tag,
+                    max_step=3 * step, err_scale=step)
+                log.append((nmodes, step, float(alpha[0]), its, bool(err <= 0.1)))
+            alpha = self._round_alpha(alpha)
+            self.misreg_guess, self.reg_tn = alpha, None
+            if save:
+                tn = _tn_now()
+                guess = dict(zip(("rotation", "shift_x", "shift_y", "magnification"), (float(a) for a in alpha)))
+                self._update_config({"flip": bool(flip), "misreg_guess": guess}, tn,
+                                    comment=f"set by initial_registration {tn}")
+        except Exception:
+            self.flip, self.misreg_guess, self.reg_tn = start
+            raise
+        finally:
+            self._cleanup_tmp_products(tmp_tag)
+
+        if not log[-1][4]:
+            warnings.warn(f"initial_registration({self.system}): the last refinement stage did not converge "
+                          f"({log[-1][3]} iterations) -- check the result with plot_registration_check.")
+        return InitialRegistration(
+            flip=bool(flip), rotation=float(alpha[0]), rotation_from_tilts=trials[flip]["rotation"],
+            flip_residuals={f: t["residual"] for f, t in trials.items()}, tilt_modes=tilts,
+            tilt_angle_spread=trials[flip]["spread"], stages=log)
+
+    def _cached_misreg_matrix(self, mode: int, alpha0, steps):
+        """(S, s0, path) of a saved misregistration matrix with identical
+        parameters (mode, linearisation point, steps, flip, conventions), or
+        None."""
+        for path in sorted(self.output_dir.glob(f"MisRegIM_{self.system}_mode{mode}_[0-9]*.fits"), reverse=True):
+            hdr = fits.getheader(path)
+            same = lambda key, value: abs(hdr.get(key, np.nan) - value) < 1e-9
+            if (hdr.get("MODE") == mode and bool(hdr.get("FLIP")) == self.flip and
+                    same("ROT0", alpha0[0]) and same("SHIFTX0", alpha0[1]) and same("SHIFTY0", alpha0[2]) and
+                    same("MAG0", alpha0[3]) and same("DROT", steps[0]) and same("DSHIFT", steps[1]) and
+                    same("XSIGN", self.xsign) and same("YSIGN", self.ysign) and
+                    abs(hdr.get("SLOPESCL", 0.0) - self.slopes_scale) <= 1e-6 * self.slopes_scale):
+                data = fits.getdata(path)
+                return data[:, :3], data[:, 3], path
+        return None
+
+    def misregistration_matrix(self, mode: int, min_sensitivity: float = 1e-3,
+                                min_relative: float = 0.2) -> MisregistrationMatrix:
+        """Interaction matrix of the misregistration (rotation, shift_x,
+        shift_y) for ONE mode, linearised around the current registration
+        (`misreg_guess`: the last fit, `initial_registration`, or the
+        config). Multiplying that mode's measured slopes by it returns the
+        misregistration (`MisregistrationMatrix.estimate`).
+
+        Seven single-mode SPECULA runs (the push-pull generator starts at
+        `mode`; the DM keeps all its modes): the reference, and +/- the
+        steps `registration.delta_rotation` and `registration.delta_shift`
+        (x and y). Magnification is not part of it.
+
+        **Units and convention**: like every IM in this class, the matrix is
+        in hardware order and hardware units (xsign/ysign and `slopes_scale`
+        applied), and its columns are per DEGREE (rotation) and per PIXEL
+        (shift_x, shift_y) of the DM pupil grid; a measured column of a
+        measured IM can be used as is. Saved as
+        `MisRegIM_<system>_mode<m>_<TN>.fits` (columns: S_rotation, S_shift_x,
+        S_shift_y, s0); identical calls are loaded from the file.
+
+        A warning is raised when a column has little signal, so the mode
+        cannot determine that parameter -- e.g. axially symmetric modes such
+        as defocus do not respond to rotation, and tilts hardly respond to
+        shifts. To compare columns in the same unit, each one is expressed as
+        its norm relative to the reference slopes per PIXEL of displacement
+        at the pupil edge (rotation: per degree divided by the edge
+        displacement of one degree). A column is flagged when that is below
+        `min_sensitivity`, or below `min_relative` times the strongest column.
+        (Absolute levels are not meaningful on their own: the warp's
+        interpolation gives even an insensitive column a small floor.)
+        `MisregistrationMatrix.sensitivity` holds the per-degree / per-pixel
+        values.
+        """
+        reg = self.config["registration"]
+        steps = np.array([reg["delta_rotation"], reg["delta_shift"], reg["delta_shift"]], dtype=float)
+        if not 0 <= mode < self.default_nmodes:
+            raise ValueError(f"mode must be in [0, {self.default_nmodes}), got {mode}.")
+        if (steps <= 0).any():
+            raise ValueError("registration.delta_rotation and delta_shift must be non-zero.")
+        alpha0 = self.misreg_guess.copy()
+
+        cached = self._cached_misreg_matrix(mode, alpha0, steps)
+        if cached is not None:
+            S, s0, path = cached
+        else:
+            geom, tmp_tag = self._pupil_geometry(1), "tmp"
+
+            def hardware(alpha):
+                return self._specula_to_hardware(
+                    self._simulate_raw(alpha, 1, tmp_tag, first_mode=mode), geom)[:, 0]
+
+            try:
+                s0 = hardware(alpha0)
+                S = np.empty((geom["nslopes"], 3))
+                for k in range(3):
+                    plus, minus = alpha0.copy(), alpha0.copy()
+                    plus[k] += steps[k]
+                    minus[k] -= steps[k]
+                    S[:, k] = (hardware(plus) - hardware(minus)) / (2 * steps[k])
+            finally:
+                self._cleanup_tmp_products(tmp_tag)
+
+            path = self.output_dir / f"MisRegIM_{self.system}_mode{mode}_{_tn_now()}.fits"
+            hdr = self._base_header()
+            hdr["ORDER"] = "hardware"
+            hdr["SLOPESCL"] = self.slopes_scale
+            hdr["MODE"] = mode
+            hdr["FLIP"] = self.flip
+            hdr["ROT0"], hdr["SHIFTX0"], hdr["SHIFTY0"], hdr["MAG0"] = (float(a) for a in alpha0)
+            hdr["DROT"], hdr["DSHIFT"] = float(steps[0]), float(steps[1])
+            hdr["COLUMNS"] = "d/rot[deg],d/shx[px],d/shy[px],s0"
+            fits.writeto(path, np.column_stack([S, s0]), header=hdr, overwrite=True)
+
+        norm0 = np.linalg.norm(s0)
+        if norm0 == 0:
+            raise ValueError(f"mode {mode} has no signal at the current registration.")
+        sensitivity = np.linalg.norm(S, axis=0) / norm0           # per degree / per pixel
+        edge = self.pixel_pupil / 2 * np.pi / 180                 # pupil-edge displacement [px] of 1 degree
+        per_pixel = sensitivity / np.array([edge, 1.0, 1.0])      # same unit for the three columns
+        weak = (per_pixel < min_sensitivity) | (per_pixel < min_relative * per_pixel.max())
+        low = [f"{name} ({100 * v / per_pixel.max():.0f}% of the strongest column)"
+               for name, v, w in zip(("rotation", "shift_x", "shift_y"), per_pixel, weak) if w]
+        if low:
+            warnings.warn(f"misregistration_matrix({self.system}, mode {mode}): little signal for "
+                          f"{', '.join(low)} -- this mode cannot determine them reliably.")
+        return MisregistrationMatrix(mode=mode, S=S, R=np.linalg.pinv(S), s0=s0, alpha0=alpha0[:3].copy(),
+                                     sensitivity=sensitivity, path=path)
 
     def compute_interaction_matrix(self, rMod: float = 3.0,
                                     seeing: Optional[float] = None,
@@ -1113,8 +1520,9 @@ class LBTSynIM:
             header. `total_commands`/`total_slopes`/the Rec header template
             stay constant regardless of binning.
         output_dir : str, Path, or None
-            Full directory to write ``RecMat_<system>_<TN>.fits`` into.
-            Defaults to this system's output folder (``root_dir/.output``).
+            Directory to write ``RecMat_<system>_<TN>.fits`` into (a relative
+            path is relative to the folder Python was started from).
+            Defaults to this system's output folder (`paths.output_dir`).
 
         Returns
         -------
@@ -1151,7 +1559,7 @@ class LBTSynIM:
 
         tn = _tn_now()
         hdr = self._build_rec_header(rec_cfg, Nmodes, argos, imat_tn, tn, binning)
-        out_dir = Path(output_dir) if output_dir is not None else self.output_dir
+        out_dir = _abs(output_dir) if output_dir is not None else self.output_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         fits.writeto(out_dir / f"RecMat_{self.system}_{tn}.fits", Rec, header=hdr, overwrite=True)
         return Rec
