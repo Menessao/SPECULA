@@ -76,13 +76,13 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
     print(f"r0 = {r0}m, L0 = {L0}m")
 
 
-    # if pupil_mask_tag is not None:
-    #     fname = os.path.join(root_dir,'pupilstop/'+pupil_mask_tag+f'_{pupil_pixels:1.0f}pixels.fits')
-    #     hdu = fits.open(fname)
-    #     pupil_mask = hdu[1].data
-    # else:
-    pupil_mask = make_mask(np_size=pupil_pixels, diaratio=diaratio, obsratio=obsratio)
-    fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask,overwrite=True)
+    if pupil_mask_tag is not None:
+        fname = os.path.join(root_dir,'pupilstop/'+pupil_mask_tag+f'_{pupil_pixels:1.0f}pixels.fits')
+        hdu = fits.open(fname)
+        pupil_mask = hdu[1].data
+    else:
+        pupil_mask = make_mask(np_size=pupil_pixels, diaratio=diaratio, obsratio=obsratio)
+        fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask,overwrite=True)
     # save_pupil(pupil_mask,destination_dir=root_dir+'/pupilstop/',fname=tag+f'_{pupil_pixels:1.0f}pixels',Npix=Npix,D=D)
     # print(f'Saved pupil mask as {root_dir}/pupilstop/{tag}_{pupil_pixels:1.0f}pixels.fits')
         
@@ -319,6 +319,7 @@ if __name__ == "__main__":
     ekarus_dir = '/raid1/mmenessini/calibration/EKARUS'
     chaos_dir = '/raid1/mmenessini/calibration/Cascading'
     fsoc_dir = '/raid1/mmenessini/calibration/FSOC'
+    vlt_dir = '/raid1/mmenessini/calibration/VLT'
 
     # Npix = 160
     # compute_and_save_influence_functions(root_dir,tag='bmc2k_vlt', pupil_pixels=Npix, n_acts=50,
@@ -338,9 +339,12 @@ if __name__ == "__main__":
     # compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=2)
 
-    Npix = 420
-    compute_and_save_influence_functions(chaos_dir,tag=f'dm820_{Npix}pix', pupil_pixels=Npix, n_acts=32,
-                                            geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0, margin=0)
+    Npix = 220
+    compute_and_save_influence_functions(vlt_dir,tag=f'dm1200_{Npix}pix', pupil_pixels=Npix, n_acts=42, pupil_mask_tag='vlt_pupil',
+                                            geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.2, margin=0)
+    # Npix = 420
+    # compute_and_save_influence_functions(chaos_dir,tag=f'dm820_{Npix}pix', pupil_pixels=Npix, n_acts=32,
+    #                                         geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0, margin=0)
 
     # Npix = 160
     # compute_and_save_influence_functions(soul_dir,tag='simul_s1.0_diam8.0m', pupil_pixels=Npix, n_acts=32,

@@ -1,0 +1,101 @@
+# Interaction matrix measured on a partially corrected atmosphere (SIMPC), perfect AND partial correction in the same file: the N
+# controlled modes are corrected by a per-mode CORRECTION VECTOR (BaseValue in <root>/data, written by generation.save_correction_vector)
+# that scales the modal coefficients of the turbulence before they command a second DM. A vector of ones is the perfect correction.
+# One run = one push-pull cycle (total_time = 2 N time_step) on ONE random screen (atmo_random.update_interval = 2 N).
+# The generator overrides: main.{root_dir, total_time}, pupilstop.tag, pyr.{pup_diam, pup_dist, mod_amp, wavelengthInNm},
+# source_ngs.wavelengthInNm, pyr_slopes.pupdata_object, seeing_random.constant, atmo_random.{update_interval, seed, L0},
+# modal_analysis_random.{ifunc_inv_object, nmodes}, scale_random.constant_mul_data, dm_random.{ifunc_object, m2c_object, nmodes},
+# dm.{ifunc_object, m2c_object, nmodes}, pushpull.nmodes, pyr_im_calibrator.{im_tag, nmodes, overwrite}.
+
+seeing_random:
+  class:             'RandomGenerator'
+  amp:               0.0
+  constant:          1.0
+  distribution:      'UNIFORM'
+  outputs: ['output']
+
+# Independent random phase screens
+atmo_random:
+  class:             'AtmoRandomPhase'
+  simul_params_ref:  'main'
+  L0:                25
+  update_interval:   3642                # overridden: 2 N frames per screen
+  source_dict_ref:   ['source_ngs']
+  inputs:
+    seeing: 'seeing_random.output'
+    pupilstop: 'pupilstop'
+  outputs: ['out_source_ngs_ef']
+
+# Modal analysis of the turbulence, scaled by the correction vector, applied by a second DM
+modal_analysis_random:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'  # overridden
+  nmodes:            1200                # overridden
+  inputs:
+    in_ef: 'atmo_random.out_source_ngs_ef'
+  outputs: ['out_modes']
+
+scale_random:
+  class:             'BaseOperation'
+  constant_mul_data: 'correction_vector' # overridden: stem of the BaseValue file
+  inputs:
+    in_value1: 'modal_analysis_random.out_modes'
+  outputs: ['out_value']
+
+dm_random:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'   # overridden
+  m2c_object:        'bmc2k_vlt_m2c'     # overridden
+  nmodes:            1200                # overridden
+  height:            0
+  inputs:
+    in_command: 'scale_random.out_value'
+  outputs: ['out_layer']
+
+atmo_pc:
+  class:             'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_ngs_ef'   # turbulence
+    in_ef2: 'dm_random.out_layer'             # partial correction
+  outputs: ['out_ef']
+
+# Partially corrected turbulence + the push-pull DM
+ef_mode:
+  class:             'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_pc.out_ef'
+    in_ef2: 'dm.out_layer'
+  outputs: ['out_ef']
+
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       1200                     # overridden
+  ncycles:      1
+  amp:          25                       # [nm]
+  outputs:      ['output']
+
+pyr_im_calibrator:
+  class:        'ImCalibrator'
+  nmodes:       1200                     # overridden
+  im_tag:       'pyr_im_pc'              # overridden
+  overwrite:    true
+  inputs:
+    in_slopes:    'pyr_slopes.out_slopes'
+    in_commands:  'pushpull.output'
+
+dm_override:
+  inputs:
+    in_command: 'pushpull.output'
+
+pyr_override:
+  inputs:
+    in_ef: 'ef_mode.out_ef'
+
+cred1_override:
+  photon_noise:   false
+  readout_noise:  false
+  excess_noise:   false
+
+remove: ['seeing', 'wind_speed', 'wind_direction', 'atmo', 'prop', 'ef_prop', 'ef_prop_science', 'source_science', 'pyr_modalrec',
+         'bootstrap', 'filter', 'coro_psf', 'psf', 'dm_mode_res', 'atmo_modes', 'data_store',]

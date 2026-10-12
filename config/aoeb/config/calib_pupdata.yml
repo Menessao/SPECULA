@@ -1,0 +1,33 @@
+# Pupil data of the pyramid (PyrPupdataCalibrator): flat wavefront through the pupil stop, noise-free detector.
+# The generator overrides: main.root_dir, pupilstop.tag, pyr.{pup_diam, pup_dist, wavelengthInNm}, source_ngs.wavelengthInNm,
+# pyr_pupdata.output_tag.
+
+# Flat wavefront: the pupil stop only (no atmosphere, no DM)
+prop_flat:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs']
+  inputs:
+    common_layer_list: ['pupilstop']
+  outputs:           ['out_source_ngs_ef']
+
+pyr_pupdata:
+  class:             'PyrPupdataCalibrator'
+  output_tag:        'pyr_pupdata'
+  inputs:
+    in_pixels:       'cred1.out_pixels'
+
+main_override:
+  total_time: 0.002                      # a few frames
+
+pyr_override:
+  inputs:
+    in_ef: 'prop_flat.out_source_ngs_ef'
+
+cred1_override:
+  photon_noise:   false
+  readout_noise:  false
+  excess_noise:   false
+
+remove: ['seeing', 'wind_speed', 'wind_direction', 'atmo', 'prop', 'ef_prop', 'ef_prop_science', 'source_science',
+         'pyr_slopes', 'pyr_modalrec', 'bootstrap', 'filter', 'dm', 'coro_psf', 'psf', 'dm_mode_res', 'atmo_modes', 'data_store']

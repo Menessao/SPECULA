@@ -26,7 +26,7 @@ def save_pupil(pupil, destination_dir:str, fname:str, Npix:int, D:float):
     pupilstop.save(fpath)
 
 def save_pupil_to_size(data_dir:str, destination_dir:str, tag:str, Npix:int, thr:float=0.9, D:float=8.2):
-    hdu = fits.open(os.path.join(data_dir, tag+f'_{Npix}pixels.fits'))
+    hdu = fits.open(os.path.join(data_dir, tag+f'_512pixels.fits'))
     data = hdu[0].data
     pupil = data[:,:,0]
     new_pupil = toccd(pupil,(Npix,Npix),xp=specula.xp)
@@ -66,11 +66,11 @@ if __name__ == "__main__":
     else:
         angle = -30
 
-    Npix = 160
-    destination_dir = '/raid1/mmenessini/calibration/SOUL/pupilstop'
-    tag = f'LBT_pupil_8m_{Npix}pixels'
-    mask = make_mask(np_size=Npix)
-    save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
+    # Npix = 160
+    # destination_dir = '/raid1/mmenessini/calibration/SOUL/pupilstop'
+    # tag = f'LBT_pupil_8m_{Npix}pixels'
+    # mask = make_mask(np_size=Npix)
+    # save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
 
     # diaratio = 36.5/38
     # destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
@@ -78,31 +78,31 @@ if __name__ == "__main__":
     # save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, diaratio=diaratio, Npix=Npix, overwrite=True)
     # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
 
-    # data_dir = '/raid1/mmenessini/calibration/VLT'
-    # destination_dir = '/raid1/mmenessini/calibration/XAO/pupilstop'
-    # tag = 'vlt_pupil'
-    # Npix = 160
-    # aperture=save_pupil_to_size(data_dir, destination_dir, tag, Npix, thr=0.69)
+    data_dir = '/raid1/mmenessini/calibration/VLT'
+    destination_dir = '/raid1/mmenessini/calibration/VLT/pupilstop'
+    tag = 'vlt_pupil'
+    Npix = 220
+    aperture=save_pupil_to_size(data_dir, destination_dir, tag, Npix, thr=0.69)
     # plt.figure()
     # plt.imshow(aperture,origin='lower',cap='gray')
     # plt.show()
 
-    destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
-    Npix = 400 
-    tag = f'dm468_{Npix}pix_pupil'
-    mask = make_mask(np_size=Npix)
-    save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=1.82)
-    # tag = 'copernico_pupil'
-    # save_copernico_pupil(destination_dir, tag, overwrite=True)
-    # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
-    # plt.figure()
-    # plt.imshow(aperture,origin='lower',cmap='gray')
-    # plt.show()
+    # destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
+    # Npix = 400 
+    # tag = f'dm468_{Npix}pix_pupil'
+    # mask = make_mask(np_size=Npix)
+    # save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=1.82)
+    # # tag = 'copernico_pupil'
+    # # save_copernico_pupil(destination_dir, tag, overwrite=True)
+    # # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
+    # # plt.figure()
+    # # plt.imshow(aperture,origin='lower',cmap='gray')
+    # # plt.show()
     
-    destination_dir = '/raid1/mmenessini/calibration/Cascading/pupilstop'
-    Npix = 420
-    tag = f'dm820_{Npix}pix_pupil'
-    mask = make_mask(np_size=Npix)
-    save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
+    # destination_dir = '/raid1/mmenessini/calibration/Cascading/pupilstop'
+    # Npix = 420
+    # tag = f'dm820_{Npix}pix_pupil'
+    # mask = make_mask(np_size=Npix)
+    # save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
 
 

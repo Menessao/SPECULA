@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aoeb"
+version = "0.1.0"
+description = "Semi-analytical error budget of a pyramid-WFS high-contrast AO system from SPECULA calibration products"
+requires-python = ">=3.9"
+dependencies = ["numpy", "scipy", "pandas", "astropy", "pyyaml"]
+
+[project.scripts]
+aoeb-generate = "aoeb.scripts.generate:main"
+aoeb-run = "aoeb.scripts.run:main"
+
+[project.optional-dependencies]
+plots = ["matplotlib"]
+test = ["pytest", "matplotlib"]
+
+[tool.setuptools.packages.find]
+include = ["aoeb*"]
+exclude = ["aoeb.tests*"]
+
+[tool.setuptools.package-data]
+aoeb = ["config/*.yml"]
+
+[tool.pytest.ini_options]
+testpaths = ["aoeb/tests"]
+pythonpath = ["aoeb/tests"]

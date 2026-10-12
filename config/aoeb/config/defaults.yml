@@ -1,0 +1,79 @@
+# aoeb defaults: THE single source of the default configuration (config.py loads this file). Copy it, keep the keys you change;
+# unknown keys are errors. Override on the command line:  python -m aoeb.scripts.run scan study.yml loop.latency_s=0.0008 sensors.n_subaps=[48]
+paths:
+  root_dir: null                        # products live here, e.g. /raid1/RISTRETTO (required); also passed to SPECULA as main.root_dir
+  specula_dir: null                     # directory of the SPECULA ymls below; null: the packaged aoeb/config (all of them are there)
+  main: ristretto_vis.yml              # base simulation; the calib_* ymls are applied on top of it
+  pupdata: calib_pupdata.yml
+  im: calib_im.yml                      # diffraction-limited interaction matrix
+  alias: calib_alias_sn_thrp.yml        # aliasing + slope null + throughput + noise illumination
+  pc: calib_pc.yml                      # IM with a correction vector: perfect and partial correction
+  pupilstop_tag: vlt_pupil_220pixels
+  dm_tag: dm1200_220pix                     # DM data objects {dm_tag}_ifunc, {dm_tag}_m2c, {dm_tag}_kl_inv (SPECULA and the budget)
+
+telescope: {diameter: 8.2, L0: 25.0}      # L0 is also passed to the SPECULA aliasing run (atmo_random.L0)
+
+atmosphere:                             # one profile for the effective wind and the chromatic terms
+  from_specula: null                    # e.g. ristretto_main.yml: reads its `atmo` section (heights, Cn2, wind_speed)
+  heights: [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136]       # [m] at zenith
+  cn2: [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]
+  wind_speed: [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]        # [m/s]
+  wind: null                            # effective wind [m/s]; null: Cn2-weighted 5/3 moment of wind_speed
+
+sensors:
+  n_subaps: [10, 20, 40, 48]
+  modes_per_subap: {10: 54, 20: 250, 40: 1000, 48: 1200}
+  n_modes_ho: 1200                      # modes corrected by the high-order stage ('multistage')
+  rMods: [0.0, 1.0, 2.0, 3.0]
+  slopes_from_intensity: false
+
+detector: {ron_e: 0.5, qe: 0.1, excess_noise: true, excess_delta: 1.0}
+
+wavelengths:
+  sensing_nm: [750.0]                   # one set of products per wavelength; pyr.wavelengthInNm and source_ngs.wavelengthInNm are both set to it
+  science_nm: 1650.0                    # chromatic terms; source_science.wavelengthInNm of the aliasing run
+
+loop:
+  fs: {min: 100, max: 5000, n: 25}      # or an explicit list [250, 500, 1000]
+  latency_s: 0.00025                     # end of the exposure -> command applied (any real value)
+  controllers: [int]                    # int | leaky | iir (per-mode IIR filters of iir_file, only their global gain is optimised)
+  iir_file: null                        # file saved by SPECULA's IirFilterData.save (num / den per mode, lowest order first)
+  iir_optimize_gain: true               # false: evaluate the filters exactly as given
+  scenarios: [standard, multistage]
+  n_fold: 3
+
+scan:
+  seeings: [0.5, 0.7, 0.9, 1.1, 1.3]
+  flux: {min: 1.0e5, max: 1.0e9, n: 9}  # photons/s at the detector, log-spaced; or an explicit list
+  store_modes: 0                        # keep per-mode rows of the first K modes
+
+chromatic:                              # needs wavelengths.sensing_nm
+  enabled: false
+  zenith_deg: 40.0
+  T_celsius: 11.5
+  P_pa: 74300.0
+  RH_pct: 10.0
+  multiplicative: false                 # optional terms, all off by default
+  compensation: 0.0
+  fresnel: false
+  scintillation: false
+  k_max: null                           # [c/m] scintillation upper limit; null: Nyquist of the pupil grid
+  delta_n: null                         # override of n_sensing - n_science (skips the refractivity model)
+  heights_are_slant: false              # heights already include the airmass (TipTop's Hs)
+
+options: {crosstalk: false, fixed_point: false, kl_pad: 8}
+
+generation:                             # SPECULA calibration runs (generator); every realisation is its own run with seed = seed0 + i + 1
+  time_step: 0.0005
+  alias_magnitude: 5.0
+  n_screens_alias: 1                    # independent aliasing runs per case, pooled (frames per run: main_override.total_time of the yml)
+  n_screens_pc: 70                      # independent PC-IM runs per case, averaged: ONE push-pull cycle (total_time = 2 N time_step) and one screen each
+  pc_corrections: []                    # e.g. [[0.99, 0.2], [0.9, 0.2]]: extra IMs with a partial correction, (max_corr, min_corr) of the correction vector
+  seed0: 0
+  discard_frames: 0                     # frames dropped from the start of the aliasing runs (leading all-zero frames are always dropped)
+  n_modes_max: 1372
+  pup_dist_min: 14.0
+  pup_dist_per_subap: 1.25              # pyr.pup_dist = max(pup_dist_min, pup_dist_per_subap * n_subaps): independent of the other sensors
+  overwrite: false
+
+output: {prefix: results/scan}          # <prefix>_totals.csv, _modes.csv and the resolved _config.yml

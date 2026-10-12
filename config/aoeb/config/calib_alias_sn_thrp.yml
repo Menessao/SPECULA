@@ -1,0 +1,83 @@
+# Aliasing + slope null + throughput + noise-illumination calibration in ONE run, derived from calib_pc_sn_alias.yml.
+# The stored slopes, frames and modes give all four products in post-processing (generation.process_aliasing_run).
+# Changes with respect to that file (so the run no longer depends on a reconstructor):
+#   * pyr_sn (SnCalibrator) removed: the slope null is the mean of the stored slopes
+#   * pyr_modalrec removed (added to `remove`): aliasing modes are computed offline as R @ slopes
+#   * detector noise OFF: the aliasing std and the average frame are noise-free
+#   * the data store keeps the pixel frames, the slopes and the simulated turbulence modes
+# The generator overrides: main.root_dir, pupilstop.tag, pyr.{pup_diam, pup_dist, mod_amp, wavelengthInNm},
+# source_ngs.{wavelengthInNm, magnitude}, source_science.wavelengthInNm, pyr_slopes.pupdata_object, seeing_random.constant,
+# atmo_random.{seed, L0}, modal_analysis.{ifunc_inv_object, nmodes}, dm_perfect.{ifunc_object, m2c_object, nmodes},
+# data_store.{store_dir, create_tn}.
+# The science source is propagated like the NGS (same random screen, same perfect-correction DM) up to ef_prop_science.
+
+seeing_random:
+  class:             'RandomGenerator'
+  amp:               0.0
+  constant:          1.0
+  distribution:      'UNIFORM'
+  outputs: ['output']
+
+# Independent random phase screens (one new realisation per time step)
+atmo_random:
+  class:                'AtmoRandomPhase'
+  simul_params_ref:  'main'
+  L0:                   25
+  source_dict_ref:      ['source_ngs', 'source_science']
+  inputs:
+    seeing: 'seeing_random.output'
+    pupilstop: 'pupilstop'
+  outputs: ['out_source_ngs_ef', 'out_source_science_ef']
+
+# Modal decomposition of the atmospheric phase (also stored: analytical-variance check)
+modal_analysis:
+  class: 'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  nmodes: 1300
+  inputs:
+    in_ef: 'atmo_random.out_source_ngs_ef'
+  outputs: ['out_modes']
+
+# Perfect correction of the first nmodes modes
+dm_perfect:
+  class: 'DM'
+  simul_params_ref: 'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'
+  m2c_object:        'bmc2k_vlt_m2c'
+  nmodes:            1300
+  height:            0
+  inputs:
+    in_command: 'modal_analysis.out_modes'
+  outputs: ['out_layer']
+
+ef_prop_override:
+  inputs:
+    in_ef1: 'atmo_random.out_source_ngs_ef'
+    in_ef2: 'dm_perfect.out_layer'
+
+# the science source, propagated in the same way
+ef_prop_science_override:
+  inputs:
+    in_ef1: 'atmo_random.out_source_science_ef'
+    in_ef2: 'dm_perfect.out_layer'
+
+main_override:
+  total_time: 1.000
+
+pyr_override:
+  mod_amp: 1.0
+
+cred1_override:
+  photon_noise:   false
+  readout_noise:  false
+  excess_noise:   false
+
+data_store_override:
+  store_dir:         '/tmp/scratch_aliasing'
+  create_tn:           false
+  inputs:
+    input_list: ['pyr_frames-cred1.out_pixels', 'slopes-pyr_slopes.out_slopes', 'turb_modes-modal_analysis.out_modes']
+
+remove: ['atmo','seeing','wind_speed','wind_direction',
+        'psf','prop','coro_psf', 'bootstrap', # 'source_science', 'ef_prop_science',
+        'dm','dm_mode_res','filter', 'atmo_modes', 'pyr_modalrec']

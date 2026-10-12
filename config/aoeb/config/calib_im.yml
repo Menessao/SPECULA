@@ -1,0 +1,45 @@
+# Diffraction-limited interaction matrix: push-pull of the KL modes on a flat wavefront, noise-free (ImCalibrator).
+# The generator overrides: main.{root_dir, total_time}, pupilstop.tag, pyr.{pup_diam, pup_dist, mod_amp, wavelengthInNm},
+# source_ngs.wavelengthInNm, pyr_slopes.pupdata_object, dm.{ifunc_object, m2c_object, nmodes}, pushpull.nmodes,
+# pyr_im_calibrator.{im_tag, nmodes, overwrite}.
+
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       1821                     # overridden
+  ncycles:      1                        # one push and one pull per mode (total_time = 2 nmodes time_step)
+  amp:          25                       # [nm]
+  outputs:      ['output']
+
+pyr_im_calibrator:
+  class:        'ImCalibrator'
+  nmodes:       1821                     # overridden
+  im_tag:       'pyr_im'                 # overridden
+  overwrite:    true
+  inputs:
+    in_slopes:    'pyr_slopes.out_slopes'
+    in_commands:  'pushpull.output'
+
+# Pupil stop + DM (driven by the push-pull), no atmosphere
+prop_flat:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs']
+  inputs:
+    common_layer_list: ['pupilstop', 'dm.out_layer']
+  outputs:           ['out_source_ngs_ef']
+
+dm_override:
+  inputs:
+    in_command: 'pushpull.output'
+
+pyr_override:
+  inputs:
+    in_ef: 'prop_flat.out_source_ngs_ef'
+
+cred1_override:
+  photon_noise:   false
+  readout_noise:  false
+  excess_noise:   false
+
+remove: ['seeing', 'wind_speed', 'wind_direction', 'atmo', 'prop', 'ef_prop', 'ef_prop_science', 'source_science', 'pyr_modalrec',
+         'bootstrap', 'filter', 'coro_psf', 'psf', 'dm_mode_res', 'atmo_modes', 'data_store',]

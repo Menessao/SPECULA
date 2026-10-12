@@ -1,0 +1,216 @@
+# Base SPECULA simulation of the Ristretto-like system. The calib_*.yml files of this folder are applied on top of it
+# (`specula ristretto_main.yml calib_xxx.yml overrides.yml`) by aoeb.generation, which overrides main.root_dir, the pyramid geometry,
+# the sensing wavelength (pyr.wavelengthInNm AND source_ngs.wavelengthInNm: they must be equal), the science wavelength, the DM data
+# objects (from paths.dm_tag), seeing, modes, ... Adapted from the example main yml; the changes are marked with FIX.
+
+# Main simulation parameters
+main:
+  class:             'SimulParams'
+  root_dir:          '/path/to/calibration'  # CalibManager root directory (all the data are in subdirectories); overridden by aoeb
+  pixel_pupil:       160                   # Must match influence function computation
+  pixel_pitch:       0.0513                # [m] 8.2m / 160 pixels = 0.0513 m/pixel (Nyquist sampling of 10cm r0)
+  total_time:        4.000                 # [s]
+  time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
+  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  display_server:    false                 # Disable for batch runs
+
+# Atmospheric conditions
+seeing:
+  class:             'WaveGenerator'
+  constant:          0.88                  # [arcsec]
+  outputs:           ['output']
+
+wind_speed:
+  class:             'WaveGenerator'
+  constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
+  outputs:           ['output']
+
+wind_direction:
+  class:             'WaveGenerator'
+  constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
+  outputs:           ['output']
+
+# Natural guide star for the WFS. Its wavelength and the pyramid wavelength must be the same (aoeb sets both).
+source_ngs:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
+  height:            .inf                  # Infinite height (star)
+  magnitude:         7.0
+  wavelengthInNm:    750                   # [nm] sensing wavelength (FIX: equal to pyr.wavelengthInNm)
+
+# Science source, propagated like the NGS up to the science wavelength (ef_prop_science below)
+source_science:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On axis
+  height:            .inf
+  magnitude:         7.0
+  wavelengthInNm:    1650                  # [nm] science wavelength (aoeb: wavelengths.science_nm)
+
+# Telescope pupil geometry
+pupilstop:
+  class:             'Pupilstop'
+  tag:               'vlt_pupil_220pixels'
+
+# Multi-layer atmospheric model
+atmo:
+  class:             'AtmoEvolution'
+  simul_params_ref:  'main'
+  L0:                25.0                   # [m] Outer scale
+  heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] at 0 zenith angle
+  Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
+  fov:               0.0                    # [arcsec] Field of view
+  inputs:
+    seeing:          'seeing.output'
+    wind_speed:      'wind_speed.output'
+    wind_direction:  'wind_direction.output'
+  outputs:           ['layer_list']
+
+# Atmospheric propagation of both sources
+prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_ngs', 'source_science']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']       # Pupil
+  outputs:           ['out_source_ngs_ef', 'out_source_science_ef']     # FIX: was out_cource_science_ef
+
+ef_prop:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm.out_layer:-1'           # DM correction
+  outputs: ['out_ef']
+
+ef_prop_science:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_science_ef'    # Turbulence
+    in_ef2: 'dm.out_layer:-1'               # DM correction (the same as for the NGS)
+  outputs: ['out_ef']
+
+
+########################### 1st stage ##############################
+pyr:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          48.                     # Pupil diameter in subaps.
+  pup_dist:          60.                     # Separation between pupil centers in subaps.
+  fov:               2.0                     # Requested field-of-view [arcsec]
+  mod_amp:           3.0                     # Modulation radius (in lambda/D units)
+  output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    750                     # [nm] Pyramid wavelength (FIX: equal to source_ngs.wavelengthInNm)
+  inputs:
+    in_ef: 'ef_prop.out_ef'
+
+cred1:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]               # Total detector size
+  dt:                0.0005                  # [s] Integration time
+  bandw:             400                     # [nm]
+  photon_noise:      true
+  readout_noise:     true
+  excess_noise:      true
+  readout_level:     0.5                     # [e-/pix/frame]
+  emccd_gain:        400
+  quantum_eff:       0.2                     # QE x transmission
+  inputs:
+    in_i:            'pyr.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes:
+  class:                  'PyrSlopec'
+  pupdata_object:         'pyr_pupdata_48x48'
+  # sn_object:            'pyr3.0_48x48_sn'
+  inputs:
+    in_pixels:        'cred1.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modalrec:
+  class:             'Modalrec'
+  recmat_object:     'pyr3.0_48x48_1300modes_rec'
+  inputs:
+    in_slopes:       'pyr_slopes.out_slopes'
+  outputs:           ['out_modes']
+
+############################ Control ################################
+bootstrap:
+  class:              'ScheduleGenerator'
+  scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
+  modes_per_group:    [2,148,650,500] # Ncols
+  scheduled_times:    [0.01] # Nrows-1
+
+filter:
+  class:                'IirFilter'          # FIX: the Integrator lines were overwritten by this class (duplicate key)
+  simul_params_ref:     'main'
+  delay:                0.25                 # Total temporal delay in time steps is this value +1
+  iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5'
+  inputs:
+    delta_comm: 'pyr_modalrec.out_modes'
+    gain_mod: 'bootstrap.output'             # FIX: was bootstrap1.output (no such object)
+  outputs:  ['out_comm']
+
+# DM data objects: aoeb names them {paths.dm_tag}_ifunc, _m2c, _kl_inv
+dm:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'       # Our computed influence functions
+  m2c_object:        'bmc2k_vlt_m2c'         # Modal-to-command matrix
+  nmodes:            1300                    # Number of controlled modes
+  height:            0                       # Ground-conjugated DM
+  inputs:
+    in_command:      'filter.out_comm'
+  outputs:           ['out_layer']
+
+
+###########################################################
+##################### POST-PROCESSING #####################
+# Coronagraphic and non-coronagraphic PSFs at the science wavelength
+coro_psf:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    1650                    # [nm] science wavelength (FIX: was 750, the science source is at 1650)
+  nd:                4                       # 4x padding for PSF
+  start_time:        0.5
+  verbose: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'ef_prop_science.out_ef'
+
+psf:
+  class:             'PSF'
+  simul_params_ref:  'main'
+  wavelengthInNm:    1650                    # [nm] science wavelength
+  nd:                4
+  start_time:        1.0
+  inputs:
+    in_ef:           'ef_prop_science.out_ef'
+  outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+
+dm_mode_res:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  inputs:
+    in_ef: ['ef_prop.out_ef']
+  outputs: ['out_modes']
+
+atmo_modes:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  inputs:
+    in_ef: ['prop.out_source_ngs_ef']
+  outputs: ['out_modes']
+
+# Data store for results
+data_store:
+  class:             'DataStore'
+  store_dir:         '/path/to/results'      # Data result directory: 'store_dir'/TN/
+  inputs:
+    input_list: [
+                  'sr-coro_psf.out_sr',
+                  'coro_psf_int-coro_psf.out_int_coronagraph_psf_profile',
+                  'coro_psf_std-coro_psf.out_std_coronagraph_psf_profile',
+                  'atmo_res-atmo_modes.out_modes',
+                  'dm_res-dm_mode_res.out_modes',
+                  ]
