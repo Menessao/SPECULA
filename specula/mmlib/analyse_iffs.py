@@ -1,8 +1,10 @@
 import numpy as np
 from scipy.ndimage import shift, affine_transform
 from scipy.optimize import minimize
+from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
-from astropy.io import fits
+# from astropy.io import fits
+
 
 def compute_actuator_pitch(mask_shape: tuple, n_acts: int) -> float:
     """Estimates actuator pitch for a circular grid: dim / sqrt(4 * n_acts / pi)."""
@@ -162,11 +164,24 @@ def fit_amplitudes_to_sim_ifs(
     meas_mask: np.ndarray, 
     sim_ifs_registered: np.ndarray, 
     reg_param: float = 1e-4,
-    optimize_coords: bool = True
+    optimize_coords: bool = True,
+    neighbor_radius_pitches: float = 2.5,
+    return_diagnostics: bool = False
 ):
     """
     Fits measured IFs to registered simulated IFs, with optional per-actuator
     sub-pixel coordinate refinement.
+
+    neighbor_radius_pitches: each measured IF i is fitted ONLY against the
+        simulated IFs of actuators lying within this many actuator pitches of
+        actuator i (coupling is physically local; far coefficients are mostly
+        noise amplified by the overlap of the basis). All other entries of row i
+        are exactly zero. Set to None for the previous dense fit (all actuators,
+        row-mean subtracted).
+    return_diagnostics: if True, also returns a dict with the per-actuator
+        'gain' (diagonal), 'sigma' (rms of the measured IF far from the
+        actuator, i.e. noise + drift floor), 'gain_err' (1-sigma formal error
+        on the gain from that noise) and 'n_neighbors'.
 
     The coordinate refinement (phase 1) is independent across actuators -
     each simulated IF is only ever compared to its own measured counterpart,
@@ -178,6 +193,7 @@ def fit_amplitudes_to_sim_ifs(
     Returns:
         amplitude_matrix: (N_acts, N_acts) array of coupling weights.
         scaled_sim_ifs: (N_acts, H, W) array of the final reconstructed IFs.
+        diagnostics (only if return_diagnostics): dict, see above.
     """
     n_acts, h, w = meas_ifs.shape
     valid_mask = meas_mask > 0
@@ -210,24 +226,72 @@ def fit_amplitudes_to_sim_ifs(
                 print(f'Act {idx}: [{dx_opt:.3f}, {dy_opt:.3f}] pix')
                 updated_sim_ifs[idx] = shift(sim_img, shift=[dy_opt, dx_opt], order=3)
 
-    # --- Phase 2: single batched linear solve for all actuators' amplitudes ---
+    # --- Phase 2: amplitude/coupling fit ---
     print("Solving for amplitude/coupling matrix...")
     S_fit = updated_sim_ifs[:, valid_mask]           # (n_acts, n_pixels)
     meas_fit = meas_ifs[:, valid_mask]                # (n_acts, n_pixels)
 
     StS = S_fit @ S_fit.T                             # (n_acts, n_acts)
-    reg_I = reg_param * np.eye(n_acts) * (np.trace(StS) / n_acts)
-    rhs = S_fit @ meas_fit.T                          # (n_acts, n_acts)
+    rhs = S_fit @ meas_fit.T                          # (n_acts, n_acts); column i = S_fit @ meas_i
 
-    # solve (StS + reg_I) @ X = rhs for X, then transpose so row i holds the
-    # amplitude vector for measured actuator i (avoids forming an explicit
-    # inverse, both faster and better conditioned)
-    amplitude_matrix = np.linalg.solve(StS + reg_I, rhs).T
-    amplitude_matrix -= amplitude_matrix.mean(axis=1, keepdims=True)
+    diagnostics = None
+    if neighbor_radius_pitches is None:
+        # Dense fit (previous behaviour): all actuators, row-mean subtracted
+        reg_I = reg_param * np.eye(n_acts) * (np.trace(StS) / n_acts)
+        amplitude_matrix = np.linalg.solve(StS + reg_I, rhs).T
+        amplitude_matrix -= amplitude_matrix.median(axis=1, keepdims=True)
+    else:
+        # Neighbour-only fit: row i uses only actuators within the radius of actuator i
+        coords = estimate_actuator_peaks(updated_sim_ifs, valid_mask.astype(float))
+        ok = ~np.isnan(coords[:, 0])
+        ok_idx = np.where(ok)[0]
+        tree = cKDTree(coords[ok])
+        pitch_est = np.median(tree.query(coords[ok], k=2)[0][:, 1])  # median nearest-neighbour distance
+        radius = neighbor_radius_pitches * pitch_est
+        print(f"Neighbour fit: pitch ~ {pitch_est:.2f} pix, radius = {radius:.2f} pix")
+
+        pix_y, pix_x = np.nonzero(valid_mask)
+        amplitude_matrix = np.zeros((n_acts, n_acts))
+        sigma = np.full(n_acts, np.nan)
+        gain_err = np.full(n_acts, np.nan)
+        n_nb = np.ones(n_acts, dtype=int)
+
+        for i in range(n_acts):
+            if ok[i]:
+                nb = ok_idx[tree.query_ball_point(coords[i], r=radius)]
+                if i not in nb:
+                    nb = np.append(nb, i)
+            else:
+                nb = np.array([i])
+            nb = np.sort(nb)
+            n_nb[i] = len(nb)
+            k = int(np.where(nb == i)[0][0])
+
+            G = StS[np.ix_(nb, nb)]
+            Greg = G + reg_param * np.mean(np.diag(G)) * np.eye(len(nb))
+            amplitude_matrix[i, nb] = np.linalg.solve(Greg, rhs[nb, i])
+
+            # Noise floor from pixels far from this actuator, where the IF should be ~0
+            if ok[i]:
+                far = (pix_y - coords[i, 0])**2 + (pix_x - coords[i, 1])**2 > (radius + pitch_est)**2
+                if np.any(far):
+                    sigma[i] = np.sqrt(np.mean(meas_fit[i, far]**2))
+                    e_k = np.zeros(len(nb)); e_k[k] = 1.0
+                    gain_err[i] = sigma[i] * np.sqrt(np.linalg.solve(Greg, e_k)[k])
+
+        gain = np.diag(amplitude_matrix)
+        med = np.nanmedian(gain)
+        print(f"Gain (diag): median = {med:.4g}, robust spread (MAD/median) = "
+              f"{np.nanmedian(np.abs(gain - med)) / abs(med):.3f}, "
+              f"median formal error = {np.nanmedian(gain_err):.3g}, "
+              f"neighbours per actuator: {int(np.median(n_nb))} (median)")
+        diagnostics = dict(gain=gain, sigma=sigma, gain_err=gain_err, n_neighbors=n_nb)
 
     # Reconstruct the final scaled IFs across the FULL domain using the updated basis
     scaled_sim_ifs = np.einsum('ij,jhw->ihw', amplitude_matrix, updated_sim_ifs)
 
+    if return_diagnostics:
+        return amplitude_matrix, scaled_sim_ifs, diagnostics
     return amplitude_matrix, scaled_sim_ifs
 
 
@@ -243,25 +307,25 @@ def plot_results(meas_ifs: np.ndarray, sim_ifs: np.ndarray, pupil_center: tuple,
     
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
         
-    im0 = axes[0].imshow(sum_meas, cmap='viridis', origin='lower',vmin=0,vmax=1.5)
+    im0 = axes[0].imshow(sum_meas, cmap='magma', origin='lower',vmin=0,vmax=1.5)
     axes[0].set_title("Sum of cubed MEASURED iffs")
     axes[0].axis('off')
     fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
     
-    im1 = axes[1].imshow(sum_sim, cmap='viridis', origin='lower',vmin=0,vmax=1.5)
+    im1 = axes[1].imshow(sum_sim, cmap='magma', origin='lower',vmin=0,vmax=1.5)
     axes[1].set_title("Sum of cubed SIMULATED iffs")
     axes[1].axis('off')
     fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
     im2 = axes[2].imshow(diff * (np.sum(abs(meas_ifs),axis=0)>0), cmap='RdBu', origin='lower')
-    axes[2].plot(coords[:,1],coords[:,0],'x',c='gray',alpha=0.5,label='act coords')
+    axes[2].plot(coords[:,1],coords[:,0],'.',c='gray',alpha=0.5,label='act coords')
     axes[2].set_title("Difference RSS")
     axes[2].axis('off')
     fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
     
     # Add pupil rims
     for ax in axes:
-        circle = plt.Circle(pupil_center, pupil_radius, color='red', fill=False, linestyle='--', linewidth=1.5, alpha=0.8, label='Pupil Rim')
+        circle = plt.Circle(pupil_center, pupil_radius, color='cyan', fill=False, linestyle='--', linewidth=1.5, alpha=0.8, label='Pupil Rim')
         ax.add_patch(circle)
         ax.legend(loc='upper right')
     
@@ -276,7 +340,8 @@ def register_ao_ifs(
     sim_mask: np.ndarray,
     n_outer_rings: int = 2,
     show_plots: bool = True,
-    optimize_coords: bool = False
+    optimize_coords: bool = False,
+    neighbor_radius_pitches: float = 2.5
 ):
     print("\n--- Starting Simplified AO Influence Function Calibration ---")
     
@@ -310,14 +375,14 @@ def register_ao_ifs(
     
     print("5. Computing TPS amplitude matrix across all degrees of freedom...")
     # amplitude_matrix, sim_ifs_registered_rescaled = fit_tps_amplitude_matrix(meas_ifs, meas_mask, reg_coords_sim)
-    amplitude_matrix, scaled_sim_ifs = fit_amplitudes_to_sim_ifs(meas_ifs, meas_mask, sim_ifs_registered, optimize_coords=optimize_coords)
+    amplitude_matrix, scaled_sim_ifs = fit_amplitudes_to_sim_ifs(meas_ifs, meas_mask, sim_ifs_registered, optimize_coords=optimize_coords, neighbor_radius_pitches=neighbor_radius_pitches)
     
     print("--- Calibration Complete! ---\n")
     
     if show_plots:
         plot_results(meas_ifs, scaled_sim_ifs, orig_pupil_center, orig_pupil_radius, reg_coords_sim)
         plt.figure()
-        plt.imshow(amplitude_matrix,cmap='magma')
+        plt.imshow(amplitude_matrix,cmap='inferno',origin='upper')
         plt.colorbar()
         plt.title('Actuator displacements matrix')
         

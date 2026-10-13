@@ -71,7 +71,7 @@ generation:                             # SPECULA calibration runs (generator); 
   pc_corrections: []                    # e.g. [[0.99, 0.2], [0.9, 0.2]]: extra IMs with a partial correction, (max_corr, min_corr) of the correction vector
   seed0: 0
   discard_frames: 0                     # frames dropped from the start of the aliasing runs (leading all-zero frames are always dropped)
-  n_modes_max: 1372
+  n_modes_max: 1359
   pup_dist_min: 14.0
   pup_dist_per_subap: 1.25              # pyr.pup_dist = max(pup_dist_min, pup_dist_per_subap * n_subaps): independent of the other sensors
   overwrite: false
