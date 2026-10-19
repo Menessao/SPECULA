@@ -1,10 +1,8 @@
 import numpy as np
-from scipy.ndimage import shift, affine_transform
+from scipy.ndimage import shift, affine_transform, distance_transform_edt, zoom
 from scipy.optimize import minimize
-from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
-# from astropy.io import fits
-
+from astropy.io import fits
 
 def compute_actuator_pitch(mask_shape: tuple, n_acts: int) -> float:
     """Estimates actuator pitch for a circular grid: dim / sqrt(4 * n_acts / pi)."""
@@ -159,41 +157,250 @@ def _refine_actuator_shift(
     return dy_opt, dx_opt, amp_opt
 
 
+def _nearest_neighbour_pitch(coords: np.ndarray) -> float:
+    """Median nearest-neighbour distance between actuator coordinates [y, x]."""
+    c = coords[~np.isnan(coords[:, 0])]
+    d = np.hypot(c[:, None, 0] - c[None, :, 0], c[:, None, 1] - c[None, :, 1])
+    np.fill_diagonal(d, np.inf)
+    return float(np.median(d.min(axis=1)))
+
+
+def _subpixel_patch(img: np.ndarray, c, half: int, margin: int = 3) -> np.ndarray:
+    """(2*half+1)^2 patch of img centred on the sub-pixel position c = [y, x] (cubic interpolation,
+    zero padded outside the frame)."""
+    h, w = img.shape
+    cy, cx = int(round(c[0])), int(round(c[1]))
+    r = half + margin
+    y0, x0 = cy - r, cx - r
+    crop = np.zeros((2 * r + 1, 2 * r + 1))
+    ya, yb = max(0, y0), min(h, y0 + 2 * r + 1)
+    xa, xb = max(0, x0), min(w, x0 + 2 * r + 1)
+    if ya < yb and xa < xb:
+        crop[ya - y0:yb - y0, xa - x0:xb - x0] = img[ya:yb, xa:xb]
+    sh = shift(crop, [-(c[0] - cy), -(c[1] - cx)], order=3, mode='constant')
+    return sh[margin:margin + 2 * half + 1, margin:margin + 2 * half + 1]
+
+
+def _place_template(template: np.ndarray, coords: np.ndarray, shape: tuple) -> np.ndarray:
+    """Builds one IF per actuator by placing the (square, odd-sized) template at the sub-pixel
+    position coords[j] = [y, x]. Actuators with NaN coordinates get a zero IF."""
+    h, w = shape
+    half = template.shape[0] // 2
+    pad = 3
+    tpl = np.pad(template, pad)
+    out = np.zeros((len(coords), h, w))
+    for j, c in enumerate(coords):
+        if np.isnan(c[0]):
+            continue
+        cy, cx = int(round(c[0])), int(round(c[1]))
+        sh = shift(tpl, [c[0] - cy, c[1] - cx], order=3, mode='constant')
+        y0, x0 = cy - half - pad, cx - half - pad
+        ya, yb = max(0, y0), min(h, y0 + sh.shape[0])
+        xa, xb = max(0, x0), min(w, x0 + sh.shape[1])
+        if ya < yb and xa < xb:
+            out[j, ya:yb, xa:xb] = sh[ya - y0:yb - y0, xa - x0:xb - x0]
+    return out
+
+
+def _template_peak(template: np.ndarray) -> float:
+    """Sub-pixel peak value of a template (cubic upsampling of its central region)."""
+    half = template.shape[0] // 2
+    r = min(half, 4)
+    z = zoom(template[half - r:half + r + 1, half - r:half + r + 1], 8, order=3)
+    return float(z.flat[np.argmax(np.abs(z))])
+
+
+def _build_if_template(
+    meas_ifs: np.ndarray,
+    valid_mask: np.ndarray,
+    sim_ifs_registered: np.ndarray,
+    coords: np.ndarray,
+    pitch_est: float,
+    halfwidth_pitches: float = 2.5,
+    min_snr_frac: float = 0.5,
+    n_iter: int = 3,
+):
+    """
+    Estimates the average measured IF shape from the high-SNR actuators whose whole template
+    window lies inside the pupil (edge actuators are excluded).
+
+    Per selected actuator a patch of the measured IF is cut around its registered position
+    (cubic sub-pixel interpolation), the tip/tilt of a plane fitted on the outer ring is removed (drift),
+    and the patches are aligned to the evolving template with a few Lucas-Kanade shift updates
+    (so that residual mis-registration does not blur the template). The template is the
+    amplitude-weighted average (rank-1 model patch_i = a_i * template), after rejecting outlier
+    actuators, tapered smoothly to zero at the window edge, and scaled so that its peak equals
+    the median peak of the simulated IFs of the same actuators (gain convention: peak, relative
+    to the simulation).
+
+    Returns None if fewer than 5 usable actuators are found, else a dict with 'template'
+    (P x P), 'used' (actuator indices), 'centroid' ([dy, dx] of the template centre of mass
+    from the window centre: a global offset between the registered coordinates and the measured
+    IFs shows up here; it is baked into the template, so placing it at the registered coordinates
+    stays consistent), 'half', 'rel_residual' and 'n_candidates'.
+    """
+    n_acts, h, w = meas_ifs.shape
+    half = max(3, int(round(halfwidth_pitches * pitch_est)))
+    P = 2 * half + 1
+    yy, xx = np.mgrid[-half:half + 1, -half:half + 1]
+    rn = np.hypot(yy, xx) / half
+    ring = ((rn >= 0.75) & (rn <= 1.0)).ravel()
+    G = np.stack([np.ones(P * P), yy.ravel().astype(float), xx.ravel().astype(float)], axis=1)
+    G_ring_pinv = np.linalg.pinv(G[ring])
+    taper = np.where(rn <= 0.7, 1.0, np.where(rn >= 1.0, 0.0, 0.5 * (1.0 + np.cos(np.pi * (rn - 0.7) / 0.3))))
+
+    med = np.median(meas_ifs[:, valid_mask], axis=1)
+    dist = distance_transform_edt(valid_mask)
+
+    # Candidates: whole window (plus interpolation margin) inside the pupil
+    cand = []
+    for i in range(n_acts):
+        if np.isnan(coords[i, 0]):
+            continue
+        cy, cx = int(round(coords[i, 0])), int(round(coords[i, 1]))
+        if 0 <= cy < h and 0 <= cx < w and dist[cy, cx] >= half + 3:
+            cand.append(i)
+    cand = np.array(cand, dtype=int)
+    if len(cand) < 5:
+        return None
+
+    def extract(ids, offsets):
+        patches = np.empty((len(ids), P * P))
+        for k, i in enumerate(ids):
+            patches[k] = _subpixel_patch(meas_ifs[i] - med[i], coords[i] + offsets[k], half).ravel()
+        coef = patches[:, ring] @ G_ring_pinv.T          # plane fitted on the outer ring
+        return patches - coef[:, 1:] @ G[:, 1:].T        # remove only its tip/tilt (the pedestal holds the real IF tails)
+
+    # SNR selection: peak over robust noise (MAD of the whole IF over the pupil)
+    P0 = extract(cand, np.zeros((len(cand), 2)))
+    sigma = np.array([1.4826 * np.median(np.abs(meas_ifs[i][valid_mask] - med[i])) for i in cand])
+    snr = np.max(np.abs(P0), axis=1) / np.maximum(sigma, 1e-12)
+    keep = snr >= min_snr_frac * np.median(snr)
+    ids, Pm = cand[keep], P0[keep]
+    if len(ids) < 5:
+        return None
+
+    # Initial template: median of unit-peak patches
+    pk = Pm[np.arange(len(ids)), np.argmax(np.abs(Pm), axis=1)]
+    t = np.median(Pm / pk[:, None], axis=0)
+    t = t / t[np.argmax(np.abs(t))]
+
+    # Alternate Lucas-Kanade alignment of every patch to the template and amplitude-weighted averaging
+    d = np.zeros((len(ids), 2))
+    max_off = 0.5 * pitch_est
+    for _ in range(n_iter):
+        gy, gx = np.gradient(t.reshape(P, P))
+        D = np.stack([t, gy.ravel(), gx.ravel()], axis=1)
+        coef = Pm @ np.linalg.pinv(D).T                   # [a, -a*dy, -a*dx] per patch
+        a = coef[:, 0]
+        step = np.zeros_like(d)
+        ok = np.abs(a) > 1e-12
+        step[ok] = -coef[ok, 1:] / a[ok, None]
+        d = np.clip(d + np.clip(step, -1.0, 1.0), -max_off, max_off)
+        Pm = extract(ids, d)
+        a = Pm @ t / (t @ t)
+        t = (a @ Pm) / (a @ a)
+        t = t / t[np.argmax(np.abs(t))]
+
+    # Reject actuators whose patch deviates from a_i * template, then final average
+    a = Pm @ t / (t @ t)
+    rel = np.linalg.norm(Pm - a[:, None] * t[None, :], axis=1) / np.maximum(np.abs(a) * np.linalg.norm(t), 1e-12)
+    mad = 1.4826 * np.median(np.abs(rel - np.median(rel)))
+    good = rel <= np.median(rel) + 3.0 * max(mad, 1e-12)
+    if np.sum(good) < 5:
+        good[:] = True
+    ids, Pm, a, d, rel = ids[good], Pm[good], a[good], d[good], rel[good]
+    t = (a @ Pm) / (a @ a)
+    t = t / t[np.argmax(np.abs(t))]
+
+    # Peak convention: sub-pixel (interpolated) peak value, for the simulated IFs at their registered
+    # coordinates and for the template, so the pixel sampling of the peak does not bias the gains.
+    sim_pk = np.array([_subpixel_patch(sim_ifs_registered[i], coords[i], 1)[1, 1] for i in ids])
+    t_tapered = t.reshape(P, P) * taper
+    template = t_tapered * (np.median(sim_pk) / _template_peak(t_tapered))
+
+    tp = np.clip(template * np.sign(np.median(sim_pk)), 0.0, None)
+    centroid = np.array([np.sum(tp * yy), np.sum(tp * xx)]) / np.sum(tp)
+
+    return dict(template=template, used=ids, centroid=centroid, half=half,
+                rel_residual=float(np.median(rel)), n_candidates=len(cand))
+
+
+def _tilt_basis(valid_mask: np.ndarray):
+    """Orthonormal basis Q (n_pix x 2) and raw columns T of tip/tilt over the valid pixels
+    (coordinates centred on the pupil and normalised by its radius)."""
+    py, px = np.nonzero(valid_mask)
+    py = py - py.mean()
+    px = px - px.mean()
+    radius = max(np.max(np.hypot(py, px)), 1e-12)
+    T = np.stack([py / radius, px / radius], axis=1)
+    Q, _ = np.linalg.qr(T)
+    return Q, T
+
+
+def _solve_amplitudes(S_pix: np.ndarray, M_proj: np.ndarray, Q, reg_param: float):
+    """
+    Ridge least-squares fit of every (already median-subtracted and tilt-projected)
+    measured IF M_proj (n_acts x n_pix) onto the simulated basis S_pix (n_acts x n_pix).
+
+    The simulated basis is median-subtracted per IF here (the measured IFs are median-free)
+    and, if Q is given, tip/tilt is projected out of it. Because tip/tilt is an unpenalised
+    nuisance term shared by all IFs, projecting it out of both sides is exactly equivalent to
+    fitting it jointly with the amplitudes (Frisch-Waugh-Lovell).
+
+    Returns amplitudes (row i = measured IF i), the total squared data residual, the per-IF
+    medians removed from the basis, and the median-subtracted (unprojected) basis.
+    """
+    n_acts = S_pix.shape[0]
+    med = np.median(S_pix, axis=1)
+    S0 = S_pix - med[:, None]
+    Sp = S0 - (S0 @ Q) @ Q.T if Q is not None else S0
+
+    StS = Sp @ Sp.T
+    rhs = Sp @ M_proj.T                                   # column i = Sp @ M_proj[i]
+    reg_I = reg_param * np.eye(n_acts) * (np.trace(StS) / n_acts)
+    A = np.linalg.solve(StS + reg_I, rhs).T
+
+    # total ||M - A Sp||^2 without forming the (n_acts x n_pix) product
+    resid = np.sum(M_proj**2) - 2.0 * np.sum(A * rhs.T) + np.sum((A @ StS) * A)
+    return A, resid, med, S0
+
+
 def fit_amplitudes_to_sim_ifs(
     meas_ifs: np.ndarray, 
     meas_mask: np.ndarray, 
     sim_ifs_registered: np.ndarray, 
     reg_param: float = 1e-4,
     optimize_coords: bool = True,
-    neighbor_radius_pitches: float = 2.5,
+    fit_if_template: bool = True,
+    template_halfwidth_pitches: float = 2.5,
+    template_min_snr_frac: float = 0.5,
+    fit_tilt: bool = True,
     return_diagnostics: bool = False
 ):
     """
-    Fits measured IFs to registered simulated IFs, with optional per-actuator
-    sub-pixel coordinate refinement.
+    Fits measured IFs to registered simulated IFs (dense fit over all actuators).
 
-    neighbor_radius_pitches: each measured IF i is fitted ONLY against the
-        simulated IFs of actuators lying within this many actuator pitches of
-        actuator i (coupling is physically local; far coefficients are mostly
-        noise amplified by the overlap of the basis). All other entries of row i
-        are exactly zero. Set to None for the previous dense fit (all actuators,
-        row-mean subtracted).
-    return_diagnostics: if True, also returns a dict with the per-actuator
-        'gain' (diagonal), 'sigma' (rms of the measured IF far from the
-        actuator, i.e. noise + drift floor), 'gain_err' (1-sigma formal error
-        on the gain from that noise) and 'n_neighbors'.
-
-    The coordinate refinement (phase 1) is independent across actuators -
-    each simulated IF is only ever compared to its own measured counterpart,
-    so it's decoupled from a global solve rather than being interleaved with
-    one. The amplitude/coupling fit (phase 2) is then done once, for all
-    actuators simultaneously, via a single batched linear solve instead of
-    an explicit-inverse solver rebuilt on every iteration.
+    Steps:
+      0. (fit_if_template) the basis shape is replaced by the AVERAGE MEASURED IF of the
+         high-SNR, fully-inside-the-pupil actuators (see _build_if_template), placed at every
+         actuator's registered position. Since this shape already contains the average coupling
+         of an actuator to its surroundings, the amplitude matrix now describes per-actuator gain
+         (diagonal) and deviations from that average (off-diagonal), not the absolute coupling.
+      1. (optimize_coords) per-actuator sub-pixel shift refinement.
+      2. Median is subtracted from every measured and simulated IF over the valid pixels,
+         tip/tilt (shared columns, unpenalised) is fitted out (fit_tilt), then a single
+         batched ridge solve gives all amplitudes. Finally the median of each amplitude row
+         (the poorly constrained common-mode offset, robust to the actuator peaks) is removed.
 
     Returns:
         amplitude_matrix: (N_acts, N_acts) array of coupling weights.
-        scaled_sim_ifs: (N_acts, H, W) array of the final reconstructed IFs.
-        diagnostics (only if return_diagnostics): dict, see above.
+        scaled_sim_ifs: (N_acts, H, W) array of the final reconstructed IFs (median-subtracted basis).
+        diagnostics (only if return_diagnostics): dict with 'gain' (diagonal), and, if the template
+            was used, 'template', 'template_actuators', 'template_centroid';
+            'row_median' (offset removed from each row), 'row_noise_mad' (robust rms of each
+            row's entries, a coefficient-noise estimate) and, if fit_tilt, 'tilt' (n_acts x 2,
+            fitted [tip, tilt] per measured IF in data units per pupil radius).
     """
     n_acts, h, w = meas_ifs.shape
     valid_mask = meas_mask > 0
@@ -204,6 +411,31 @@ def fit_amplitudes_to_sim_ifs(
     pitch = max(h, w) / np.sqrt(4.0 * n_acts / np.pi)
     max_shift = 0.5 * pitch
     window = int(pitch)
+
+    # Measured data: median-subtracted over valid pixels, tilt projected out
+    Q, T = _tilt_basis(valid_mask) if fit_tilt else (None, None)
+    M0 = meas_ifs[:, valid_mask]
+    M0 = M0 - np.median(M0, axis=1, keepdims=True)
+    M_proj = M0 - (M0 @ Q) @ Q.T if Q is not None else M0
+
+    # --- Phase 0: replace the simulated IF shape by the average measured IF ---
+    tpl_info = None
+    if fit_if_template:
+        print("Building average measured IF template...")
+        coords_reg = estimate_actuator_peaks(sim_ifs_registered)   # unmasked: sim IFs live on the full frame
+        pitch_est = _nearest_neighbour_pitch(coords_reg)
+        tpl_info = _build_if_template(meas_ifs, valid_mask, sim_ifs_registered, coords_reg, pitch_est,
+                                      halfwidth_pitches=template_halfwidth_pitches,
+                                      min_snr_frac=template_min_snr_frac)
+        if tpl_info is None:
+            print("   WARNING: too few usable actuators for a template; keeping the simulated IF shapes.")
+        else:
+            cen = tpl_info['centroid']
+            print(f"-> template {2 * tpl_info['half'] + 1}x{2 * tpl_info['half'] + 1} pix from "
+                  f"{len(tpl_info['used'])}/{tpl_info['n_candidates']} inner actuators "
+                  f"(pitch ~ {pitch_est:.2f} pix); median patch misfit {tpl_info['rel_residual']:.3f}; "
+                  f"template centroid offset [dy,dx] = [{cen[0]:.2f}, {cen[1]:.2f}] pix")
+            updated_sim_ifs = _place_template(tpl_info['template'], coords_reg, (h, w))
 
     # --- Phase 1: per-actuator sub-pixel shift refinement (independent, no
     # global solve needed here) ---
@@ -228,69 +460,30 @@ def fit_amplitudes_to_sim_ifs(
 
     # --- Phase 2: amplitude/coupling fit ---
     print("Solving for amplitude/coupling matrix...")
-    S_fit = updated_sim_ifs[:, valid_mask]           # (n_acts, n_pixels)
-    meas_fit = meas_ifs[:, valid_mask]                # (n_acts, n_pixels)
+    amplitude_matrix, _, sim_med, S0 = _solve_amplitudes(updated_sim_ifs[:, valid_mask], M_proj, Q, reg_param)
 
-    StS = S_fit @ S_fit.T                             # (n_acts, n_acts)
-    rhs = S_fit @ meas_fit.T                          # (n_acts, n_acts); column i = S_fit @ meas_i
+    # Remove the common-mode offset of each row (median: robust to the actuator peaks)
+    row_median = np.median(amplitude_matrix, axis=1)
+    amplitude_matrix = amplitude_matrix - row_median[:, None]
+    row_noise_mad = 1.4826 * np.median(np.abs(amplitude_matrix), axis=1)
 
-    diagnostics = None
-    if neighbor_radius_pitches is None:
-        # Dense fit (previous behaviour): all actuators, row-mean subtracted
-        reg_I = reg_param * np.eye(n_acts) * (np.trace(StS) / n_acts)
-        amplitude_matrix = np.linalg.solve(StS + reg_I, rhs).T
-        amplitude_matrix -= amplitude_matrix.median(axis=1, keepdims=True)
-    else:
-        # Neighbour-only fit: row i uses only actuators within the radius of actuator i
-        coords = estimate_actuator_peaks(updated_sim_ifs, valid_mask.astype(float))
-        ok = ~np.isnan(coords[:, 0])
-        ok_idx = np.where(ok)[0]
-        tree = cKDTree(coords[ok])
-        pitch_est = np.median(tree.query(coords[ok], k=2)[0][:, 1])  # median nearest-neighbour distance
-        radius = neighbor_radius_pitches * pitch_est
-        print(f"Neighbour fit: pitch ~ {pitch_est:.2f} pix, radius = {radius:.2f} pix")
+    gain = np.diag(amplitude_matrix)
+    med_g = np.median(gain)
+    print(f"Gain (diag): median = {med_g:.4g}, robust spread (MAD/median) = "
+          f"{np.median(np.abs(gain - med_g)) / abs(med_g):.3f}, "
+          f"median row noise (MAD) = {np.median(row_noise_mad):.3g}")
 
-        pix_y, pix_x = np.nonzero(valid_mask)
-        amplitude_matrix = np.zeros((n_acts, n_acts))
-        sigma = np.full(n_acts, np.nan)
-        gain_err = np.full(n_acts, np.nan)
-        n_nb = np.ones(n_acts, dtype=int)
-
-        for i in range(n_acts):
-            if ok[i]:
-                nb = ok_idx[tree.query_ball_point(coords[i], r=radius)]
-                if i not in nb:
-                    nb = np.append(nb, i)
-            else:
-                nb = np.array([i])
-            nb = np.sort(nb)
-            n_nb[i] = len(nb)
-            k = int(np.where(nb == i)[0][0])
-
-            G = StS[np.ix_(nb, nb)]
-            Greg = G + reg_param * np.mean(np.diag(G)) * np.eye(len(nb))
-            amplitude_matrix[i, nb] = np.linalg.solve(Greg, rhs[nb, i])
-
-            # Noise floor from pixels far from this actuator, where the IF should be ~0
-            if ok[i]:
-                far = (pix_y - coords[i, 0])**2 + (pix_x - coords[i, 1])**2 > (radius + pitch_est)**2
-                if np.any(far):
-                    sigma[i] = np.sqrt(np.mean(meas_fit[i, far]**2))
-                    e_k = np.zeros(len(nb)); e_k[k] = 1.0
-                    gain_err[i] = sigma[i] * np.sqrt(np.linalg.solve(Greg, e_k)[k])
-
-        gain = np.diag(amplitude_matrix)
-        med = np.nanmedian(gain)
-        print(f"Gain (diag): median = {med:.4g}, robust spread (MAD/median) = "
-              f"{np.nanmedian(np.abs(gain - med)) / abs(med):.3f}, "
-              f"median formal error = {np.nanmedian(gain_err):.3g}, "
-              f"neighbours per actuator: {int(np.median(n_nb))} (median)")
-        diagnostics = dict(gain=gain, sigma=sigma, gain_err=gain_err, n_neighbors=n_nb)
-
-    # Reconstruct the final scaled IFs across the FULL domain using the updated basis
-    scaled_sim_ifs = np.einsum('ij,jhw->ihw', amplitude_matrix, updated_sim_ifs)
+    # Reconstruct the final scaled IFs across the FULL domain using the updated, median-subtracted basis
+    scaled_sim_ifs = np.einsum('ij,jhw->ihw', amplitude_matrix, updated_sim_ifs - sim_med[:, None, None])
 
     if return_diagnostics:
+        diagnostics = dict(gain=gain, row_median=row_median, row_noise_mad=row_noise_mad)
+        if tpl_info is not None:
+            diagnostics.update(template=tpl_info['template'], template_actuators=tpl_info['used'],
+                               template_centroid=tpl_info['centroid'])
+        if Q is not None:
+            resid = M0 - amplitude_matrix @ S0
+            diagnostics['tilt'] = resid @ T @ np.linalg.inv(T.T @ T)
         return amplitude_matrix, scaled_sim_ifs, diagnostics
     return amplitude_matrix, scaled_sim_ifs
 
@@ -318,14 +511,14 @@ def plot_results(meas_ifs: np.ndarray, sim_ifs: np.ndarray, pupil_center: tuple,
     fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
     im2 = axes[2].imshow(diff * (np.sum(abs(meas_ifs),axis=0)>0), cmap='RdBu', origin='lower')
-    axes[2].plot(coords[:,1],coords[:,0],'.',c='gray',alpha=0.5,label='act coords')
+    axes[2].plot(coords[:,1],coords[:,0],'.',markersize=2,c='gray',alpha=0.5,label='act coords')
     axes[2].set_title("Difference RSS")
     axes[2].axis('off')
     fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
     
     # Add pupil rims
     for ax in axes:
-        circle = plt.Circle(pupil_center, pupil_radius, color='cyan', fill=False, linestyle='--', linewidth=1.5, alpha=0.8, label='Pupil Rim')
+        circle = plt.Circle(pupil_center, pupil_radius, color='red', fill=False, linestyle='--', linewidth=1.5, alpha=0.8, label='Pupil Rim')
         ax.add_patch(circle)
         ax.legend(loc='upper right')
     
@@ -341,7 +534,8 @@ def register_ao_ifs(
     n_outer_rings: int = 2,
     show_plots: bool = True,
     optimize_coords: bool = False,
-    neighbor_radius_pitches: float = 2.5
+    fit_if_template: bool = True,
+    fit_tilt: bool = True
 ):
     print("\n--- Starting Simplified AO Influence Function Calibration ---")
     
@@ -375,14 +569,14 @@ def register_ao_ifs(
     
     print("5. Computing TPS amplitude matrix across all degrees of freedom...")
     # amplitude_matrix, sim_ifs_registered_rescaled = fit_tps_amplitude_matrix(meas_ifs, meas_mask, reg_coords_sim)
-    amplitude_matrix, scaled_sim_ifs = fit_amplitudes_to_sim_ifs(meas_ifs, meas_mask, sim_ifs_registered, optimize_coords=optimize_coords, neighbor_radius_pitches=neighbor_radius_pitches)
+    amplitude_matrix, scaled_sim_ifs = fit_amplitudes_to_sim_ifs(meas_ifs, meas_mask, sim_ifs_registered, optimize_coords=optimize_coords, fit_if_template=fit_if_template, fit_tilt=fit_tilt)
     
     print("--- Calibration Complete! ---\n")
     
     if show_plots:
         plot_results(meas_ifs, scaled_sim_ifs, orig_pupil_center, orig_pupil_radius, reg_coords_sim)
         plt.figure()
-        plt.imshow(amplitude_matrix,cmap='inferno',origin='upper')
+        plt.imshow(amplitude_matrix,cmap='magma',origin='upper')
         plt.colorbar()
         plt.title('Actuator displacements matrix')
         
