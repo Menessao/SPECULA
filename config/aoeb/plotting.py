@@ -1,5 +1,5 @@
 """Plots (matplotlib figures are returned, never saved): budget terms / comparisons / per-mode quantities from the scan
-DataFrames, calibration products, and PSD / PSF of a BudgetResult (machine.psd_terms / psf_terms)."""
+DataFrames (errors in nm rms), calibration products, and PSD / PSF of a BudgetResult (psf.PsfEngine)."""
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -40,10 +40,12 @@ def _finish(fig, ax, xlabel, ylabel, title=None, logx=False, logy=False):
     return fig
 
 
-def _value(df, q, rms):
-    """Column q, as signed rms (sign * sqrt|v|, for variances that can be negative) or raw."""
-    v = df[q].astype(float)
-    return np.sign(v) * np.sqrt(np.abs(v)) if rms else v
+ERRORS = ('residual', 'lag', 'noise', 'noise_photon', 'noise_ron', 'alias', 'xtalk', 'fitting', 'chrom_mult', 'chrom_shear',
+          'chrom_fresnel', 'scintillation', 'total')        # columns in nm rms (scan / mode tables)
+
+
+def _value(df, q):
+    return df[q].astype(float)
 
 
 def _one_per(df, x, by=None):
@@ -59,22 +61,22 @@ def _label(name, h):
     return f'{name}={h:g}' if isinstance(h, (int, float, np.floating)) else f'{name}={h}'
 
 
-def plot_budget_terms(totals, x='photPerMs', filters=None, terms=('lag', 'noise', 'alias', 'fitting', 'total'), rms=True,
-                      logx=True, logy=False, title=None, ax=None):
-    """Budget terms versus x for the configuration fixed by `filters` (nm rms, or nm^2 with rms=False)."""
+def plot_budget_terms(totals, x='photPerMs', filters=None, terms=('lag', 'noise', 'alias', 'fitting', 'total'), logx=True, logy=False,
+                      title=None, ax=None):
+    """Budget terms [nm rms] versus x for the configuration fixed by `filters` (the terms add in quadrature to the total)."""
     df = _select(totals, filters).sort_values(x)
     _one_per(df, x)
     fig, ax = _fig(ax)
     for t in terms:
-        ax.plot(df[x], _value(df, t, rms), '-o' if t == 'total' else '-', ms=3, color=COLORS.get(t), label=t,
+        ax.plot(df[x], _value(df, t), '-o' if t == 'total' else '-', ms=3, color=COLORS.get(t), label=t,
                 lw=2 if t == 'total' else 1.5)
     ax.legend()
-    return _finish(fig, ax, x, 'error [nm rms]' if rms else 'variance [nm$^2$]', title, logx, logy)
+    return _finish(fig, ax, x, 'error [nm rms]', title, logx, logy)
 
 
-def plot_budget_compare(totals, x='photPerMs', hue='freqInHz', quantity='total', filters=None, col=None, rms=True, logx=True,
-                        logy=False, title=None):
-    """`quantity` versus x, one curve per value of `hue`, panels per value of `col`."""
+def plot_budget_compare(totals, x='photPerMs', hue='freqInHz', quantity='total', filters=None, col=None, logx=True, logy=False,
+                        title=None):
+    """`quantity` [nm rms for the error terms] versus x, one curve per value of `hue`, panels per value of `col`."""
     df = _select(totals, filters)
     cols = [None] if col is None else sorted(df[col].unique())
     fig, axes = plt.subplots(1, len(cols), figsize=(5.5 * len(cols), 4.5), squeeze=False)
@@ -83,23 +85,22 @@ def plot_budget_compare(totals, x='photPerMs', hue='freqInHz', quantity='total',
         _one_per(d, x, hue)
         for i, (h, g) in enumerate(d.groupby(hue)):
             g = g.sort_values(x)
-            ax.plot(g[x], _value(g, quantity, rms), '-o', ms=3, color=f'C{i % 10}', label=_label(hue, h))
+            ax.plot(g[x], _value(g, quantity), '-o', ms=3, color=f'C{i % 10}', label=_label(hue, h))
         ax.legend(fontsize=8)
-        _finish(fig, ax, x, f"{quantity} [nm{' rms' if rms else '$^2$'}]", f'{col} = {cv}' if cv is not None else title, logx, logy)
+        _finish(fig, ax, x, f"{quantity}{' [nm rms]' if quantity in ERRORS else ''}", f'{col} = {cv}' if cv is not None else title, logx, logy)
     return fig
 
 
-def plot_per_mode(modes, y='residual', hue=None, filters=None, rms=None, logy=True, title=None):
-    """Per-mode quantity versus mode index: nm rms for the variance columns (residual, lag, noise*, alias, xtalk, chrom_mult), else raw."""
+def plot_per_mode(modes, y='residual', hue=None, filters=None, logy=True, title=None):
+    """Per-mode quantity versus mode index (error columns in nm rms; gain, ff, og raw)."""
     df = _select(modes, filters)
-    rms = y in ('residual', 'lag', 'noise', 'noise_photon', 'noise_ron', 'alias', 'xtalk', 'chrom_mult') if rms is None else rms
     fig, ax = _fig(None)
     for i, (h, g) in enumerate([(None, df)] if hue is None else df.groupby(hue)):
         g = g.sort_values('modeId')
-        ax.plot(g['modeId'], _value(g, y, rms), '.', ms=3, color=f'C{i % 10}', label=None if h is None else _label(hue, h))
+        ax.plot(g['modeId'], _value(g, y), '.', ms=3, color=f'C{i % 10}', label=None if h is None else _label(hue, h))
     if hue is not None:
         ax.legend(fontsize=8)
-    return _finish(fig, ax, 'modeId', f'{y} [nm rms]' if rms else y, title, False, logy)
+    return _finish(fig, ax, 'modeId', f'{y} [nm rms]' if y in ERRORS else y, title, False, logy)
 
 
 def plot_calibration(machine, product, hue=None, values=None, rMod=3.0, n_subap=48, seeing=0.9, N=None, N_corr=None, flux=1e7,

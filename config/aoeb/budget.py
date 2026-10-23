@@ -28,6 +28,21 @@ STEPS = dict(pupdata='ErrorBudgetGenerator.calibrate_pupdata (step 1)', slopes='
              kl='the KL basis of the SPECULA calibration')
 
 
+def regress(x, values, x0, deg=2):
+    """Least-squares polynomial of degree min(deg, n - 1) through (x, values), values (n, ...), evaluated at x0 (same trailing shape)."""
+    x, v = np.asarray(x, float), np.asarray(values, float)
+    d = min(deg, len(x) - 1)
+    coef = np.polyfit(x, v.reshape(len(x), -1), d)
+    return (np.vander([float(x0)], d + 1) @ coef).reshape(v.shape[1:])
+
+
+def _signed_rms(v):
+    """sign(v) sqrt|v|: nm rms of a variance [nm^2] that may be negative (a cross term)."""
+    v = np.asarray(v, float)
+    out = np.sign(v) * np.sqrt(np.abs(v))
+    return float(out) if out.ndim == 0 else out
+
+
 def _need(path, step):
     if not op.exists(path):
         raise FileNotFoundError(f'{path} not found (created by {STEPS[step]})')
@@ -43,6 +58,8 @@ class Calibration:
     noise: SlopeNoise
     og_levels: dict = field(default_factory=dict)    # residual [nm rms] of the N controlled modes (0 = perfect correction) -> og
     mixing: Callable = None         # () -> R @ IM_PC, read from disk on demand (crosstalk only)
+    og_by_level: dict = field(default_factory=dict)  # (max_corr, min_corr) of the correction vector -> og ((1, 1) = perfect)
+    alias_seeing: float = None      # seeing of the aliasing product (the budget rescales it to the requested seeing)
 
     @property
     def thrp(self):
@@ -98,18 +115,23 @@ class BudgetResult:
     def residual(self):
         return self.lag + self.noise + self.alias + self.xtalk
 
-    def totals(self):
+    def variances(self):
+        """Every term as a variance [nm^2] (they add: total = sum of the terms; noise = noise_photon + noise_ron)."""
         t = dict(lag=self.lag.sum(), noise=self.noise.sum(), noise_photon=self.noise_photon.sum(),
                  noise_ron=self.noise_ron.sum(), alias=self.alias.sum(), xtalk=self.xtalk.sum(), fitting=self.fitting,
                  **{k: float(v) for k, v in self.extra.items()})
         if self.chrom_mult is not None:
             t['chrom_mult'] = float(self.chrom_mult.sum())
         t['total'] = sum(v for k, v in t.items() if k not in ('noise_photon', 'noise_ron'))
-        t['total_rms'] = float(np.sqrt(max(t['total'], 0.0)))
-        return t
+        return {k: float(v) for k, v in t.items()}
+
+    def totals(self):
+        """Every term in nm rms; they add in QUADRATURE (total^2 = sum of the squares). A term whose variance is negative (the signed
+        chrom_mult cross term) is given as -sqrt|v|. variances() has the nm^2 values."""
+        return {k: _signed_rms(v) for k, v in self.variances().items()}
 
     def strehl(self, wavelength_nm):
-        return float(np.exp(-(2 * np.pi * self.totals()['total_rms'] / wavelength_nm) ** 2))
+        return float(np.exp(-(2 * np.pi / wavelength_nm) ** 2 * max(self.variances()['total'], 0.0)))
 
     def totals_row(self):
         return {**self.params, **self.totals()}
@@ -117,10 +139,11 @@ class BudgetResult:
     def mode_rows(self, modes=None):
         ids = np.arange(len(self.gain)) if modes is None else np.asarray(modes)
         ids = ids[ids < len(self.gain)]
-        cols = {k: getattr(self, k)[ids] for k in ('gain', 'ff', 'og', 'residual', 'lag', 'noise', 'noise_photon',
-                                                    'noise_ron', 'alias', 'xtalk')}
+        cols = {k: getattr(self, k)[ids] for k in ('gain', 'ff', 'og')}
+        cols.update({k: _signed_rms(getattr(self, k)[ids]) for k in ('residual', 'lag', 'noise', 'noise_photon', 'noise_ron', 'alias',
+                                                                     'xtalk')})                  # nm rms per mode
         if self.chrom_mult is not None:
-            cols['chrom_mult'] = self.chrom_mult[ids]
+            cols['chrom_mult'] = _signed_rms(self.chrom_mult[ids])
         base = {k: np.full(len(ids), v) for k, v in self.params.items()}
         return pd.DataFrame({**base, 'modeId': ids, 'filter': self.params['controller'].upper(), **cols})
 
@@ -181,14 +204,48 @@ class ErrorBudgetMachine:
 
     # ---- calibration products
     def calibration(self, rMod, n_subap, seeing, N=None, N_corr=None, rec=('svd',), wavelength_nm=None):
-        """rec: ('svd',), ('ml', n_phot) or ('map', n_phot); the seeing is that of the (rounded) calibration."""
+        """rec: ('svd',), ('ml', n_phot) or ('map', n_phot). The products of the seeing rounded to 0.1 arcsec when it was simulated;
+        otherwise they are estimated from the simulated seeings, with a warning (see _interpolate)."""
         N = N or self.modes_per_subap[n_subap]
         N_corr = N_corr or N
         wl = self.wavelength_nm if wavelength_nm is None else wavelength_nm
-        key = (float(rMod), int(n_subap), snap_seeing(seeing), int(N), int(N_corr), tuple(rec), wl)
+        s_tag = snap_seeing(seeing)
+        simulated = op.exists(self.paths.at(wl).im_pc(rMod, n_subap, s_tag, N_corr))
+        s_key = s_tag if simulated else ('estimated', float(seeing))
+        key = (float(rMod), int(n_subap), s_key, int(N), int(N_corr), tuple(rec), wl)
         if key not in self._cal:
-            self._cal[key] = self._load(rMod, n_subap, snap_seeing(seeing), N, N_corr, rec, wl)
+            self._cal[key] = (self._load(rMod, n_subap, s_tag, N, N_corr, rec, wl) if simulated else
+                              self._interpolate(rMod, n_subap, float(seeing), N, N_corr, rec, wl))
         return self._cal[key]
+
+    def _interpolate(self, rMod, n_subap, seeing, N, N_corr, rec, wl):
+        """Calibration at a seeing that was not simulated: optical gains (perfect and partial correction) and noise coefficients by a
+        quadratic least-squares fit against the simulated seeings (linear with 2 of them, constant with 1); aliasing and crosstalk from
+        the nearest simulated seeing (the budget rescales the aliasing variance by (seeing / that seeing)^(5/3), Kolmogorov)."""
+        P = self.paths.at(wl)
+        sims = P.simulated_seeings(rMod, n_subap, N_corr)
+        if not sims:
+            raise FileNotFoundError(f'no seeing simulated for {P.sim(rMod, n_subap, seeing, N_corr)} (created by {STEPS["im_pc"]})')
+        cals = [self.calibration(rMod, n_subap, s, N, N_corr, rec, wl) for s in sims]
+        near = int(np.argmin(np.abs(np.asarray(sims) - seeing)))
+        fit = lambda values: regress(sims, values, seeing)
+        og = fit([c.og for c in cals])
+        if np.any(og <= 0):
+            og = np.maximum(og, 1e-3 * np.min([c.og.min() for c in cals]))
+            warnings.warn(f'seeing {seeing}: the fitted optical gain is not positive for some modes (extrapolation): clipped')
+        nz = cals[0].noise
+        noise = SlopeNoise(np.maximum(fit([c.noise.a for c in cals]), 0.0), np.maximum(fit([c.noise.b for c in cals]), 0.0), nz.c_pix,
+                           nz.n_norm, float(np.clip(fit([c.noise.thrp for c in cals]), 1e-6, 1.0)))
+        common = set.intersection(*(set(c.og_by_level) for c in cals))
+        by_level = {lvl: np.maximum(fit([c.og_by_level[lvl] for c in cals]), 1e-6) for lvl in common}
+        levels = {self._level_residual(P, N_corr, seeing, lvl): v for lvl, v in by_level.items()}
+        kind = {1: 'constant', 2: 'linear'}.get(len(sims), 'quadratic')
+        outside = not sims[0] <= seeing <= sims[-1]
+        warnings.warn(f'seeing {seeing:g} arcsec not simulated for {P.base(rMod, n_subap)}, {N_corr} modes corrected: optical gains and '
+                      f'noise coefficients by {kind} regression over the simulated seeings {sims}'
+                      f'{" (EXTRAPOLATED)" if outside else ""}; aliasing and crosstalk from {sims[near]:g} arcsec')
+        return Calibration(N, N_corr, og, cals[near].alias_rms, noise, levels, cals[near].mixing, og_by_level=by_level,
+                           alias_seeing=cals[near].alias_seeing)
 
     def _level_residual(self, P, N, seeing, level):
         """rms [nm] of the modes left by a correction vector (max_corr, min_corr): sqrt(sum (1 - c_i)^2 sigma_i^2), analytic sigma_i."""
@@ -217,12 +274,12 @@ class ErrorBudgetMachine:
         apath = P.alias(rMod, n_subap, seeing, N, N_corr)
         alias = (utils.read_fits(apath) if method == 'svd' and op.exists(apath)
                  else np.std(rec @ utils.read_fits(_need(P.slopes(rMod, n_subap, seeing, N_corr), 'slopes')).T, axis=1))
-        levels = {self._level_residual(P, N_corr, seeing, lvl):
-                  og_of(utils.read_fits(P.im_pc(rMod, n_subap, seeing, N_corr, None if lvl == (1.0, 1.0) else lvl)))
-                  for lvl in P.pc_levels(rMod, n_subap, seeing, N_corr)}
+        by_level = {lvl: og_of(utils.read_fits(P.im_pc(rMod, n_subap, seeing, N_corr, None if lvl == (1.0, 1.0) else lvl)))
+                    for lvl in P.pc_levels(rMod, n_subap, seeing, N_corr)}
+        levels = {self._level_residual(P, N_corr, seeing, lvl): og for lvl, og in by_level.items()}
         im_path = _need(P.im_pc(rMod, n_subap, seeing, N_corr), 'im_pc')
         return Calibration(N, N_corr, og_of(utils.read_fits(im_path)), np.asarray(alias)[:N], noise, levels,
-                           lambda: read_rec(rpath) @ utils.read_fits(im_path)[:, :N])
+                           lambda: read_rec(rpath) @ utils.read_fits(im_path)[:, :N], og_by_level=by_level, alias_seeing=seeing)
 
     # ---- loop tables
     def _loop_tables(self, fs, latency, orders, alias_order, ff_grid, n_fold, iir=None):
@@ -273,7 +330,7 @@ class ErrorBudgetMachine:
         tables = self._loop_tables(fs, latency_s * fs, orders, alias_order, ff_grid, n_fold, iir)
         photon, readout = cal.noise.modal_variance_parts(self.detector.n_det(flux, fs), self.detector)
         noise_cmd = photon + readout
-        alias_cmd = cal.alias_rms ** 2 * (seeing / snap_seeing(seeing)) ** (5 / 3)        # Kolmogorov: alias variance ~ r0^(-5/3)
+        alias_cmd = cal.alias_rms ** 2 * (seeing / cal.alias_seeing) ** (5 / 3)            # Kolmogorov: alias variance ~ r0^(-5/3)
         rms2 = rms ** 2
         extra = dict(extra or {})
         if chromatic is not None:

@@ -91,6 +91,15 @@ class Paths:
         suffix = '_im_pc' if level is None else f'_im_pc_c{level[0]:1.2f}-{level[1]:1.2f}'
         return self._f('im', self.sim(rMod, n_subap, seeing, N) + suffix)
 
+    def simulated_seeings(self, rMod, n_subap, N):
+        """Seeings [arcsec] with a perfect-correction IM on disk (N modes corrected), sorted."""
+        out = []
+        for p in glob.glob(self._f('im', f'{self.base(rMod, n_subap)}_s*_{N:.0f}modes_im_pc')):
+            m = re.search(r'_s([0-9.]+)_[0-9]+modes_im_pc\.fits$', p)
+            if m:
+                out.append(float(m.group(1)))
+        return sorted(set(out))
+
     def pc_levels(self, rMod, n_subap, seeing, N):
         """(max_corr, min_corr) of the partial-correction IMs on disk, sorted; (1.0, 1.0) stands for the perfect-correction IM."""
         pat = self._f('im', self.sim(rMod, n_subap, seeing, N) + '_im_pc_c*-*')

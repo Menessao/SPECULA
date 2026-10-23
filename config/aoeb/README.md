@@ -89,8 +89,9 @@ det = Detector(ron_e=0.5, qe=0.2, excess_noise=True)       # EMCCD: readout_leve
 m = ErrorBudgetMachine('/raid1/.../RISTRETTO_vis', diameter=8.2, L0=25., wind=12., detector=det)
 r = m.budget(rMod=3, n_subap=48, seeing=0.9, flux=1e7, fs=1500., latency_s=500e-6,
              controller='leaky', scenario='standard', wavelength_nm=1650.)
-r.totals()                       # lag, noise (+ noise_photon, noise_ron), alias, xtalk, fitting, total [nm^2], total_rms [nm]
-r.gain, r.ff, r.og, r.residual   # per mode
+r.totals()                       # lag, noise (+ noise_photon, noise_ron), alias, xtalk, fitting, total: nm rms (they add in QUADRATURE)
+r.variances()                    # the same terms in nm^2 (they add linearly)
+r.gain, r.ff, r.og, r.residual   # per mode (r.residual and the other per-mode arrays are variances [nm^2])
 
 modes, totals = m.scan(seeings, rMods, n_subaps, fluxes, freqs, scenarios=('standard', 'multistage'),
                        wavelengths=(750., 1650.), store_modes=list(range(150)))
@@ -98,6 +99,19 @@ modes, totals = m.scan(seeings, rMods, n_subaps, fluxes, freqs, scenarios=('stan
 From a configuration file (section 5): `python -m aoeb.scripts.run scan study.yml wavelengths.sensing_nm=[750,1650]`.
 `scan(..., on_missing='skip')` records configurations with missing products in `machine.skipped` instead of aborting; `scenario` and
 `controller` are validated; a missing product raises an error that names the generator step that creates it.
+
+**Units.** Every error the tables and `totals()` report is in **nm rms**: the scan tables (`totals` and the `_totals.csv` file: lag, noise,
+noise_photon, noise_ron, alias, xtalk, fitting, the chromatic terms, total) and the per-mode table (`modes` / `_modes.csv`: residual, lag,
+noise, noise_photon, noise_ron, alias, xtalk, chrom_mult). The terms add in quadrature (total² = Σ term²; noise² = noise_photon² +
+noise_ron²); a term whose variance is negative (the signed cross term `chrom_mult`) is shown as −sqrt|v|. `variances()` gives the nm² values;
+the arrays of a `BudgetResult` (`r.lag`, `r.residual`, ...) stay variances.
+
+**Seeings that were not simulated.** The products of the seeing rounded to 0.1" are used when that seeing was simulated (the aliasing
+is rescaled to the exact seeing, variance ∝ seeing^(5/3)). Otherwise the calibration is estimated from the simulated seeings, with a warning
+(once per configuration; it also says when the seeing is outside the simulated range, i.e. extrapolated): optical gains (perfect and
+partial correction) and noise coefficients by a quadratic least-squares fit against the simulated seeings (linear with two, constant with
+one), aliasing and crosstalk from the nearest simulated seeing (aliasing rescaled as above). The turbulence and fitting terms are always
+analytic at the exact seeing.
 
 * `flux`: photons/s at the detector (before QE). `latency_s`: latency from the end of the exposure to the command applied, any
   real value (fractional frames allowed); the frame of exposure window + DM hold is part of the model, never add it.
@@ -143,10 +157,96 @@ TipTop check of the shear term: ASSUMPTIONS section 4 (what to print in TipTop a
 
 ## 4. Plots
 
-All functions return the matplotlib figure; nothing is saved. From the scan DataFrames: `plot_budget_terms`, `plot_budget_compare`,
-`plot_per_mode`. From a machine: `plot_calibration(machine, 'og' | 'alias' | 'ct' | 'noise' | 'turb' | 'thrp', hue=..., values=...)`,
-`plot_modal_variance_check(machine)`; from a budget result: `plot_psd_terms(eng.psd_terms(r))`, `plot_psf_terms(eng.psf_terms(r, 1650.))`,
-`plot_psf_image(...)`. Use `fig.savefig(...)` yourself if you want a file.
+Everything is in `aoeb.plotting` (needs matplotlib: `pip install -e .[plots]`). Every function **returns** the matplotlib figure and saves
+nothing: `fig.savefig('name.png', dpi=150)`; `plt.show()` in an interactive session; `plt.close(fig)` in long loops. Errors are in nm rms.
+Single-panel functions accept `ax=` to draw into an existing axes (subplots of your own); all accept `title=`.
+
+### 4.1 Budget plots, from a scan
+
+They take the tables `m.scan(...)` returns, or the CSV files written by `python -m aoeb.scripts.run scan study.yml`
+(`<output.prefix>_totals.csv`; `_modes.csv` only with `scan.store_modes`):
+
+```python
+import pandas as pd
+from aoeb import plotting as pl
+
+totals = pd.read_csv('results/scan_totals.csv')              # or: modes, totals = m.scan(...)
+modes = pd.read_csv('results/scan_modes.csv')
+one = {'scenario': 'standard', 'controller': 'int', 'rMod': 3, 'seeing': 0.9, 'Nsubaps': 48, 'wavelength_nm': 750}
+
+# 1. every term of ONE configuration versus flux
+fig = pl.plot_budget_terms(totals, x='photPerMs', filters={**one, 'freqInHz': 1000},
+                           terms=('lag', 'noise_photon', 'noise_ron', 'alias', 'fitting', 'total'))
+fig.savefig('terms_vs_flux.png', dpi=150)
+
+# 2. one quantity, a curve per frame rate, a panel per sensor
+fig = pl.plot_budget_compare(totals, x='photPerMs', hue='freqInHz', quantity='total', col='Nsubaps',
+                             filters={k: v for k, v in one.items() if k != 'Nsubaps'})
+
+# 3. per-mode residual of one configuration, a curve per flux
+fig = pl.plot_per_mode(modes, y='residual', hue='photPerMs', filters={**one, 'freqInHz': 1000})
+```
+
+| function | draws | options |
+|---|---|---|
+| `plot_budget_terms(totals, x, filters, terms)` | the error terms [nm rms] of one configuration versus `x` (thick line: total) | `logx=True`, `logy=False`, `ax` |
+| `plot_budget_compare(totals, x, hue, quantity, filters, col)` | one column (`quantity`, default `total`) versus `x`, one curve per value of `hue`, one panel per value of `col` | `logx`, `logy` |
+| `plot_per_mode(modes, y, hue, filters)` | a per-mode column versus `modeId` (errors in nm rms; `gain`, `ff`, `og` as they are) | `logy=True` |
+
+* `x`, `hue`, `col` are any column: `photPerMs` (photons/ms at the detector), `freqInHz`, `seeing`, `rMod`, `Nsubaps`, `Nmodes`,
+  `wavelength_nm`, `scenario`, `controller`, `crosstalk`. `terms` / `quantity` / `y` are the error columns (lag, noise, noise_photon,
+  noise_ron, alias, xtalk, fitting, chrom_shear / chrom_mult / chrom_fresnel / scintillation when enabled, total; per mode also residual,
+  gain, ff, og).
+* `filters` = `{column: value or [values]}`; numbers match within 1e-6 relative. **Pin every column that varies in the table except `x`
+  (and `hue`, `col`)**: if two configurations would share an `x` value the function raises an error listing the columns that still vary
+  (instead of drawing a zig-zag line).
+
+### 4.2 Calibration checks, from a machine
+
+```python
+fig = pl.plot_calibration(m, 'og', hue='seeing', values=[0.5, 0.9, 1.3], rMod=3, n_subap=48)    # optical gain per mode
+fig = pl.plot_calibration(m, 'thrp', hue='rMod', values=[0, 1, 2, 3], n_subap=48, seeing=0.9)    # throughput versus rMod
+fig = pl.plot_modal_variance_check(m, rMod=3, n_subap=48, seeing=0.9)
+```
+* `plot_calibration(machine, product, hue, values, rMod, n_subap, seeing, N, N_corr, flux, fs, wavelength_nm)`: `product` is `'og'`
+  (optical gain), `'alias'` (aliasing std), `'ct'` (crosstalk), `'noise'` (noise rms at `flux` photons/s and `fs` Hz), `'turb'`
+  (turbulence rms), all per mode in command units, or `'thrp'` (throughput versus the `hue` values); one curve per value of `hue` (`rMod`,
+  `n_subap`, `seeing`, `N` or `wavelength_nm`). A seeing that was not simulated is estimated (section 2, warning).
+* `plot_modal_variance_check(machine, rMod, n_subap, seeing)`: variance of the simulated turbulence modes (aliasing run) over the
+  analytic one, per mode, with the 1-sigma statistical band: checks the KL basis, r0 and L0.
+
+### 4.3 PSD and PSF, from a budget result
+
+```python
+from aoeb.psf import PsfEngine
+eng = PsfEngine(m)                                    # or cfg.psf_engine(); kernels cached on disk
+r = m.budget(rMod=3, n_subap=48, seeing=0.9, flux=1e7, fs=1500., wavelength_nm=750.)
+fig = pl.plot_psd_terms(eng.psd_terms(r), terms=('lag', 'noise_photon', 'alias', 'fitting'))
+res = eng.psf_terms(r, 1650.)                        # science wavelength
+fig = pl.plot_psf_terms(res, rmax=30)                # contrast profiles, Strehl in the legend
+fig = pl.plot_psf_terms(res, kind='halo', rmax=30, pa_range=(0, 90))
+fig = pl.plot_psf_image(res, 'total', half_fov=20)
+```
+* `plot_psd_terms(psd_set, terms, xaxis='lamD' | 'k', show_open_loop=True)`: radial PSD [nm² m²] of every term and the total, versus
+  separation [λ/D] or spatial frequency [cycles/m]; dotted vertical line: DM cut-off; dotted curve: open-loop turbulence.
+* `plot_psf_terms(psf_result, kind='psf' | 'halo', terms, binsize=0.5, rmax, stat='mean' | 'median' | 'std', pa_range=(deg, deg),
+  show_dl=True, show_open_loop=False)`: radial raw-contrast profiles of every term alone and of the total; `'halo'`: first-order halos,
+  which add up; `pa_range` restricts to a sector.
+* `plot_psf_image(psf_result, name='total', half_fov=20, vmin=1e-7)`: 2-D long-exposure PSF, log colour scale, ±half_fov λ/D.
+
+### 4.4 A batch of figures
+
+```python
+import os
+import matplotlib
+matplotlib.use('Agg')                                 # no display (servers, scripts)
+import matplotlib.pyplot as plt
+os.makedirs('figs', exist_ok=True)
+for fs in sorted(totals['freqInHz'].unique()):
+    fig = pl.plot_budget_terms(totals, 'photPerMs', {**one, 'freqInHz': fs}, title=f'{fs:g} Hz')
+    fig.savefig(f'figs/terms_{fs:g}Hz.png', dpi=150)
+    plt.close(fig)
+```
 
 ## 5. Configuration file
 
