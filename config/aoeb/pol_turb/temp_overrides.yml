@@ -1,0 +1,7 @@
+atmo_override:
+  seed: 10
+wind_direction_override:
+  constant: [277.7, 7.5, 228.1, 269.6, 179.5, 80.9, 71.3, 273.8, 60.9, 31.8]
+data_store_override:
+  inputs:
+    input_list: ['atmo_seed10_res-atmo_modes.out_modes']

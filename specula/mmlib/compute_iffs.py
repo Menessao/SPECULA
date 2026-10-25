@@ -340,8 +340,10 @@ if __name__ == "__main__":
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=2)
 
     Npix = 220
-    compute_and_save_influence_functions(vlt_dir,tag=f'dm1200_{Npix}pix', pupil_pixels=Npix, n_acts=42, pupil_mask_tag='vlt_pupil',
-                                            geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.2, margin=0)
+    # compute_and_save_influence_functions(vlt_dir,tag=f'dm1200_{Npix}pix', pupil_pixels=Npix, n_acts=42, pupil_mask_tag='vlt_pupil',
+    #                                         geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.2, margin=0)
+    compute_and_save_influence_functions(vlt_dir,tag=f'bmc2k_vlt', pupil_pixels=Npix, n_acts=50, pupil_mask_tag='vlt_pupil',
+                                            geom='alpao', r0=10e-2, obsratio=0.11, diaratio=1.0, D=8.2, margin=0)
     # Npix = 420
     # compute_and_save_influence_functions(chaos_dir,tag=f'dm820_{Npix}pix', pupil_pixels=Npix, n_acts=32,
     #                                         geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0, margin=0)

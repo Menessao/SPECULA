@@ -3,6 +3,212 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
 
+def optimize_iir_controller(
+    freq: np.ndarray,
+    psd_turb: np.ndarray,
+    psd_noise: np.ndarray | float,
+    delay: float,
+    fs: float,
+    order: int = 2,
+    optical_gain: float = 1.0
+) -> dict:
+    """
+    Optimizes a stable, high-order IIR controller C(z) up to order 5 for a single mode.
+
+    Parameters
+    ----------
+    freq : np.ndarray
+        Frequency grid [Hz] up to fs/2.
+    psd_turb : np.ndarray
+        Turbulence PSD [rad^2 / Hz].
+    psd_noise : np.ndarray or float
+        Measurement noise PSD [rad^2 / Hz] or scalar variance.
+    delay : float
+        Loop delay in frames.
+    fs : float
+        Sampling frequency [Hz].
+    order : int
+        IIR Filter order (1 to 5).
+    optical_gain : float
+        WFS optical gain factor.
+
+    Returns
+    -------
+    dict
+        Optimized num (b) and den (a) coefficients, C(z) frequency response, 
+        and residual phase variance.
+    """
+    freq = np.asarray(freq, dtype=float)
+    psd_turb = np.asarray(psd_turb, dtype=float)
+    dt = 1.0 / fs
+
+    if np.isscalar(psd_noise):
+        psd_noise = np.full_like(freq, 2.0 * float(psd_noise) / fs)
+
+    z = np.exp(1j * 2.0 * np.pi * freq * dt)
+    z_inv1 = z ** (-1.0)
+    z_inv2 = z ** (-2.0)
+    z_delay = z ** (-delay)
+
+    n_biquads = order // 2
+    has_first_order = (order % 2 == 1)
+
+    # Pack initial parameters and bounds for SOS parametrization
+    x0, bounds = [], []
+    
+    # 1. Biquad sections: [b0, b1, b2, r, theta] where pole = r * exp(+-j * theta)
+    for _ in range(n_biquads):
+        x0.extend([0.1, 0.0, 0.0, 0.95, 0.05])
+        bounds.extend([(-3.0, 3.0), (-3.0, 3.0), (-3.0, 3.0), (1e-4, 0.999), (0.0, np.pi)])
+
+    # 2. First-order section (if odd order): [b0, b1, p1] where pole = p1
+    if has_first_order:
+        x0.extend([0.2, 0.0, 0.99])
+        bounds.extend([(-3.0, 3.0), (-3.0, 3.0), (1e-4, 0.999)])
+
+    def params_to_cz(params):
+        """Constructs frequency response C(z) from SOS parameters."""
+        C = np.ones_like(z, dtype=complex)
+        idx = 0
+
+        for _ in range(n_biquads):
+            b0, b1, b2, r, theta = params[idx:idx+5]
+            a1 = -2.0 * r * np.cos(theta)
+            a2 = r ** 2
+            num = b0 + b1 * z_inv1 + b2 * z_inv2
+            den = 1.0 + a1 * z_inv1 + a2 * z_inv2
+            C *= (num / den)
+            idx += 5
+
+        if has_first_order:
+            b0, b1, p1 = params[idx:idx+3]
+            num = b0 + b1 * z_inv1
+            den = 1.0 - p1 * z_inv1
+            C *= (num / den)
+
+        return C
+
+    def cost_function(params):
+        C = params_to_cz(params)
+        H_ol = optical_gain * C * z_delay
+        
+        # Closed-loop transfer functions
+        ETF = 1.0 / (1.0 + H_ol)
+        NTF_noise = (H_ol / optical_gain) / (1.0 + H_ol)
+
+        # Residual variance
+        res_psd = (np.abs(ETF)**2) * psd_turb + (np.abs(NTF_noise)**2) * psd_noise
+        return np.trapz(res_psd, freq)
+
+    # Global/Local Optimization
+    res = minimize(
+        cost_function,
+        x0,
+        bounds=bounds,
+        method='L-BFGS-B',
+        options={'maxiter': 500, 'ftol': 1e-9}
+    )
+
+    opt_C = params_to_cz(res.x)
+    
+    return {
+        'success': res.success,
+        'order': order,
+        'C_frequency_response': opt_C,
+        'residual_variance': float(res.fun),
+        'open_loop_variance': float(np.trapz(psd_turb, freq)),
+        'opt_params': res.x
+    }
+
+def optimize_modal_control_vectorized(
+    freq: np.ndarray,
+    psd_turb: np.ndarray,
+    psd_noise: np.ndarray | float,
+    delay: float,
+    fs: float,
+    optical_gain: float | np.ndarray = 1.0,
+    optimize_leak: bool = False,
+    g_res: int = 200,
+    alpha_res: int = 50
+) -> dict:
+    """
+    Vectorized computation of optimal integrator gains and leaks across M modes.
+
+    Parameters
+    ----------
+    freq : np.ndarray
+        Frequency grid of shape (F,).
+    psd_turb : np.ndarray
+        Turbulence PSD array of shape (M, F) for M modes over F frequencies.
+    psd_noise : np.ndarray or float
+        Noise PSD array of shape (M, F) or scalar noise variance.
+    delay : float
+        Loop delay in frames (e.g. 2.3).
+    fs : float
+        Sampling rate in Hz.
+    optical_gain : float or np.ndarray
+        Scalar or array of shape (M,) containing mode optical gains.
+    optimize_leak : bool
+        If True, solves a 2D grid over (gain, leak); otherwise 1D over gain.
+    g_res, alpha_res : int
+        Grid resolution parameters for optimization search space.
+    """
+    freq = np.asarray(freq, dtype=float) # Shape: (F,)
+    psd_turb = np.asarray(psd_turb, dtype=float) # Shape: (M, F)
+    M, F = psd_turb.shape
+    dt = 1.0 / fs
+
+    # Format noise and optical gain inputs to 2D arrays
+    if np.isscalar(psd_noise):
+        psd_noise = np.full((M, F), 2.0 * float(psd_noise) / fs)
+    elif psd_noise.ndim == 1:
+        psd_noise = np.tile(psd_noise, (M, 1))
+
+    opt_gain_arr = np.atleast_1d(optical_gain).reshape(-1, 1) # Shape: (M, 1)
+
+    # 1. Build Candidate Parameter Grid (K candidate parameter pairs)
+    g_cand = np.linspace(1e-4, 1.2, g_res)
+    if optimize_leak:
+        alpha_vec = np.linspace(0.8, 1.0, alpha_res)
+        G_grid, A_grid = np.meshgrid(g_cand, alpha_vec, indexing='ij')
+        g_cand = G_grid.ravel() # Shape: (K,)
+        alpha_cand = A_grid.ravel() # Shape: (K,)
+    else:
+        alpha_cand = np.ones_like(g_cand) # Shape: (K,)
+
+    # 2. Compute Frequency Response Terms: z = exp(j * 2 * pi * f * dt)
+    z = np.exp(1j * 2.0 * np.pi * freq * dt) # Shape: (F,)
+    z_delay = z ** (-delay)
+    z_inv = z ** (-1.0)
+
+    # Base transfer function (without modal gain g or optical gain): Shape (K, F)
+    H_base = z_delay[None, :] / (1.0 - alpha_cand[:, None] * z_inv[None, :])
+
+    # 3. 3D Broadcast across Modes (M), Candidates (K), and Frequencies (F)
+    # Open-loop TF: H_ol shape = (M, K, F)
+    H_ol = opt_gain_arr[:, None, None] * g_cand[None, :, None] * H_base[None, :, :]
+
+    # Squared Error and Noise Transfer Functions
+    ETF_sq = np.abs(1.0 / (1.0 + H_ol)) ** 2
+    NTF_sq = np.abs((g_cand[None, :, None] * H_base[None, :, :]) / (1.0 + H_ol)) ** 2
+
+    # Residual PSD across all combinations: (M, K, F)
+    res_psd = ETF_sq * psd_turb[:, None, :] + NTF_sq * psd_noise[:, None, :]
+
+    # 4. Numerically Integrate over Frequency Axis -> Shape (M, K)
+    res_var_grid = np.trapz(res_psd, freq, axis=-1)
+
+    # 5. Extract Optimal Index for Each Mode
+    best_idx = np.argmin(res_var_grid, axis=1) # Shape: (M,)
+
+    return {
+        'gain': g_cand[best_idx],
+        'leak': alpha_cand[best_idx],
+        'residual_variance': res_var_grid[np.arange(M), best_idx],
+        'open_loop_variance': np.trapz(psd_turb, freq, axis=-1)
+    }
+
+
 def gen_synth_psd(f, cutoff, n, turb_power, noise_power):
     f_safe = np.maximum(f, f[0])
     if n == 1:
@@ -90,11 +296,8 @@ def cost_function(params, order, f, psd_turb, psd_noise, N, f_s, og=1.0, lambda_
     
     return variance_cost + l2_penalty
 
-
-
 def optimize_higher_order_scao(f_s, orders=[0, 1, 2, 3], turb_power=100.0, noise_power=0.5, og=1.0, show:bool=False,
-                               delay_steps=2.0, cutoff=15.0, n=1, restarts:int=100, alias_psd=0.0,
-                               lambda_reg=1e-2):
+                               delay_steps=2.0, cutoff=15.0, n=1, alias_psd=0.0, lambda_reg=1e-2):
     f = np.linspace(0.1, f_s/2.0, 2000)
     psd_turb, psd_noise = gen_synth_psd(f, cutoff, n, turb_power, noise_power)
 

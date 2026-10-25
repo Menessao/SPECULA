@@ -18,6 +18,7 @@ from itertools import product
 
 import numpy as np
 import yaml
+from astropy.io import fits
 
 from . import utils
 from .naming import Paths, snap_seeing
@@ -94,7 +95,6 @@ def save_correction_vector(root_dir, max_corr, min_corr, Nmodes, Ncorrmodes=None
     (header VERSION, OBJ_TYPE = BaseValue, NDARRAY = 1, MAX_CORR, MIN_CORR); returns the file stem. One function for the perfect
     correction (max_corr = min_corr = 1) and for partial corrections. The vector multiplies the reconstructed (modal-analysis) modes
     that command the DM, which SPECULA applies as a correction (negative sign): 1 = perfectly corrected mode, 0 = uncorrected."""
-    from astropy.io import fits
     if Ncorrmodes is None:
         Ncorrmodes = Nmodes
     vec = correction_vector(max_corr, min_corr, Nmodes, Ncorrmodes)
@@ -185,7 +185,7 @@ class GeneratorConfig:
     L0: float = 25.0                               # outer scale of the aliasing and PC runs (the budget's L0)
     pup_dist_min: float = 16.0
     pup_dist_per_subap: float = 1.25               # pyr.pup_dist = max(pup_dist_min, pup_dist_per_subap * n_subap)
-    pupilstop_tag: str = 'vlt_pupil_160pixels'
+    pupilstop_tag: str = 'vlt_pupil_220pixels'
     dm_tag: str = 'bmc2k_vlt'                      # DM data objects {dm_tag}_ifunc, {dm_tag}_m2c, {dm_tag}_kl_inv
     overwrite: bool = False
 
