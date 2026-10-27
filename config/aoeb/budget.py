@@ -5,6 +5,7 @@ integrator / leaky integrator of every mode is optimised (filter_optimizers.py);
 """
 import os.path as op
 import warnings
+from dataclasses import replace as _replace
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -17,7 +18,7 @@ import pandas as pd
 from . import utils
 from .filter_optimizers import DEFAULT_FF_GRID, IirControllers, IirTables, LoopTables
 from .naming import Paths, snap_seeing
-from .noise import Detector, PupilGeometry, SlopeNoise, slope_noise_coefficients
+from .noise import Detector, PupilGeometry, SlopeNoise, measure_slope_norm, slope_noise_coefficients
 from .reconstructors import read_rec
 
 DEFAULT_MODES_PER_SUBAP = {12: 50, 16: 150, 24: 300, 48: 1200}
@@ -154,7 +155,7 @@ class ErrorBudgetMachine:
 
     def __init__(self, root_dir, diameter=8.2, L0=25.0, wind=12.0, detector=None,
                  pupilstop_tag='vlt_pupil_160pixels', dm_tag='bmc2k_vlt', modes_per_subap=None,
-                 n_modes_ho=1200, kl_pad=8, slopes_from_intensity=False, tables_cache=64, wavelength_nm=None):
+                 n_modes_ho=1200, kl_pad=8, slopes_from_intensity=False, tables_cache=64, wavelength_nm=None, asm=True):
         self.paths = Paths(root_dir, pupilstop_tag, dm_tag)
         self.wavelength_nm = wavelength_nm
         self.D, self.L0, self.wind = diameter, L0, wind
@@ -162,8 +163,9 @@ class ErrorBudgetMachine:
         self.modes_per_subap = dict(modes_per_subap or DEFAULT_MODES_PER_SUBAP)
         self.n_modes_ho, self.kl_pad = n_modes_ho, kl_pad
         self.slopes_from_intensity = slopes_from_intensity
+        self.asm = asm                  # fitting: True = LBT-ASM law; False = TipTop (von Karman outside the corrected square)
         self._kl, self._cal, self._orders = None, {}, {}
-        self._modes_cache, self._pupil_cache, self._recs = None, None, OrderedDict()
+        self._modes_cache, self._pupil_cache, self._recs, self._norms = None, None, OrderedDict(), {}
         self.skipped = []
         self._tables, self._tables_cache = OrderedDict(), tables_cache
 
@@ -255,6 +257,26 @@ class ErrorBudgetMachine:
         var_cmd, rms, _ = self.turbulence(seeing, N)
         return float(np.sqrt(np.sum((1.0 - vec) ** 2 * var_cmd * rms ** 2)))
 
+    def slope_geometry(self, rMod, n_subap, seeing, N_corr, wl, frame):
+        """Pupil geometry with the PyrSlopec divisor measured from the products of that run (mean slopes against mean frame); the number of
+        valid subapertures, with a warning, when it cannot be measured."""
+        P = self.paths.at(wl)
+        geom = PupilGeometry.from_file(_need(P.pupdata(n_subap), 'pupdata'), n_subap, frame.shape[0])
+        key = (P.base(rMod, n_subap), float(seeing), int(N_corr))
+        if key not in self._norms:
+            path = P.sn(rMod, n_subap, seeing, N_corr)
+            n_norm, corr = (measure_slope_norm(frame, utils.read_fits(path), geom, self.slopes_from_intensity) if op.exists(path)
+                            else (float('nan'), float('nan')))
+            if not (corr > 0.9 and n_norm > 0):
+                warnings.warn(f'{P.sim(rMod, n_subap, seeing, N_corr)}: the slope normalisation could not be measured (correlation {corr:.2f} of '
+                              f'the mean slopes with the mean frame): using the number of valid subapertures, {geom.n_valid}')
+                n_norm = float(geom.n_valid)
+            elif abs(n_norm / geom.n_valid - 1) > 0.02:
+                warnings.warn(f'{P.sim(rMod, n_subap, seeing, N_corr)}: measured slope normalisation {n_norm:.1f} differs from the number of '
+                              f'valid subapertures {geom.n_valid}')
+            self._norms[key] = n_norm
+        return _replace(geom, n_norm=self._norms[key])
+
     def _read_rec(self, path):
         if path not in self._recs:
             self._recs[path] = read_rec(_need(path, 'rec'))
@@ -269,8 +291,7 @@ class ErrorBudgetMachine:
         rec = self._read_rec(rpath)
         og_of = lambda im: np.einsum('ij,ji->i', rec, im[:, :N])
         frame = utils.read_fits(_need(P.avgframe(rMod, n_subap, seeing, N_corr), 'avgframe'))
-        noise = slope_noise_coefficients(rec, frame, PupilGeometry.from_file(_need(P.pupdata(n_subap), 'pupdata'), n_subap, frame.shape[0]),
-                                         self.slopes_from_intensity)
+        noise = slope_noise_coefficients(rec, frame, self.slope_geometry(rMod, n_subap, seeing, N_corr, wl, frame), self.slopes_from_intensity)
         apath = P.alias(rMod, n_subap, seeing, N, N_corr)
         alias = (utils.read_fits(apath) if method == 'svd' and op.exists(apath)
                  else np.std(rec @ utils.read_fits(_need(P.slopes(rMod, n_subap, seeing, N_corr), 'slopes')).T, axis=1))
@@ -367,7 +388,11 @@ class ErrorBudgetMachine:
         return self.pupil().shape[0] / (2.0 * self.D)
 
     def _fitting(self, r0, N):
-        return float(utils.fitting_variance_lbt(r0, N, self.D))
+        """Fitting variance [nm^2] of N modes: LBT-ASM law (asm=True), or TipTop's von Karman PSD outside the square |kx|, |ky| <= k_c,
+        k_c = sqrt(N / pi) / D (a DM with N actuators in the pupil, sqrt(4 N / pi) across) (asm=False)."""
+        if self.asm:
+            return float(utils.fitting_variance_lbt(r0, N, self.D))
+        return utils.fitting_variance_tiptop(r0, self.L0, utils.fitting_cutoff(N, self.D))
 
     @staticmethod
     def _solve(tables, turb_cmd, noise_cmd, alias_cmd, og_vec, orders, xt=None, n_iter=8, eta=None, tol=1e-3):

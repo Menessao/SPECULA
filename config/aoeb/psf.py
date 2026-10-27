@@ -77,13 +77,19 @@ def von_karman_variance_above(k_cut, r0, L0):
                  * (k_cut ** 2 + 1 / L0 ** 2) ** (-5 / 6))
 
 
-def fitting_psd(k, r0, L0, N, D, variance_nm2=None):
-    """Fitting-error PSD: von Karman above the cut-off of N modes."""
+def fitting_psd(k, r0, L0, N, D, variance_nm2=None, square=False):
+    """Fitting-error PSD: von Karman above the cut-off of N modes (square=True: outside the square |kx|, |ky| <= k_cut, TipTop's corrected
+    area, azimuthally averaged), scaled to `variance_nm2` when given."""
     k = np.asarray(k, float)
     k_cut = fitting_cutoff(N, D)
-    v_inf = von_karman_variance_above(k_cut, r0, L0)
+    if square:
+        v_inf = utils.fitting_variance_tiptop(r0, L0, k_cut)
+        mask = utils.square_outside_fraction(k, k_cut)
+    else:
+        v_inf = von_karman_variance_above(k_cut, r0, L0)
+        mask = (k > k_cut).astype(float)
     scale = 1.0 if variance_nm2 is None else variance_nm2 / v_inf
-    psd = np.where(k > k_cut, utils.von_karman_psd(k, r0, L0), 0.0) * scale
+    psd = utils.von_karman_psd(k, r0, L0) * mask * scale
     return psd, dict(k_cut=k_cut, scale=scale, variance_inf=v_inf * scale, n_across=np.sqrt(4.0 * N / np.pi))
 
 
@@ -115,7 +121,7 @@ class PsdSet:
 
 
 def residual_psd_terms(kern, result, r0, L0, N, fitting_scale='lbt', extra_psd=None, chromatic=None,
-                       sensing_nm=None, include_open_loop=True, split_noise=True):
+                       sensing_nm=None, include_open_loop=True, split_noise=True, square=False):
     """PSD of every term of a BudgetResult."""
     k = kern.k
     terms = OrderedDict()
@@ -128,7 +134,7 @@ def residual_psd_terms(kern, result, r0, L0, N, fitting_scale='lbt', extra_psd=N
     cm = getattr(result, 'chrom_mult', None)
     if cm is not None and np.any(cm):                       # signed modal term: the kernels are linear
         terms['chrom_mult'] = PsdTerm('chrom_mult', kern.psd(np.asarray(cm)[:N]), True)
-    fit_psd, info = fitting_psd(k, r0, L0, N, kern.D, result.fitting if fitting_scale == 'lbt' else None)
+    fit_psd, info = fitting_psd(k, r0, L0, N, kern.D, result.fitting if fitting_scale == 'lbt' else None, square)
     terms['fitting'] = PsdTerm('fitting', fit_psd, False)
     for name, p in (extra_psd or {}).items():
         terms[name] = PsdTerm(name, np.asarray(p, float), False)
@@ -194,13 +200,19 @@ class PsfResult:
     strehl: dict                        # exp(-sigma^2) per name
     sigma2_rad: dict                    # in-grid phase variance per name [rad^2 at wavelength]
     diffraction_limited: np.ndarray
+    coro: OrderedDict = None            # name -> image after a perfect coronagraph (Cavarroc et al. 2006, eq. 1): psf - strehl * PSF_DL
+
+    def image(self, name='total', kind='psf'):
+        """kind: 'psf' (long exposure), 'coro' (after a perfect coronagraph), 'halo' (first order, additive). The perfect coronagraph is
+        that of Cavarroc et al. (2006, A&A 447, 397), eq. (1): the pupil field Pi (sqrt(E_C) - exp(i phi)), E_C = exp(-sigma^2); for Gaussian
+        phase its long-exposure intensity is exactly psf - exp(-sigma^2) PSF_DL, i.e. the coherent part (and the Airy pattern) removed."""
+        return {'psf': self.psf, 'coro': self.coro, 'halo': self.halo}[kind][name]
 
     def profile(self, name='total', kind='psf', binsize=0.5, stat='mean', rmax=None, pa_range=None):
-        img = (self.psf if kind == 'psf' else self.halo)[name]
-        return radial_profile(img, self.pixel_scale, binsize, None, stat, rmax, pa_range)
+        return radial_profile(self.image(name, kind), self.pixel_scale, binsize, None, stat, rmax, pa_range)
 
     def contrast_at(self, rho, name='total', kind='psf', binsize=0.5, **kw):
-        """Annulus-averaged contrast at separations rho [lambda/D]."""
+        """Annulus-averaged contrast at separations rho [lambda/D]; kind='coro': after a perfect coronagraph (see image)."""
         r, p = self.profile(name, kind, binsize, **kw)
         return np.interp(rho, r, p)
 
@@ -254,15 +266,16 @@ class PsfModel:
         if open_loop and 'turbulence' in psd_set.terms:
             chats['turbulence'] = self._chat(k, psd_set.terms['turbulence'], wavelength_nm)
         keep = [n for n in chats if names is None or n in names or n in ('total', 'turbulence')]
-        out, halo, strehl, sig = OrderedDict(), OrderedDict(), {}, {}
+        out, halo, coro, strehl, sig = OrderedDict(), OrderedDict(), OrderedDict(), {}, {}
         for n in keep:
             ch = chats[n]
             s2 = float(ch[0, 0])
-            otf = self.otf_tel * np.exp(-(s2 - ch))
-            out[n] = self._shift(sfft.fft2(otf).real)
+            out[n] = self._shift(sfft.fft2(self.otf_tel * np.exp(-(s2 - ch))).real)
+            # perfect coronagraph, Cavarroc et al. (2006) eq. (1) averaged over the Gaussian phase: exp(-s2) FT[OTF_tel (exp(C) - 1)]
+            coro[n] = self._shift(sfft.fft2(self.otf_tel * np.exp(-s2) * np.expm1(ch)).real)
             halo[n] = self._shift(sfft.fft2(self.otf_tel * ch).real)
             strehl[n], sig[n] = float(np.exp(-s2)), s2
-        return PsfResult(float(wavelength_nm), self.pixel_scale, out, halo, strehl, sig, self._shift(self.psf_dl))
+        return PsfResult(float(wavelength_nm), self.pixel_scale, out, halo, strehl, sig, self._shift(self.psf_dl), coro)
 
 
 class PsfEngine:
@@ -283,11 +296,12 @@ class PsfEngine:
         return self._kern
 
     def psd_terms(self, result, fitting_scale='lbt', include_open_loop=True, extra_psd=None, split_noise=True):
-        """PsdSet of a BudgetResult (fitting_scale 'lbt': PSD scaled to the LBT variance, 'psd': pure tail)."""
+        """PsdSet of a BudgetResult (fitting_scale 'lbt': PSD scaled to the budget's fitting variance, 'psd': pure tail; with
+        machine.asm=False the fitting PSD lies outside TipTop's square corrected area)."""
         wl = result.params['wavelength_nm']
         return residual_psd_terms(self.kernels(), result, float(utils.r0_from_seeing(result.params['seeing'])), self.m.L0,
                                   int(result.params['Nmodes']), fitting_scale, extra_psd, result.chromatic,
-                                  None if np.isnan(wl) else wl, include_open_loop, split_noise)
+                                  None if np.isnan(wl) else wl, include_open_loop, split_noise, square=not getattr(self.m, 'asm', True))
 
     def psf_terms(self, result, wavelength_nm, names=None, **kw):
         """Long-exposure PSFs of every PSD term at the SCIENCE wavelength (peak of the diffraction-limited PSF = 1)."""

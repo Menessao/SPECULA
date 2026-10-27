@@ -15,10 +15,10 @@ import tempfile
 import warnings
 from dataclasses import dataclass, field
 from itertools import product
+from astropy.io import fits
 
 import numpy as np
 import yaml
-from astropy.io import fits
 
 from . import utils
 from .naming import Paths, snap_seeing
@@ -185,7 +185,7 @@ class GeneratorConfig:
     L0: float = 25.0                               # outer scale of the aliasing and PC runs (the budget's L0)
     pup_dist_min: float = 16.0
     pup_dist_per_subap: float = 1.25               # pyr.pup_dist = max(pup_dist_min, pup_dist_per_subap * n_subap)
-    pupilstop_tag: str = 'vlt_pupil_220pixels'
+    pupilstop_tag: str = 'vlt_pupil_160pixels'
     dm_tag: str = 'bmc2k_vlt'                      # DM data objects {dm_tag}_ifunc, {dm_tag}_m2c, {dm_tag}_kl_inv
     overwrite: bool = False
 
@@ -356,7 +356,7 @@ class ErrorBudgetGenerator:
             if not self._needed(path):
                 continue
             frame = utils.read_fits(P.avgframe(rMod, n, seeing, N))
-            cn = slope_variance_diag(frame, PupilGeometry.from_file(self.paths.pupdata(n), n, frame.shape[0]), n_phot, detector,
+            cn = slope_variance_diag(frame, machine.slope_geometry(rMod, n, seeing, N, P.wavelength_nm, frame), n_phot, detector,
                                      slopes_from_intensity)
             ca = machine.turbulence(seeing, N)[0] if method == 'map' else None
             save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N, method, cn_diag=cn, ca_diag=ca),

@@ -1,5 +1,7 @@
 """Detector and pyramid slope-noise model: pixel variance F2 n_k + ron_e^2 (ron_e input-referred, F2 = 1 + 1/delta with EM excess
-noise); PyrSlopec quad-cell slopes normalised by the mean counts per subaperture (n_norm = PupData.n_subap)."""
+noise); PyrSlopec slopes s = (A + B - C - D) n_norm / I_total, with n_norm = PupData.n_subap. The divisor n_norm is MEASURED from the
+products (measure_slope_norm: mean slopes against the mean frame of the same noise-free runs); the number of valid subapertures is the
+fallback (PyrSlopec calls I_total / n_subap the counts per subaperture)."""
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,7 +28,7 @@ class Detector:
 @dataclass(frozen=True)
 class PupilGeometry:
     idx: tuple            # four index arrays (flat detector indices), same length
-    n_norm: float         # PupData.n_subap, the divisor PyrSlopec uses (pupil diameter in subaps)
+    n_norm: float         # the divisor PyrSlopec uses (PupData.n_subap): measured from the products, see measure_slope_norm
     npix: int
 
     @classmethod
@@ -106,3 +108,17 @@ def slope_variance_diag(frame, geom, n_det, detector, slopes_from_intensity=Fals
         v4 = detector.f2 * n_det * (fa + fb + fc + fd) + 4 * ron2
         v = np.concatenate([v4, v4])
     return v / fm ** 2
+
+
+def measure_slope_norm(frame, sn, geom, slopes_from_intensity=False):
+    """(n_norm, correlation): the PyrSlopec divisor, fitted on mean slopes `sn` against the same normalised differences computed from the
+    mean frame of the same runs (sn = n_norm (A + B - C - D) / I, x then y; intensity mode: n_norm [A, B, C, D] / I). A low correlation
+    means the slopes are not built as assumed (ordering, definition)."""
+    f = np.asarray(frame, float).ravel()
+    a, b, c, d = (f[i] for i in geom.idx)
+    total = float((a + b + c + d).sum())
+    pred = (np.concatenate([a, b, c, d]) if slopes_from_intensity else np.concatenate([a + b - c - d, b + c - a - d])) / total
+    sn = np.asarray(sn, float).ravel()
+    if len(sn) != len(pred) or not np.any(pred) or not np.any(sn):
+        return float('nan'), float('nan')
+    return float(sn @ pred / (pred @ pred)), float(np.corrcoef(sn, pred)[0, 1])

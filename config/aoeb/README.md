@@ -100,6 +100,15 @@ From a configuration file (section 5): `python -m aoeb.scripts.run scan study.ym
 `scan(..., on_missing='skip')` records configurations with missing products in `machine.skipped` instead of aborting; `scenario` and
 `controller` are validated; a missing product raises an error that names the generator step that creates it.
 
+**Slope noise normalisation.** PyrSlopec computes s = (A+B−C−D)·n_norm/I_total with n_norm = `PupData.n_subap`. The machine
+**measures** n_norm from the products of the same noise-free runs (mean slopes `sn` against the mean frame `avgframe`; correlation > 0.9
+required), which also checks the slope ordering the noise propagation assumes; it warns and falls back to the number of valid
+subapertures when the fit fails, and warns when the measured value differs from that number by more than 2 %.
+
+**Fitting.** `ErrorBudgetMachine(..., asm=True)` (default; `options.asm` in a configuration file) uses the LBT-ASM law 0.2778 N^−0.9
+(D/r0)^5/3 rad²; `asm=False` uses TipTop's fitting: the von Kármán PSD outside the square of corrected frequencies |kx|, |ky| ≤ k_c,
+k_c = √(N/π)/D (a DM with N actuators in the pupil), for the variance and for the PSD / PSF (the azimuthal average of the square mask).
+
 **Units.** Every error the tables and `totals()` report is in **nm rms**: the scan tables (`totals` and the `_totals.csv` file: lag, noise,
 noise_photon, noise_ron, alias, xtalk, fitting, the chromatic terms, total) and the per-mode table (`modes` / `_modes.csv`: residual, lag,
 noise, noise_photon, noise_ron, alias, xtalk, chrom_mult). The terms add in quadrature (total² = Σ term²; noise² = noise_photon² +
@@ -150,6 +159,7 @@ eng = PsfEngine(m)                   # (or cfg.psf_engine()); caches the KL kern
 ps = eng.psd_terms(r)                # lag, noise_photon, noise_ron, alias, xtalk, fitting, chrom_shear, chrom_mult, total, turbulence (open loop)
 res = eng.psf_terms(r, 1650.)        # long-exposure PSF of every term alone and of the total, any science wavelength
 res.profile('total'); res.contrast_at([2, 5, 10]); res.halo['lag']      # halos (first order) add up
+res.contrast_at([2, 5, 10], kind='coro'); res.coro['total']              # after a perfect coronagraph (Cavarroc et al. 2006, eq. 1)
 pl.plot_psd_terms(ps); pl.plot_psf_terms(res, rmax=30); pl.plot_psf_image(res, 'total')
 ```
 Conventions and limits: ASSUMPTIONS A15, A24–A28.
@@ -159,7 +169,8 @@ TipTop check of the shear term: ASSUMPTIONS section 4 (what to print in TipTop a
 
 Everything is in `aoeb.plotting` (needs matplotlib: `pip install -e .[plots]`). Every function **returns** the matplotlib figure and saves
 nothing: `fig.savefig('name.png', dpi=150)`; `plt.show()` in an interactive session; `plt.close(fig)` in long loops. Errors are in nm rms.
-Single-panel functions accept `ax=` to draw into an existing axes (subplots of your own); all accept `title=`.
+Single-panel functions accept `ax=` to draw into an existing axes (subplots of your own). All accept `title=`, `xlim=(lo, hi)` and
+`ylim=(lo, hi)` (`None` on one side keeps it automatic) and have `logx` / `logy` switches.
 
 ### 4.1 Budget plots, from a scan
 
@@ -189,9 +200,9 @@ fig = pl.plot_per_mode(modes, y='residual', hue='photPerMs', filters={**one, 'fr
 
 | function | draws | options |
 |---|---|---|
-| `plot_budget_terms(totals, x, filters, terms)` | the error terms [nm rms] of one configuration versus `x` (thick line: total) | `logx=True`, `logy=False`, `ax` |
-| `plot_budget_compare(totals, x, hue, quantity, filters, col)` | one column (`quantity`, default `total`) versus `x`, one curve per value of `hue`, one panel per value of `col` | `logx`, `logy` |
-| `plot_per_mode(modes, y, hue, filters)` | a per-mode column versus `modeId` (errors in nm rms; `gain`, `ff`, `og` as they are) | `logy=True` |
+| `plot_budget_terms(totals, x, filters, terms)` | the error terms [nm rms] of one configuration versus `x` (thick line: total) | `logx=True`, `logy=False`, `xlim`, `ylim`, `ax` |
+| `plot_budget_compare(totals, x, hue, quantity, filters, col)` | one column (`quantity`, default `total`) versus `x`, one curve per value of `hue`, one panel per value of `col` | `logx`, `logy`, `xlim`, `ylim` (all panels) |
+| `plot_per_mode(modes, y, hue, filters)` | a per-mode column versus `modeId` (errors in nm rms; `gain`, `ff`, `og` as they are) | `logy=True`, `logx=False`, `xlim`, `ylim` |
 
 * `x`, `hue`, `col` are any column: `photPerMs` (photons/ms at the detector), `freqInHz`, `seeing`, `rMod`, `Nsubaps`, `Nmodes`,
   `wavelength_nm`, `scenario`, `controller`, `crosstalk`. `terms` / `quantity` / `y` are the error columns (lag, noise, noise_photon,
@@ -206,12 +217,16 @@ fig = pl.plot_per_mode(modes, y='residual', hue='photPerMs', filters={**one, 'fr
 ```python
 fig = pl.plot_calibration(m, 'og', hue='seeing', values=[0.5, 0.9, 1.3], rMod=3, n_subap=48)    # optical gain per mode
 fig = pl.plot_calibration(m, 'thrp', hue='rMod', values=[0, 1, 2, 3], n_subap=48, seeing=0.9)    # throughput versus rMod
+fig = pl.plot_calibration(m, 'noise', hue='flux', values=[1e3, 1e4, 1e5, 1e6], fs=2000, rMod=3, n_subap=48, seeing=0.9,
+                          wavelength_nm=750, logx=True, ylim=(1e-4, None))                       # noise per mode, one curve per flux
 fig = pl.plot_modal_variance_check(m, rMod=3, n_subap=48, seeing=0.9)
 ```
 * `plot_calibration(machine, product, hue, values, rMod, n_subap, seeing, N, N_corr, flux, fs, wavelength_nm)`: `product` is `'og'`
   (optical gain), `'alias'` (aliasing std), `'ct'` (crosstalk), `'noise'` (noise rms at `flux` photons/s and `fs` Hz), `'turb'`
   (turbulence rms), all per mode in command units, or `'thrp'` (throughput versus the `hue` values); one curve per value of `hue` (`rMod`,
-  `n_subap`, `seeing`, `N` or `wavelength_nm`). A seeing that was not simulated is estimated (section 2, warning).
+  `n_subap`, `seeing`, `N`, `wavelength_nm`, or `flux` [photons/s] / `fs` [Hz], which only change `'noise'`); any other `hue` is an
+  error. `logx`, `logy` (default: log for alias / noise / turb), `xlim`, `ylim`. A seeing that was not simulated is estimated (section 2,
+  warning).
 * `plot_modal_variance_check(machine, rMod, n_subap, seeing)`: variance of the simulated turbulence modes (aliasing run) over the
   analytic one, per mode, with the 1-sigma statistical band: checks the KL basis, r0 and L0.
 
@@ -227,12 +242,24 @@ fig = pl.plot_psf_terms(res, rmax=30)                # contrast profiles, Strehl
 fig = pl.plot_psf_terms(res, kind='halo', rmax=30, pa_range=(0, 90))
 fig = pl.plot_psf_image(res, 'total', half_fov=20)
 ```
-* `plot_psd_terms(psd_set, terms, xaxis='lamD' | 'k', show_open_loop=True)`: radial PSD [nm² m²] of every term and the total, versus
-  separation [λ/D] or spatial frequency [cycles/m]; dotted vertical line: DM cut-off; dotted curve: open-loop turbulence.
-* `plot_psf_terms(psf_result, kind='psf' | 'halo', terms, binsize=0.5, rmax, stat='mean' | 'median' | 'std', pa_range=(deg, deg),
-  show_dl=True, show_open_loop=False)`: radial raw-contrast profiles of every term alone and of the total; `'halo'`: first-order halos,
-  which add up; `pa_range` restricts to a sector.
-* `plot_psf_image(psf_result, name='total', half_fov=20, vmin=1e-7)`: 2-D long-exposure PSF, log colour scale, ±half_fov λ/D.
+* `plot_psd_terms(psd_set, terms, xaxis='lamD' | 'k', show_open_loop=True, xlim, ylim)`: radial PSD [nm² m²] of every term and the
+  total, versus separation [λ/D] or spatial frequency [cycles/m]; dotted curve: open-loop turbulence.
+* `plot_psf_terms(psf_result, kind='psf' | 'coro' | 'halo', terms, binsize=0.5, rmax, stat='mean' | 'median' | 'std', pa_range=(deg, deg),
+  show_dl=True, show_open_loop=False, ymin=1e-6, logx, xlim, ylim)`: radial raw-contrast profiles of every term alone and of the total;
+  `'psf'` (default): long-exposure PSF; `'coro'`: **after a perfect coronagraph**, Cavarroc et al. (2006, A&A 447, 397) eq. (1), pupil
+  field Π(√E_C − e^{iφ}) with E_C = e^{−σ²}, whose long-exposure intensity for Gaussian phase is PSF − e^{−σ²}·PSF_DL (checked against eq. (1)
+  on random phase screens: within 1 %); `'halo'`: first-order halos, which add up; `pa_range` restricts to a sector.
+  * **Spikes.** The zig-zag of the PSF profiles is the Airy-ring structure of the pupil (it is in the diffraction-limited curve too),
+    sampled by annuli of 0.5 λ/D while the rings are ~1 λ/D apart. It is physical: padding does not change it. `kind='coro'` removes it
+    (the coherent part, which carries the Airy pattern, is what a perfect coronagraph removes); `binsize=1.0` only halves the jumps.
+  * **The total below a term.** The image of a term *alone* is not its contribution to the total: in the total, each term's halo is
+    attenuated by the Strehl of all the other terms (exp(−σ²_total + C) = Π exp(−σ²_j) · …), the missing light being scattered elsewhere by
+    them (mostly by the fitting error beyond the control radius). Where one term dominates, the total can therefore lie below that term's
+    own profile (example: two terms with S = 0.61 and 0.90; where the second dominates, total / second-alone = 0.85). The first-order halos
+    (`kind='halo'`) ignore that attenuation and add up exactly: use them for a decomposition, the PSF or the coronagraphic image for the
+    actual contrast.
+* `plot_psf_image(psf_result, name='total', half_fov=20, vmin=1e-7, kind='psf' | 'coro' | 'halo')`: 2-D long-exposure image, log colour
+  scale, ±half_fov λ/D. `psf_result.image(name, kind)` and `psf_result.contrast_at(rho, kind=...)` give the same images and profiles.
 
 ### 4.4 A batch of figures
 

@@ -162,6 +162,7 @@ def plot_psd_terms(psd_set, terms=None, xaxis='lamD', show_open_loop=True, title
     """Radial PSD [nm^2 m^2] of every term and the total; x = separation k D [lambda/D] or k [cycles/m]; dotted: DM cut-off."""
     fig, ax = _fig(ax, (7, 4.8))
     sc = psd_set.D if xaxis == 'lamD' else 1.0
+    ok = psd_set.k > 0                                 # (x range when no term is drawn)
     for n, t in psd_set.terms.items():
         if (terms is not None and n not in terms and n != 'total') or (n == 'turbulence' and not show_open_loop):
             continue
@@ -172,34 +173,37 @@ def plot_psd_terms(psd_set, terms=None, xaxis='lamD', show_open_loop=True, title
     #     ax.axvline(psd_set.meta['k_cut'] * sc, color='k', ls=':', lw=0.8)
     ax.legend(ncol=2, fontsize=8)
     ax.set_xlim([np.min(psd_set.k[ok] * sc)/2,np.max(psd_set.k[ok] * sc)])
-    return _finish(fig, ax, 'separation [$\\lambda$/D]' if xaxis == 'lamD' else 'spatial frequency [cycles/m]',
+    return _finish(fig, ax, 'separation [$\\lambda$/D]  (= k D)' if xaxis == 'lamD' else 'spatial frequency [cycles/m]',
                    'PSD [nm$^2$ m$^2$]', title, True, True, xlim, ylim)
 
 
 def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, stat='mean', pa_range=None, show_dl=True,
                    show_open_loop=False, title=None, ax=None, ymin=1e-6, logx=False, xlim=None, ylim=None):
-    """Radial contrast profile of every term alone and the total; kind='halo': first-order halos (they add up). The PSF of a term alone
-    is NOT its contribution to the total: inside the total its halo is attenuated by the Strehl of the other terms, so the total can lie
-    below a single term where that term dominates. binsize=1.0 averages over the Airy rings (smoother profiles)."""
+    """Radial raw-contrast profile of every term alone and of the total. kind: 'psf' (long-exposure PSF, Airy pattern included),
+    'coro' (after a perfect coronagraph, Cavarroc et al. 2006 eq. 1: the coherent part S * PSF_DL removed, so no Airy-ring spikes) or
+    'halo' (first order, the terms add up).
+    The image of a term alone is NOT its contribution to the total: inside the total its halo is attenuated by the Strehl of the other
+    terms, so the total can lie below a single term where that term dominates."""
     fig, ax = _fig(ax, (7, 4.8))
-    for n in (psf_result.psf if kind == 'psf' else psf_result.halo):
+    for n in {'psf': psf_result.psf, 'coro': psf_result.coro, 'halo': psf_result.halo}[kind]:
         if (terms is not None and n not in terms and n != 'total') or (n == 'turbulence' and not show_open_loop):
             continue
         r, p = psf_result.profile(n, kind, binsize, stat, rmax, pa_range)
         ax.plot(r, p, color=COLORS.get(n), lw=2.2 if n == 'total' else 1.4, ls=':' if n == 'turbulence' else '-',
-                label=f'{n} (S={psf_result.strehl[n]:.2f})' if kind == 'psf' else n)
-    if show_dl:
+                label=f'{n} (S={psf_result.strehl[n]:.2f})' if kind != 'halo' else n)
+    if show_dl and kind == 'psf':                      # (a perfect coronagraph removes the diffraction-limited PSF entirely)
         r, p = psflib.radial_profile(psf_result.diffraction_limited, psf_result.pixel_scale, binsize, None, stat, rmax, pa_range)
         ax.plot(r, p, color='gray', lw=1, label='diffraction limit')
     ax.legend(fontsize=8)
     ax.set_ylim(bottom=max(ax.get_ylim()[0], ymin))
     ax.set_xlim(right=ax.get_xlim()[1])
-    return _finish(fig, ax, 'separation [$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm)', title, logx, True, xlim, ylim)
+    what = {'coro': ', perfect coronagraph', 'psf': '', 'halo': ', first-order halo'}[kind]
+    return _finish(fig, ax, 'separation [$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm{what})', title, logx, True, xlim, ylim)
 
 
-def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=None, ax=None):
-    """2-D long-exposure PSF (log colour scale), field +-half_fov lambda/D."""
-    img = psf_result.psf[name]
+def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=None, ax=None, kind='psf'):
+    """2-D long-exposure image (log colour scale), field +-half_fov lambda/D; kind 'psf', 'coro' (perfect coronagraph) or 'halo'."""
+    img = psf_result.image(name, kind)
     M, h = img.shape[0], int(half_fov / psf_result.pixel_scale)
     fig, ax = _fig(ax, (5.5, 5))
     im = ax.imshow(np.log10(np.maximum(img[M // 2 - h:M // 2 + h + 1, M // 2 - h:M // 2 + h + 1], vmin)), origin='lower',

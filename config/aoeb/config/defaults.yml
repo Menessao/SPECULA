@@ -9,7 +9,7 @@ paths:
   alias: calib_alias_sn_thrp.yml        # aliasing + slope null + throughput + noise illumination
   pc: calib_pc.yml                      # IM with a correction vector: perfect and partial correction
   pupilstop_tag: vlt_pupil_220pixels
-  dm_tag: dm1200_220pix                     # DM data objects {dm_tag}_ifunc, {dm_tag}_m2c, {dm_tag}_kl_inv (SPECULA and the budget)
+  dm_tag: bmc2k_vlt                     # DM data objects {dm_tag}_ifunc, {dm_tag}_m2c, {dm_tag}_kl_inv (SPECULA and the budget)
 
 telescope: {diameter: 8.2, L0: 25.0}      # L0 is also passed to the SPECULA aliasing run (atmo_random.L0)
 
@@ -61,9 +61,12 @@ chromatic:                              # needs wavelengths.sensing_nm
   delta_n: null                         # override of n_sensing - n_science (skips the refractivity model)
   heights_are_slant: false              # heights already include the airmass (TipTop's Hs)
 
-options: {crosstalk: false, fixed_point: false, kl_pad: 8}
+options: {crosstalk: false, fixed_point: false, kl_pad: 8,
+          asm: true}                    # fitting: true = LBT-ASM law; false = TipTop (von Karman outside the corrected square, k_c = sqrt(N/pi)/D)
 
 generation:                             # SPECULA calibration runs (generator); every realisation is its own run with seed = seed0 + i + 1
+  pixel_pupil: null                     # main.pixel_pupil (must match the pupilstop and the DM influence functions); null: the pupilstop array size.
+                                        # main.pixel_pitch = telescope.diameter / pixel_pupil
   time_step: 0.0005
   alias_magnitude: 5.0
   n_screens_alias: 1                    # independent aliasing runs per case, pooled (frames per run: main_override.total_time of the yml)
@@ -71,8 +74,8 @@ generation:                             # SPECULA calibration runs (generator); 
   pc_corrections: []                    # e.g. [[0.99, 0.2], [0.9, 0.2]]: extra IMs with a partial correction, (max_corr, min_corr) of the correction vector
   seed0: 0
   discard_frames: 0                     # frames dropped from the start of the aliasing runs (leading all-zero frames are always dropped)
-  n_modes_max: 1359
-  pup_dist_min: 14.0
+  n_modes_max: 1821
+  pup_dist_min: 16.0
   pup_dist_per_subap: 1.25              # pyr.pup_dist = max(pup_dist_min, pup_dist_per_subap * n_subaps): independent of the other sensors
   overwrite: false
 

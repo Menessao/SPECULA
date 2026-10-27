@@ -43,6 +43,22 @@ def von_karman_psd(f, r0, L0):
     return VK_COEFF * r0 ** (-5 / 3) * (np.asarray(f) ** 2 + 1 / L0 ** 2) ** (-11 / 6) * RAD2_TO_NM2
 
 
+def square_outside_fraction(k, kc):
+    """Fraction of the circle of radius k outside the square |kx|, |ky| <= kc: the azimuthal average of TipTop's corrected-area mask."""
+    k = np.asarray(k, float)
+    frac = (4.0 / np.pi) * np.arccos(np.clip(kc / np.maximum(k, 1e-300), 0.0, 1.0))
+    return np.where(k <= kc, 0.0, np.where(k >= np.sqrt(2.0) * kc, 1.0, frac))
+
+
+def fitting_variance_tiptop(r0, L0, kc, n=4000):
+    """Fitting error variance [nm^2] as TipTop (P3 fittingPSD): the von Karman PSD outside the corrected square |kx|, |ky| <= kc
+    (kc = 1 / (2 DM pitch)); exact radial integral (analytic beyond sqrt(2) kc)."""
+    k = np.linspace(kc, np.sqrt(2.0) * kc, n)
+    corners = np.trapezoid(von_karman_psd(k, r0, L0) * square_outside_fraction(k, kc) * 2 * np.pi * k, k)
+    beyond = VK_COEFF * r0 ** (-5 / 3) * RAD2_TO_NM2 * (6 * np.pi / 5) * (2.0 * kc ** 2 + 1 / L0 ** 2) ** (-5 / 6)
+    return float(corners + beyond)
+
+
 def fitting_variance_lbt(r0, n_modes, D):
     """Fitting error variance [nm^2], LBT-ASM law 0.2778 N^-0.9 (D/r0)^(5/3) rad^2."""
     return 0.2778 * n_modes ** (-0.9) * (D / r0) ** (5 / 3) * RAD2_TO_NM2

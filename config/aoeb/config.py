@@ -126,7 +126,7 @@ class Config:
         return ErrorBudgetMachine(self._root(), diameter=t['diameter'], L0=t['L0'], wind=self.wind(), detector=self.detector(),
                                   pupilstop_tag=p['pupilstop_tag'], dm_tag=p['dm_tag'], modes_per_subap=s['modes_per_subap'],
                                   n_modes_ho=s['n_modes_ho'], kl_pad=o['kl_pad'], slopes_from_intensity=s['slopes_from_intensity'],
-                                  **kw)
+                                  asm=o['asm'], **kw)
 
     def iir(self):
         """IirControllers of loop.iir_file (a file saved by SPECULA's IirFilterData); loop.iir_optimize_gain: optimise the global gain."""
