@@ -82,6 +82,26 @@ def gain_margin(l0):
     return min(cand) if cand else X_UNBOUNDED
 
 
+def sensitivity_limited_x(l0, x_crit, max_sensitivity, n_iter=50):
+    """Largest x <= x_crit whose peak rejection max_f |1 / (1 + x l0(f))| stays <= max_sensitivity (modulus margin; 2 = 6 dB)."""
+    peak = lambda x: float(np.max(np.abs(1.0 / (1.0 + x * l0))))
+    lo, hi = 0.0, float(x_crit)
+    if peak(hi * 0.999) <= max_sensitivity:
+        return hi
+    for _ in range(n_iter):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if peak(mid) <= max_sensitivity else (lo, mid)
+    return lo
+
+
+def gain_grid(x_crit, l0, n_x, u_min, max_gain_frac, max_sensitivity):
+    """Geometric grid of x up to max_gain_frac x_crit, or up to the modulus-margin limit when that is lower."""
+    top = max_gain_frac * x_crit
+    if max_sensitivity is not None:
+        top = min(top, sensitivity_limited_x(l0, x_crit, max_sensitivity))
+    return np.geomspace(min(u_min * x_crit, 0.5 * top), top, n_x)
+
+
 def critical_x(fs, latency, ff=1.0, n=6000):
     """Largest stable x = g rho of the (leaky) integrator."""
     return gain_margin(loop_response(np.linspace(1e-6, 0.5 * fs, n), fs, latency, ff)[0])
@@ -141,7 +161,7 @@ class LoopTables:
     """Closed-loop integrals tabulated on a (ff, x) grid; an optimisation is then one matrix product per radial order."""
 
     def __init__(self, fs, latency, wind, D, orders, alias_order=None, n_fold=3, ff_grid=(1.0,), f_min=1e-3, n_f=600,
-                 n_x=300, u_min=1e-4, max_gain_frac=0.98):
+                 n_x=300, u_min=1e-4, max_gain_frac=0.98, max_sensitivity=None):
         self.fs, self.latency = fs, latency
         self.ff_grid = np.asarray(ff_grid, float)
         self.orders = np.unique(np.asarray(orders, int))
@@ -154,10 +174,11 @@ class LoopTables:
         self.x_crit = np.empty(nff)
         self.T_t, self.T_c = np.empty((no, nff, n_x)), np.empty((no, nff, n_x))
         self.T_w, self.T_a = np.empty((nff, n_x)), np.empty((nff, n_x))
-        u = np.geomspace(u_min, max_gain_frac, n_x)
+        f_stab = np.linspace(1e-6, 0.5 * fs, 6000)
         for j, ff in enumerate(self.ff_grid):
             self.x_crit[j] = critical_x(fs, latency, ff)
-            x = self.x[j] = u * self.x_crit[j]
+            x = self.x[j] = gain_grid(self.x_crit[j], loop_response(f_stab, fs, latency, ff)[0], n_x, u_min, max_gain_frac,
+                                      max_sensitivity)
             l0, cn = loop_response(f, fs, latency, ff)
             k = x[:, None] * cn[None, :] / (1.0 + x[:, None] * l0[None, :])         # command per unit turbulence
             self.T_t[:, j], self.T_c[:, j], k2 = _closed_loop_tables(k, g)
@@ -357,7 +378,7 @@ class IirTables:
     shape share the loop response. optimize() has the signature of LoopTables.optimize; `orders` must be those of the build."""
 
     def __init__(self, fs, latency, wind, D, orders, alias_order, controllers, n_fold=3, f_min=1e-3, n_f=600, n_x=300, u_min=1e-4,
-                 max_gain_frac=0.98):
+                 max_gain_frac=0.98, max_sensitivity=None):
         self.fs, self.latency, self.order = float(fs), float(latency), np.atleast_1d(orders)
         self.optimize_gain = controllers.optimize_gain
         N = len(self.order)
@@ -373,7 +394,8 @@ class IirTables:
         self.F, self.x, self.x_crit = np.empty((ns, n_f), complex), np.empty((ns, n_x)), np.empty(ns)
         self.T_t, self.T_c = np.empty((N, n_x)), np.empty((N, n_x))
         self.T_w, self.T_a = np.empty((ns, n_x)), np.empty((ns, n_x))
-        u = np.geomspace(u_min, max_gain_frac, n_x)
+        f_stab = np.linspace(1e-6, 0.5 * fs, 6000)
+        z_stab = np.exp(2j * np.pi * f_stab / fs)
         for s in range(ns):
             members = np.nonzero(self.shape == s)[0]
             if not self.controlled[members].any():
@@ -388,7 +410,8 @@ class IirTables:
                 if not ok:
                     raise ValueError(f'the IIR filter of mode {members[0]} is not stable for x = {frac:g} x_crit (x_crit = {self.x_crit[s]:.3g}): '
                                      'the global-gain optimisation needs a loop that is stable for 0 < x <= 0.98 x_crit')
-            self.x[s] = u * self.x_crit[s]
+            l0_stab = (_poly_response(num_s, z_stab) / _poly_response(den_s, z_stab)) * delay_response(f_stab, fs, 1.0 + latency)
+            self.x[s] = gain_grid(self.x_crit[s], l0_stab, n_x, u_min, max_gain_frac, max_sensitivity)
             k = self.x[s][:, None] * self.F[s][None, :] / (1.0 + self.x[s][:, None] * l0[None, :])
             t_t, t_c, k2 = _closed_loop_tables(k, {**g, 'a_re': g['a_re'][:, np.unique(self.oi[members])], 'a_im': g['a_im'][:, np.unique(self.oi[members])],
                                                   'a_p1': g['a_p1'][:, np.unique(self.oi[members])], 'base': g['base'][np.unique(self.oi[members])],

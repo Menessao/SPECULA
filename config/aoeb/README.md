@@ -105,6 +105,24 @@ From a configuration file (section 5): `python -m aoeb.scripts.run scan study.ym
 required), which also checks the slope ordering the noise propagation assumes; it warns and falls back to the number of valid
 subapertures when the fit fails, and warns when the measured value differs from that number by more than 2 %.
 
+**Frame rate and modes are maxima.** `budget(..., fs, N)` (and the `fs` values of a scan) are upper limits: with
+`optimize_freq=True` (default; `options.optimize_freq`) the frame rates below `fs` on the fixed grid `freq_min`·2^(k/3) (`freq_min` = 100 Hz)
+are tried too, and with `optimize_modes=True` (default) the calibrated mode counts below `N`; the configuration with the lowest total
+residual is returned, with a warning when it is not (fs, N) (a scan gives one summary warning instead). The result keeps both:
+`params['freqInHz']` / `params['Nmodes']` are the requested maxima (the axes of scans and plots), `freqUsedInHz` / `NmodesUsed` the values
+used (also columns of the scan tables). Cost: about 13 frame rates per call below 2 kHz (the loop tables are cached on the shared grid).
+Pass `optimize_freq=False` / `optimize_modes=False` to a call, or set them on the machine, for one configuration as given.
+
+**Number of modes.** Per call: `m.budget(..., N=800)`. Per sensor: `modes_per_subap` (machine argument; `sensors.modes_per_subap` in a
+configuration file), an int or a list, e.g. `{48: [800, 1000, 1200]}`: the largest is the default and the maximum, the others are the
+candidates of `optimize_modes`. Every count needs its products, so list it in the generator's `modes_per_subap` too (it then makes the
+reconstructor, the aliasing runs and the IMs of each count); a count without products is skipped with a warning.
+
+**Robustness (modulus margin).** The gains are optimised with the peak rejection max|1/(1+L)| ≤ `loop.max_sensitivity` = 2 (6 dB, the usual
+AO design margin); `null` lets them go up to 98 % of the stability limit as before, which is optimistic (the lag error is then about half)
+and fragile against optical-gain errors. Note that a small fractional latency raises the stability limit of a pure integrator (the exposure
+averages the old and the new command, which damps the Nyquist resonance), so a lower latency does not always reduce the lag error.
+
 **Fitting.** `ErrorBudgetMachine(..., asm=True)` (default; `options.asm` in a configuration file) uses the LBT-ASM law 0.2778 N^−0.9
 (D/r0)^5/3 rad²; `asm=False` uses TipTop's fitting: the von Kármán PSD outside the square of corrected frequencies |kx|, |ky| ≤ k_c,
 k_c = √(N/π)/D (a DM with N actuators in the pupil), for the variance and for the PSD / PSF (the azimuthal average of the square mask).

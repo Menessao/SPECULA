@@ -15,7 +15,6 @@ import tempfile
 import warnings
 from dataclasses import dataclass, field
 from itertools import product
-from astropy.io import fits
 
 import numpy as np
 import yaml
@@ -95,6 +94,7 @@ def save_correction_vector(root_dir, max_corr, min_corr, Nmodes, Ncorrmodes=None
     (header VERSION, OBJ_TYPE = BaseValue, NDARRAY = 1, MAX_CORR, MIN_CORR); returns the file stem. One function for the perfect
     correction (max_corr = min_corr = 1) and for partial corrections. The vector multiplies the reconstructed (modal-analysis) modes
     that command the DM, which SPECULA applies as a correction (negative sign): 1 = perfectly corrected mode, 0 = uncorrected."""
+    from astropy.io import fits
     if Ncorrmodes is None:
         Ncorrmodes = Nmodes
     vec = correction_vector(max_corr, min_corr, Nmodes, Ncorrmodes)
@@ -171,7 +171,7 @@ class GeneratorConfig:
     science_nm: float = 1650.0                     # source_science.wavelengthInNm (propagated like the NGS)
     rMods: tuple = (0.0, 1.0, 2.0, 3.0)
     n_subaps: tuple = (10, 20, 40, 48)
-    modes_per_subap: dict = field(default_factory=lambda: {10: 54, 20: 250, 40: 1000, 48: 1200})
+    modes_per_subap: dict = field(default_factory=lambda: {10: 54, 20: 250, 40: 1000, 48: 1200})   # int or list per sensor
     n_modes_ho: int = 1200
     n_modes_max: int = 1821                        # columns of the diffraction-limited IM
     seeings: tuple = (0.5, 0.7, 0.9, 1.1, 1.3)
@@ -214,12 +214,17 @@ class ErrorBudgetGenerator:
     def pup_dist(self, n_subap):
         return max(self.cfg.pup_dist_min, self.cfg.pup_dist_per_subap * n_subap)
 
+    def mode_list(self, n_subap):
+        """Controlled-mode counts of a sensor (modes_per_subap value: an int or a list); each gets its own products."""
+        v = self.cfg.modes_per_subap[n_subap]
+        return sorted({int(x) for x in (v if isinstance(v, (list, tuple)) else [v])})
+
     def n_modes(self, n_subap):
-        return self.cfg.modes_per_subap[n_subap]
+        return self.mode_list(n_subap)[-1]
 
     def corrected_sets(self, n_subap):
-        """Numbers of perfectly corrected modes needed for a sensor: standard and multistage."""
-        return sorted({self.n_modes(n_subap), self.cfg.n_modes_ho})
+        """Numbers of perfectly corrected modes needed for a sensor: every controlled-mode count (standard) and n_modes_ho (multistage)."""
+        return sorted(set(self.mode_list(n_subap)) | {self.cfg.n_modes_ho})
 
     def seeds(self, n):
         return [self.cfg.seed0 + i + 1 for i in range(n)]
@@ -343,15 +348,15 @@ class ErrorBudgetGenerator:
     def compute_recs(self):
         """4. SVD reconstructors of the first N modes of the diffraction-limited IM."""
         for P, n, rMod in self._sensors():
-            N, path = self.n_modes(n), P.rec(rMod, n, self.n_modes(n))
-            if self._needed(path):
-                save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N))
+            for N in self.mode_list(n):
+                path = P.rec(rMod, n, N)
+                if self._needed(path):
+                    save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N))
 
     def compute_recs_weighted(self, method, flux, fs, detector, seeing, machine, slopes_from_intensity=False):
         """ML or MAP reconstructors matched to a flux, rate, detector and seeing."""
         n_phot, seeing = detector.n_det(flux, fs), snap_seeing(seeing)
-        for P, n, rMod in self._sensors():
-            N = self.n_modes(n)
+        for (P, n, rMod), N in ((s, N) for s in self._sensors() for N in self.mode_list(s[1])):
             path = P.rec(rMod, n, N, method, n_phot, seeing)
             if not self._needed(path):
                 continue
@@ -365,8 +370,9 @@ class ErrorBudgetGenerator:
     def compute_aliases(self):
         """5. aliasing modal signal std(R @ slopes) for the standard and the multistage case."""
         for P, n, rMod, seeing, Nc in self._cases():
-            if self._needed(P.alias(rMod, n, seeing, self.n_modes(n), Nc)):
-                compute_alias_product(P, rMod, n, seeing, self.n_modes(n), Nc)
+            for N_rec in self.mode_list(n):
+                if Nc in (N_rec, self.cfg.n_modes_ho) and self._needed(P.alias(rMod, n, seeing, N_rec, Nc)):
+                    compute_alias_product(P, rMod, n, seeing, N_rec, Nc)
 
     def _pc_average(self, P, n, rMod, seeing, N, path, vector):
         """n_screens_pc independent runs (LBTSynIM style): one push-pull cycle (2 N frames) and one screen per run, seed per run;

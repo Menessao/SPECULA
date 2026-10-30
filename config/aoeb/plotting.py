@@ -121,7 +121,7 @@ def plot_calibration(machine, product, hue=None, values=None, rMod=3.0, n_subap=
     xs, ys = [], []
     for i, v in enumerate([None] if hue is None else values):
         cfg = {**base, **({} if hue is None else {hue: v})}
-        N_i = cfg['N'] or m.modes_per_subap[cfg['n_subap']]
+        N_i = cfg['N'] or m.max_modes(cfg['n_subap'])
         cal = m.calibration(cfg['rMod'], cfg['n_subap'], cfg['seeing'], N_i, N_corr, wavelength_nm=cfg['wavelength_nm'])
         if product == 'thrp':
             xs.append(v)
@@ -146,7 +146,7 @@ def plot_modal_variance_check(machine, rMod=3.0, n_subap=48, seeing=0.9, N=None,
                               ylim=None):
     """Simulated (turbmodes of the aliasing run) over analytical modal variance per mode."""
     m = machine
-    N = N or m.modes_per_subap[n_subap]
+    N = N or m.max_modes(n_subap)
     sim = utils.read_fits(m.paths.at(m.wavelength_nm if wavelength_nm is None else wavelength_nm).turbmodes(rMod, n_subap, seeing, N))
     ratio = utils.compare_modal_variance(sim, m.turbulence(seeing, sim.shape[1])[0])
     fig, ax = _fig(None)

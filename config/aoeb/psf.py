@@ -300,7 +300,7 @@ class PsfEngine:
         machine.asm=False the fitting PSD lies outside TipTop's square corrected area)."""
         wl = result.params['wavelength_nm']
         return residual_psd_terms(self.kernels(), result, float(utils.r0_from_seeing(result.params['seeing'])), self.m.L0,
-                                  int(result.params['Nmodes']), fitting_scale, extra_psd, result.chromatic,
+                                  int(result.params.get('NmodesUsed', result.params['Nmodes'])), fitting_scale, extra_psd, result.chromatic,
                                   None if np.isnan(wl) else wl, include_open_loop, split_noise, square=not getattr(self.m, 'asm', True))
 
     def psf_terms(self, result, wavelength_nm, names=None, **kw):

@@ -155,7 +155,8 @@ class ErrorBudgetMachine:
 
     def __init__(self, root_dir, diameter=8.2, L0=25.0, wind=12.0, detector=None,
                  pupilstop_tag='vlt_pupil_160pixels', dm_tag='bmc2k_vlt', modes_per_subap=None,
-                 n_modes_ho=1200, kl_pad=8, slopes_from_intensity=False, tables_cache=64, wavelength_nm=None, asm=True):
+                 n_modes_ho=1200, kl_pad=8, slopes_from_intensity=False, tables_cache=64, wavelength_nm=None, asm=True,
+                 max_sensitivity=2.0, optimize_freq=True, optimize_modes=True, freq_min=100.0, freq_step=2 ** (1 / 3)):
         self.paths = Paths(root_dir, pupilstop_tag, dm_tag)
         self.wavelength_nm = wavelength_nm
         self.D, self.L0, self.wind = diameter, L0, wind
@@ -164,10 +165,30 @@ class ErrorBudgetMachine:
         self.n_modes_ho, self.kl_pad = n_modes_ho, kl_pad
         self.slopes_from_intensity = slopes_from_intensity
         self.asm = asm                  # fitting: True = LBT-ASM law; False = TipTop (von Karman outside the corrected square)
+        self.max_sensitivity = max_sensitivity    # modulus margin: gains keep max |1/(1+L)| <= this (2 = 6 dB); None: stability only
+        self.optimize_freq, self.optimize_modes = optimize_freq, optimize_modes
+        self.freq_min, self.freq_step = float(freq_min), float(freq_step)
+        self._missing_modes = set()
         self._kl, self._cal, self._orders = None, {}, {}
         self._modes_cache, self._pupil_cache, self._recs, self._norms = None, None, OrderedDict(), {}
         self.skipped = []
         self._tables, self._tables_cache = OrderedDict(), tables_cache
+
+    # ---- modes per sensor
+    def mode_list(self, n_subap):
+        """Controlled-mode counts calibrated for a sensor (modes_per_subap value: an int or a list), sorted."""
+        v = self.modes_per_subap[n_subap]
+        return sorted({int(x) for x in (v if isinstance(v, (list, tuple)) else [v])})
+
+    def max_modes(self, n_subap):
+        return self.mode_list(n_subap)[-1]
+
+    def freq_candidates(self, fs):
+        """fs and the frame rates below it on the fixed grid freq_min * freq_step^k (shared by all calls: the loop tables are cached)."""
+        fs = float(fs)
+        k = int(np.floor(np.log(fs / self.freq_min) / np.log(self.freq_step) + 1e-9)) if fs > self.freq_min else -1
+        grid = {round(self.freq_min * self.freq_step ** i, 6) for i in range(k + 1)}
+        return sorted({f for f in grid if f < fs * (1 - 1e-9)} | {fs}, reverse=True)
 
     # ---- turbulence
     def pupil(self):
@@ -208,7 +229,7 @@ class ErrorBudgetMachine:
     def calibration(self, rMod, n_subap, seeing, N=None, N_corr=None, rec=('svd',), wavelength_nm=None):
         """rec: ('svd',), ('ml', n_phot) or ('map', n_phot). The products of the seeing rounded to 0.1 arcsec when it was simulated;
         otherwise they are estimated from the simulated seeings, with a warning (see _interpolate)."""
-        N = N or self.modes_per_subap[n_subap]
+        N = N or self.max_modes(n_subap)
         N_corr = N_corr or N
         wl = self.wavelength_nm if wavelength_nm is None else wavelength_nm
         s_tag = snap_seeing(seeing)
@@ -305,13 +326,14 @@ class ErrorBudgetMachine:
     # ---- loop tables
     def _loop_tables(self, fs, latency, orders, alias_order, ff_grid, n_fold, iir=None):
         key = (round(float(fs), 9), round(float(latency), 9), int(orders.max()), int(alias_order), tuple(ff_grid), n_fold,
-               float(self.wind), float(self.D), None if iir is None else (iir.key(len(orders)), len(orders)))
+               float(self.wind), float(self.D), None if iir is None else (iir.key(len(orders)), len(orders)), self.max_sensitivity)
         if key in self._tables:
             self._tables.move_to_end(key)
         else:
             self._tables[key] = (LoopTables(fs, latency, self.wind, self.D, np.arange(1, orders.max() + 1), alias_order=alias_order,
-                                            n_fold=n_fold, ff_grid=ff_grid) if iir is None else
-                                 IirTables(fs, latency, self.wind, self.D, orders, alias_order, iir, n_fold=n_fold))
+                                            n_fold=n_fold, ff_grid=ff_grid, max_sensitivity=self.max_sensitivity) if iir is None else
+                                 IirTables(fs, latency, self.wind, self.D, orders, alias_order, iir, n_fold=n_fold,
+                                           max_sensitivity=self.max_sensitivity))
             while len(self._tables) > self._tables_cache:
                 self._tables.popitem(last=False)
         return self._tables[key]
@@ -319,7 +341,47 @@ class ErrorBudgetMachine:
     # ---- the budget
     def budget(self, rMod, n_subap, seeing, flux, fs, N=None, scenario='standard', latency_s=500e-6, controller='int',
                n_fold=3, fixed_point=False, ff_grid=None, og=None, rec=('svd',), wavelength_nm=None, crosstalk=False,
-               extra=None, n_xt_iter=8, chromatic=None):
+               extra=None, n_xt_iter=8, chromatic=None, optimize_freq=None, optimize_modes=None, warn=True):
+        """Budget of one configuration (arguments: see _budget_at). fs and N are MAXIMA: with optimize_freq (machine default) the frame
+        rates below fs on the grid freq_min * freq_step^k are tried as well, with optimize_modes the calibrated mode counts below N
+        (modes_per_subap lists); the result with the lowest total residual is returned, with a warning when it is not (fs, N).
+        params: freqInHz / Nmodes = requested, freqUsedInHz / NmodesUsed = used."""
+        opt_f = self.optimize_freq if optimize_freq is None else optimize_freq
+        opt_m = self.optimize_modes if optimize_modes is None else optimize_modes
+        N_req = int(N or self.max_modes(n_subap))
+        freqs = self.freq_candidates(fs) if opt_f else [float(fs)]
+        modes = sorted({n for n in self.mode_list(n_subap) if n <= N_req} | {N_req}, reverse=True) if opt_m else [N_req]
+        kw = dict(scenario=scenario, latency_s=latency_s, controller=controller, n_fold=n_fold, fixed_point=fixed_point, ff_grid=ff_grid,
+                  og=og, rec=rec, wavelength_nm=wavelength_nm, crosstalk=crosstalk, extra=extra, n_xt_iter=n_xt_iter, chromatic=chromatic)
+        best, first = None, None
+        for n_m in modes:
+            for f in freqs:
+                try:
+                    r = self._budget_at(rMod, n_subap, seeing, flux, f, N=n_m, **kw)
+                except FileNotFoundError:
+                    if n_m == N_req:
+                        raise
+                    if (n_subap, n_m) not in self._missing_modes:
+                        self._missing_modes.add((n_subap, n_m))
+                        warnings.warn(f'{n_m} modes on {n_subap}x{n_subap}: products missing, not considered')
+                    break
+                total = r.variances()['total']
+                if first is None:
+                    first = total                                      # the requested (fs, N): candidates are sorted from it
+                if best is None or total < best[0] * (1 - 1e-9):
+                    best = (total, r)
+        r = best[1]
+        r.params.update(freqUsedInHz=r.params['freqInHz'], NmodesUsed=r.params['Nmodes'], freqInHz=float(fs), Nmodes=N_req)
+        changed = r.params['freqUsedInHz'] != float(fs) or r.params['NmodesUsed'] != N_req
+        if changed and warn:
+            warnings.warn(f"{n_subap}x{n_subap}, rMod {rMod}, seeing {seeing}, flux {flux:.3g}: best at {r.params['freqUsedInHz']:.0f} Hz "
+                          f"(max {float(fs):.0f}) and {r.params['NmodesUsed']} modes (max {N_req}): total {np.sqrt(best[0]):.1f} nm "
+                          f"instead of {np.sqrt(first):.1f} nm")
+        return r
+
+    def _budget_at(self, rMod, n_subap, seeing, flux, fs, N=None, scenario='standard', latency_s=500e-6, controller='int',
+                   n_fold=3, fixed_point=False, ff_grid=None, og=None, rec=('svd',), wavelength_nm=None, crosstalk=False,
+                   extra=None, n_xt_iter=8, chromatic=None):
         """Budget of one configuration. flux: photons/s at the detector (before QE); scenario 'standard' (N modes, aliasing
         from the phase above N) or 'multistage' (aliasing and optical gain from a run with n_modes_ho modes corrected);
         latency_s: end of the exposure -> command applied, any real value (the frame of window + hold is in the model);
@@ -333,7 +395,7 @@ class ErrorBudgetMachine:
         if iir is None and controller not in CONTROLLERS:
             raise ValueError(f'controller must be one of {CONTROLLERS} or an IirControllers, got {controller!r}')
         ctl = 'iir' if iir is not None else controller
-        N = N or self.modes_per_subap[n_subap]
+        N = N or self.max_modes(n_subap)
         N_corr = N if scenario == 'standard' else self.n_modes_ho
         wl = self.wavelength_nm if wavelength_nm is None else wavelength_nm
         cal = self.calibration(rMod, n_subap, seeing, N, N_corr, rec, wl)
@@ -424,7 +486,7 @@ class ErrorBudgetMachine:
                 last = key
                 print(f'wvl={wl} {scen} rMod={rMod} seeing={seeing} n_subap={n_sub}', flush=True)
             try:
-                r = self.budget(rMod, n_sub, seeing, flux, fs, scenario=scen, controller=ctl, wavelength_nm=wl, **kw)
+                r = self.budget(rMod, n_sub, seeing, flux, fs, scenario=scen, controller=ctl, wavelength_nm=wl, warn=False, **kw)
             except FileNotFoundError as e:
                 if on_missing != 'skip':
                     raise
@@ -434,4 +496,11 @@ class ErrorBudgetMachine:
             totals.append(r.totals_row())
             if store_modes is not None:
                 modes.append(r.mode_rows(None if store_modes == 'all' else store_modes))
-        return (pd.concat(modes, ignore_index=True) if modes else pd.DataFrame()), pd.DataFrame(totals)
+        tot = pd.DataFrame(totals)
+        if len(tot) and 'freqUsedInHz' in tot:
+            nf = int((tot['freqUsedInHz'] != tot['freqInHz']).sum())
+            nm = int((tot['NmodesUsed'] != tot['Nmodes']).sum())
+            if nf or nm:
+                warnings.warn(f'optimisation: lower frame rate in {nf} and fewer modes in {nm} of {len(tot)} configurations '
+                              '(columns freqUsedInHz, NmodesUsed)')
+        return (pd.concat(modes, ignore_index=True) if modes else pd.DataFrame()), tot
