@@ -1,0 +1,22 @@
+# this is the block that generates the pupil geometry file used by the Pyramid WFS
+# as a function of a single frame of the Pyramid WFS
+pyr_pupdata:
+  class: 'PyrPupdataCalibrator'
+  thr1: 0.1
+  thr2: 0.25
+  display_debug: false
+  output_tag:        'pyr_pupdata_40x40'
+  overwrite: true
+  inputs:
+    in_i: 'pyr_vis.out_i'
+
+pyr_vis_override:
+  mod_amp:           30.0   # Modulation radius (in lambda/D units)
+
+main_override:
+  total_time:  0.01
+
+# Remove unnecessary components to avoid issues and speed up the calibration
+remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'dm', 'pyr_slopes_vis', 'pyr_slopes_nir',
+         'filter', 'dm_modes', 'bootstrap', 'coro_psf_vis', 'coro_psf_nir', 
+            'pyr_modes_vis', 'pyr_modes_nir', 'atmo_modes', 'res_modes']

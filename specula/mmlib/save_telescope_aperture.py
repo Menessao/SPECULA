@@ -79,7 +79,7 @@ if __name__ == "__main__":
     # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
 
     data_dir = '/raid1/mmenessini/calibration/VLT'
-    destination_dir = '/raid1/mmenessini/calibration/VLT/pupilstop'
+    destination_dir = '/raid1/mmenessini/calibration/WFSW/pupilstop'
     tag = 'vlt_pupil'
     Npix = 220
     aperture=save_pupil_to_size(data_dir, destination_dir, tag, Npix, thr=0.69)
