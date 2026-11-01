@@ -11,7 +11,7 @@ main:
   pixel_pitch:       0.03727272727         # [m] 8.2m / 220 pixels = 0.037272 m/pixel (Nyquist sampling of 10cm r0)
   total_time:        6.000                 # [s]
   time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
-  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  zenithAngleInDeg:  30.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
 # Atmospheric conditions
