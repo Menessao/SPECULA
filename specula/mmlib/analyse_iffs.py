@@ -1,8 +1,8 @@
 import numpy as np
-from scipy.ndimage import shift, affine_transform, distance_transform_edt, zoom
-from scipy.optimize import minimize
+from scipy.ndimage import shift, affine_transform, map_coordinates, spline_filter
+from scipy.optimize import minimize, least_squares
 import matplotlib.pyplot as plt
-from astropy.io import fits
+# from astropy.io import fits
 
 def compute_actuator_pitch(mask_shape: tuple, n_acts: int) -> float:
     """Estimates actuator pitch for a circular grid: dim / sqrt(4 * n_acts / pi)."""
@@ -165,165 +165,256 @@ def _nearest_neighbour_pitch(coords: np.ndarray) -> float:
     return float(np.median(d.min(axis=1)))
 
 
-def _subpixel_patch(img: np.ndarray, c, half: int, margin: int = 3) -> np.ndarray:
-    """(2*half+1)^2 patch of img centred on the sub-pixel position c = [y, x] (cubic interpolation,
-    zero padded outside the frame)."""
+def _grid_axes_angle(coords: np.ndarray) -> float:
+    """Orientation (rad, modulo 90 deg) of a square actuator grid from its nearest-neighbour vectors."""
+    c = coords[~np.isnan(coords[:, 0])]
+    d = np.hypot(c[:, None, 0] - c[None, :, 0], c[:, None, 1] - c[None, :, 1])
+    np.fill_diagonal(d, np.inf)
+    v = c[np.argmin(d, axis=1)] - c
+    ang = np.arctan2(v[:, 0], v[:, 1])
+    return float(np.angle(np.mean(np.exp(4j * ang))) / 4.0)
+
+
+def _fit_regular_grid(coords_ref: np.ndarray, meas_pos: np.ndarray, use: np.ndarray, n_iter: int = 5):
+    """
+    Fits a regular Cartesian actuator grid (pitch, angle, offset) to measured actuator positions,
+    as in Berdeu et al. (2026), Sec. 2.1. Integer grid indices are assigned from coords_ref (the
+    registered simulated positions, which carry the grid topology); the grid is then fitted to the
+    measured positions meas_pos of the actuators flagged in `use`, rejecting outliers (> 0.3 pitch)
+    and refitting n_iter times. Returns a dict with 'positions' (grid position of EVERY actuator,
+    [y, x]), 'pitch', 'R' (2x2, index frame -> image frame), 't', 'angle_deg' (direction of the
+    grid's x axis in the image, counter-clockwise from +x), 'rms' (pix), 'n_used'.
+    """
+    ok = ~np.isnan(coords_ref[:, 0])
+    theta = _grid_axes_angle(coords_ref)
+    c, s_ = np.cos(theta), np.sin(theta)
+    xr = (c * coords_ref[:, 1] + s_ * coords_ref[:, 0])[ok]
+    yr = (-s_ * coords_ref[:, 1] + c * coords_ref[:, 0])[ok]
+
+    # Pitch and grid phase from the coherence of the de-rotated coordinates: a nearest-neighbour
+    # distance is biased low by position noise, and a small pitch error accumulates across the DM
+    # into wrong integer indices.
+    pitch0 = _nearest_neighbour_pitch(coords_ref)
+    ps = np.linspace(0.85 * pitch0, 1.2 * pitch0, 1401)
+    ex = np.exp(2j * np.pi * xr[None, :] / ps[:, None]).mean(axis=1)
+    ey = np.exp(2j * np.pi * yr[None, :] / ps[:, None]).mean(axis=1)
+    k = np.argmax(np.abs(ex)**2 + np.abs(ey)**2)
+    pitch_c = ps[k]
+    off_x = np.angle(ex[k]) / (2 * np.pi) * pitch_c
+    off_y = np.angle(ey[k]) / (2 * np.pi) * pitch_c
+    idx = np.full((len(coords_ref), 2), np.nan)
+    idx[ok, 0] = np.round((yr - off_y) / pitch_c)
+    idx[ok, 1] = np.round((xr - off_x) / pitch_c)
+
+    sel = use & ok & ~np.isnan(meas_pos[:, 0])
+    for _ in range(n_iter):
+        scale, R, t = fit_similarity_transform(idx[sel], meas_pos[sel])
+        positions = np.full_like(coords_ref, np.nan)
+        positions[ok] = transform_coordinates(idx[ok], scale, R, t)
+        res = np.full(len(coords_ref), np.inf)
+        both = ok & ~np.isnan(meas_pos[:, 0])
+        res[both] = np.hypot(*(positions[both] - meas_pos[both]).T)
+        new_sel = use & both & (res < 0.3 * scale)
+        if new_sel.sum() < 10 or np.array_equal(new_sel, sel):
+            break
+        sel = new_sel
+    rms = float(np.sqrt(np.mean(res[sel]**2)))
+    return dict(positions=positions, pitch=float(scale), R=R, t=t,
+                angle_deg=float(np.degrees(np.arctan2(R[0, 1], R[1, 1]))), rms=rms, n_used=int(sel.sum()))
+
+
+def _sample_frame(img: np.ndarray, Y: np.ndarray, X: np.ndarray, order: int = 3, margin: int = 6) -> np.ndarray:
+    """Interpolates img at frame coordinates (Y, X), working on a crop around them (zero outside the frame)."""
     h, w = img.shape
-    cy, cx = int(round(c[0])), int(round(c[1]))
-    r = half + margin
-    y0, x0 = cy - r, cx - r
-    crop = np.zeros((2 * r + 1, 2 * r + 1))
-    ya, yb = max(0, y0), min(h, y0 + 2 * r + 1)
-    xa, xb = max(0, x0), min(w, x0 + 2 * r + 1)
-    if ya < yb and xa < xb:
-        crop[ya - y0:yb - y0, xa - x0:xb - x0] = img[ya:yb, xa:xb]
-    sh = shift(crop, [-(c[0] - cy), -(c[1] - cx)], order=3, mode='constant')
-    return sh[margin:margin + 2 * half + 1, margin:margin + 2 * half + 1]
+    y0, y1 = int(np.floor(Y.min())) - margin, int(np.ceil(Y.max())) + margin + 1
+    x0, x1 = int(np.floor(X.min())) - margin, int(np.ceil(X.max())) + margin + 1
+    ya, yb, xa, xb = max(0, y0), min(h, y1), max(0, x0), min(w, x1)
+    if ya >= yb or xa >= xb:
+        return np.zeros(Y.shape)
+    return map_coordinates(img[ya:yb, xa:xb], [Y - ya, X - xa], order=order, mode='constant', cval=0.0)
 
 
-def _place_template(template: np.ndarray, coords: np.ndarray, shape: tuple) -> np.ndarray:
-    """Builds one IF per actuator by placing the (square, odd-sized) template at the sub-pixel
-    position coords[j] = [y, x]. Actuators with NaN coordinates get a zero IF."""
-    h, w = shape
-    half = template.shape[0] // 2
-    pad = 3
-    tpl = np.pad(template, pad)
-    out = np.zeros((len(coords), h, w))
-    for j, c in enumerate(coords):
-        if np.isnan(c[0]):
-            continue
-        cy, cx = int(round(c[0])), int(round(c[1]))
-        sh = shift(tpl, [c[0] - cy, c[1] - cx], order=3, mode='constant')
-        y0, x0 = cy - half - pad, cx - half - pad
-        ya, yb = max(0, y0), min(h, y0 + sh.shape[0])
-        xa, xb = max(0, x0), min(w, x0 + sh.shape[1])
-        if ya < yb and xa < xb:
-            out[j, ya:yb, xa:xb] = sh[ya - y0:yb - y0, xa - x0:xb - x0]
-    return out
+def _eval_fine_template(tf_coeff: np.ndarray, dy, dx, pitch: float, R: np.ndarray, superres: int) -> np.ndarray:
+    """Evaluates the super-resolved template (cubic-spline coefficients, actuator-grid frame, `superres`
+    samples per pitch, centred) at image-frame offsets (dy, dx) from the actuator position."""
+    half_f = tf_coeff.shape[0] // 2
+    uy = (R[0, 0] * dy + R[1, 0] * dx) / pitch          # u = R^T d / pitch
+    ux = (R[0, 1] * dy + R[1, 1] * dx) / pitch
+    return map_coordinates(tf_coeff, [uy * superres + half_f, ux * superres + half_f],
+                           order=3, mode='constant', cval=0.0, prefilter=False)
 
 
-def _template_peak(template: np.ndarray) -> float:
-    """Sub-pixel peak value of a template (cubic upsampling of its central region)."""
-    half = template.shape[0] // 2
-    r = min(half, 4)
-    z = zoom(template[half - r:half + r + 1, half - r:half + r + 1], 8, order=3)
-    return float(z.flat[np.argmax(np.abs(z))])
+def _fit_super_gaussian(Yp, Xp, vals, x0, pitch, prev=None, fix_pos=False):
+    """
+    Eq. 1 of Berdeu et al. (2026): vals ~ rho * exp(-(r / alpha)**beta) + gamma, with r the distance
+    (in actuator pitches) to the actuator position, fitted as well unless fix_pos (then x0 is used).
+    The position is bounded to +/- 0.5 pitch around x0. Returns [rho, alpha, beta, gamma, y, x].
+    """
+    if prev is not None and np.all(np.isfinite(prev)):
+        p0 = np.array(prev, dtype=float)
+    else:
+        k = np.argmin((Yp - x0[0])**2 + (Xp - x0[1])**2)
+        g0 = np.median(vals)
+        p0 = np.array([vals[k] - g0, 1.0, 2.0, g0, x0[0], x0[1]])
+    lo_pos, hi_pos = np.asarray(x0) - 0.5 * pitch, np.asarray(x0) + 0.5 * pitch
+    p0[4:6] = np.clip(p0[4:6], lo_pos + 1e-6, hi_pos - 1e-6) if not fix_pos else x0
+    p0[1] = np.clip(p0[1], 0.051, 4.99)
+    p0[2] = np.clip(p0[2], 0.51, 3.99)
+
+    def model(q, cy, cx):
+        r = np.hypot(Yp - cy, Xp - cx) / pitch
+        return q[0] * np.exp(-(r / q[1])**q[2]) + q[3]
+
+    if fix_pos:
+        res = least_squares(lambda q: model(q, x0[0], x0[1]) - vals, p0[:4],
+                            bounds=([-np.inf, 0.05, 0.5, -np.inf], [np.inf, 5.0, 4.0, np.inf]),
+                            x_scale='jac', max_nfev=200)
+        return np.concatenate([res.x, x0])
+    res = least_squares(lambda q: model(q, q[4], q[5]) - vals, p0,
+                        bounds=([-np.inf, 0.05, 0.5, -np.inf, lo_pos[0], lo_pos[1]],
+                                [np.inf, 5.0, 4.0, np.inf, hi_pos[0], hi_pos[1]]),
+                        x_scale='jac', max_nfev=300)
+    return res.x
 
 
-def _build_if_template(
+def _build_empirical_2d_if(
     meas_ifs: np.ndarray,
     valid_mask: np.ndarray,
-    sim_ifs_registered: np.ndarray,
-    coords: np.ndarray,
-    pitch_est: float,
-    halfwidth_pitches: float = 2.5,
-    min_snr_frac: float = 0.5,
-    n_iter: int = 3,
+    coords_reg: np.ndarray,
+    radius_pitches: float = 7.5,
+    superres: int = 10,
+    symmetrize: bool = True,
+    n_grid_iter: int = 5,
 ):
     """
-    Estimates the average measured IF shape from the high-SNR actuators whose whole template
-    window lies inside the pupil (edge actuators are excluded).
+    Empirical 2D influence function, following Berdeu et al. (2026), Sec. 2.1, as closely as the
+    data allow:
 
-    Per selected actuator a patch of the measured IF is cut around its registered position
-    (cubic sub-pixel interpolation), the tip/tilt of a plane fitted on the outer ring is removed (drift),
-    and the patches are aligned to the evolving template with a few Lucas-Kanade shift updates
-    (so that residual mis-registration does not blur the template). The template is the
-    amplitude-weighted average (rank-1 model patch_i = a_i * template), after rejecting outlier
-    actuators, tapered smoothly to zero at the window edge, and scaled so that its peak equals
-    the median peak of the simulated IFs of the same actuators (gain convention: peak, relative
-    to the simulation).
+      1. Eq. 1: super-Gaussian fit rho*exp(-(r/alpha)^beta) + gamma of every actuator over the disc
+         Omega of radius_pitches (valid pixels only) centred on its position on a regular Cartesian
+         grid; actuators whose grid position falls outside the measured pupil have their position
+         forced to the grid. The grid (pitch, angle, offset) is then refitted to the super-Gaussian
+         positions of the actuators inside the pupil, and the two steps are repeated n_grid_iter
+         times (5 in the paper). The initial grid comes from the registered simulated positions.
+      2. Eq. 2: every measured IF, offset gamma_a removed and normalised by rho_a, is re-interpolated
+         on a super-resolved grid (superres samples per pitch) in the de-rotated actuator-grid
+         frame, centred on its grid position, and the cube is AVERAGED over the actuators (samples
+         outside the pupil are ignored).
+      3. (symmetrize) the 8 flipped/transposed versions are averaged (square-grid symmetry).
+      4. Eq. 3: amplitude rho_2D and offset gamma_2D of every actuator are fitted over Omega with
+         this single 2D IF placed at its grid position.
 
-    Returns None if fewer than 5 usable actuators are found, else a dict with 'template'
-    (P x P), 'used' (actuator indices), 'centroid' ([dy, dx] of the template centre of mass
-    from the window centre: a global offset between the registered coordinates and the measured
-    IFs shows up here; it is baked into the template, so placing it at the registered coordinates
-    stays consistent), 'half', 'rel_residual' and 'n_candidates'.
+    The 2D IF has the normalisation of the paper (unit super-Gaussian amplitude), so the gains are in
+    the units of the measured IFs. Only actuators whose grid position lies inside the measured pupil
+    enter the average (a safeguard: a partially seen IF has a poorly constrained rho_a), and
+    actuators whose rho_a has the wrong sign or is below 20 % of the median are skipped.
+
+    meas_ifs must already be cleaned of piston (and, if wanted, tip/tilt). Returns None if fewer
+    than 10 actuators are usable, else a dict with 'basis' (n_acts, H, W: the 2D IF at every grid
+    position), 'template' (the super-resolved 2D IF, actuator-grid frame), 'superres',
+    'radius_pitches', 'positions' (grid), 'grid' (fit summary), 'rho_2d', 'gamma_2d' (Eq. 3),
+    'sg' (dict of the Eq. 1 maps: rho, alpha, beta, gamma, positions) and 'used' (stacked actuators).
     """
     n_acts, h, w = meas_ifs.shape
-    half = max(3, int(round(halfwidth_pitches * pitch_est)))
-    P = 2 * half + 1
-    yy, xx = np.mgrid[-half:half + 1, -half:half + 1]
-    rn = np.hypot(yy, xx) / half
-    ring = ((rn >= 0.75) & (rn <= 1.0)).ravel()
-    G = np.stack([np.ones(P * P), yy.ravel().astype(float), xx.ravel().astype(float)], axis=1)
-    G_ring_pinv = np.linalg.pinv(G[ring])
-    taper = np.where(rn <= 0.7, 1.0, np.where(rn >= 1.0, 0.0, 0.5 * (1.0 + np.cos(np.pi * (rn - 0.7) / 0.3))))
+    ok = ~np.isnan(coords_reg[:, 0])
+    if ok.sum() < 10:
+        return None
 
-    med = np.median(meas_ifs[:, valid_mask], axis=1)
-    dist = distance_transform_edt(valid_mask)
+    def in_fov(p_):
+        cy, cx = int(round(p_[0])), int(round(p_[1]))
+        return 0 <= cy < h and 0 <= cx < w and bool(valid_mask[cy, cx])
 
-    # Candidates: whole window (plus interpolation margin) inside the pupil
-    cand = []
-    for i in range(n_acts):
-        if np.isnan(coords[i, 0]):
+    def disc_pixels(c, r_pix):
+        rb = int(np.ceil(r_pix)) + 1
+        cy, cx = int(round(c[0])), int(round(c[1]))
+        ya, yb, xa, xb = max(0, cy - rb), min(h, cy + rb + 1), max(0, cx - rb), min(w, cx + rb + 1)
+        if ya >= yb or xa >= xb:
+            return None, None
+        Yp, Xp = np.mgrid[ya:yb, xa:xb]
+        m = valid_mask[ya:yb, xa:xb] & ((Yp - c[0])**2 + (Xp - c[1])**2 <= r_pix**2)
+        return Yp[m], Xp[m]
+
+    # Initial regular grid from the registered simulated positions
+    grid = _fit_regular_grid(coords_reg, coords_reg, ok)
+
+    # 1. Super-Gaussian fits (Eq. 1) alternated with regular-grid refits
+    sg = np.full((n_acts, 6), np.nan)
+    for _ in range(n_grid_iter):
+        pos, pitch = grid['positions'], grid['pitch']
+        r_pix = radius_pitches * pitch
+        fov = np.array([ok[a] and in_fov(pos[a]) for a in range(n_acts)])
+        for a in np.where(ok)[0]:
+            Yp, Xp = disc_pixels(pos[a], r_pix)
+            if Yp is None or len(Yp) < 20:
+                sg[a] = np.nan
+                continue
+            prev = sg[a] if np.all(np.isfinite(sg[a])) else None
+            sg[a] = _fit_super_gaussian(Yp, Xp, meas_ifs[a][Yp, Xp], pos[a], pitch, prev, fix_pos=not fov[a])
+        fitted = fov & np.isfinite(sg[:, 0])
+        if fitted.sum() < 10:
+            return None
+        sg_pos = np.where(fitted[:, None], sg[:, 4:6], np.nan)
+        grid = _fit_regular_grid(coords_reg, sg_pos, fitted)
+    pos, pitch, R = grid['positions'], grid['pitch'], grid['R']
+    r_pix = radius_pitches * pitch
+    fov = np.array([ok[a] and in_fov(pos[a]) for a in range(n_acts)])
+
+    # 2. Normalised IFs on the super-resolved, de-rotated grid, averaged (Eq. 2)
+    half_f = int(np.ceil(radius_pitches * superres))
+    k = np.arange(-half_f, half_f + 1) / superres
+    uy, ux = np.meshgrid(k, k, indexing='ij')
+    in_disc = np.hypot(uy, ux) <= radius_pitches
+    dyf = pitch * (R[0, 0] * uy + R[0, 1] * ux)
+    dxf = pitch * (R[1, 0] * uy + R[1, 1] * ux)
+    vm = valid_mask.astype(float)
+
+    rho_sg = sg[:, 0]
+    med_rho = np.nanmedian(rho_sg[fov])
+    used = np.where(fov & np.isfinite(rho_sg) & (rho_sg * np.sign(med_rho) > 0.2 * abs(med_rho)))[0]
+    if len(used) < 10:
+        return None
+    acc = np.zeros(uy.shape)
+    cnt = np.zeros(uy.shape)
+    for a in used:
+        Y, X = pos[a, 0] + dyf, pos[a, 1] + dxf
+        vals = (_sample_frame(meas_ifs[a], Y, X, order=3) - sg[a, 3]) / rho_sg[a]
+        ok_s = in_disc & (_sample_frame(vm, Y, X, order=1) >= 0.999)
+        acc[ok_s] += vals[ok_s]
+        cnt[ok_s] += 1
+    tf = np.where(cnt > 0, acc / np.maximum(cnt, 1), 0.0)
+
+    # 3. Symmetrisation: average of the 8 flipped/transposed versions
+    if symmetrize:
+        v8 = [tf, tf[::-1], tf[:, ::-1], tf[::-1, ::-1]]
+        tf = np.mean(v8 + [v.T for v in v8], axis=0)
+    tf[~in_disc] = 0.0
+    coeff = spline_filter(tf, order=3)
+
+    # 4. Eq. 3: amplitude and offset of every actuator with the single 2D IF
+    rho_2d = np.full(n_acts, np.nan)
+    gamma_2d = np.full(n_acts, np.nan)
+    for a in np.where(ok)[0]:
+        Yp, Xp = disc_pixels(pos[a], r_pix)
+        if Yp is None or len(Yp) < 10:
             continue
-        cy, cx = int(round(coords[i, 0])), int(round(coords[i, 1]))
-        if 0 <= cy < h and 0 <= cx < w and dist[cy, cx] >= half + 3:
-            cand.append(i)
-    cand = np.array(cand, dtype=int)
-    if len(cand) < 5:
-        return None
+        m = _eval_fine_template(coeff, Yp - pos[a, 0], Xp - pos[a, 1], pitch, R, superres)
+        sol, *_ = np.linalg.lstsq(np.stack([m, np.ones_like(m)], axis=1), meas_ifs[a][Yp, Xp], rcond=None)
+        rho_2d[a], gamma_2d[a] = sol
 
-    def extract(ids, offsets):
-        patches = np.empty((len(ids), P * P))
-        for k, i in enumerate(ids):
-            patches[k] = _subpixel_patch(meas_ifs[i] - med[i], coords[i] + offsets[k], half).ravel()
-        coef = patches[:, ring] @ G_ring_pinv.T          # plane fitted on the outer ring
-        return patches - coef[:, 1:] @ G[:, 1:].T        # remove only its tip/tilt (the pedestal holds the real IF tails)
+    # Basis: the 2D IF at every actuator's grid position (zero beyond Omega)
+    basis = np.zeros((n_acts, h, w))
+    rb = int(np.ceil(r_pix)) + 1
+    for a in np.where(ok)[0]:
+        cy, cx = int(round(pos[a, 0])), int(round(pos[a, 1]))
+        ya, yb, xa, xb = max(0, cy - rb), min(h, cy + rb + 1), max(0, cx - rb), min(w, cx + rb + 1)
+        if ya >= yb or xa >= xb:
+            continue
+        Yp, Xp = np.mgrid[ya:yb, xa:xb]
+        basis[a, ya:yb, xa:xb] = _eval_fine_template(coeff, Yp - pos[a, 0], Xp - pos[a, 1], pitch, R, superres)
 
-    # SNR selection: peak over robust noise (MAD of the whole IF over the pupil)
-    P0 = extract(cand, np.zeros((len(cand), 2)))
-    sigma = np.array([1.4826 * np.median(np.abs(meas_ifs[i][valid_mask] - med[i])) for i in cand])
-    snr = np.max(np.abs(P0), axis=1) / np.maximum(sigma, 1e-12)
-    keep = snr >= min_snr_frac * np.median(snr)
-    ids, Pm = cand[keep], P0[keep]
-    if len(ids) < 5:
-        return None
-
-    # Initial template: median of unit-peak patches
-    pk = Pm[np.arange(len(ids)), np.argmax(np.abs(Pm), axis=1)]
-    t = np.median(Pm / pk[:, None], axis=0)
-    t = t / t[np.argmax(np.abs(t))]
-
-    # Alternate Lucas-Kanade alignment of every patch to the template and amplitude-weighted averaging
-    d = np.zeros((len(ids), 2))
-    max_off = 0.5 * pitch_est
-    for _ in range(n_iter):
-        gy, gx = np.gradient(t.reshape(P, P))
-        D = np.stack([t, gy.ravel(), gx.ravel()], axis=1)
-        coef = Pm @ np.linalg.pinv(D).T                   # [a, -a*dy, -a*dx] per patch
-        a = coef[:, 0]
-        step = np.zeros_like(d)
-        ok = np.abs(a) > 1e-12
-        step[ok] = -coef[ok, 1:] / a[ok, None]
-        d = np.clip(d + np.clip(step, -1.0, 1.0), -max_off, max_off)
-        Pm = extract(ids, d)
-        a = Pm @ t / (t @ t)
-        t = (a @ Pm) / (a @ a)
-        t = t / t[np.argmax(np.abs(t))]
-
-    # Reject actuators whose patch deviates from a_i * template, then final average
-    a = Pm @ t / (t @ t)
-    rel = np.linalg.norm(Pm - a[:, None] * t[None, :], axis=1) / np.maximum(np.abs(a) * np.linalg.norm(t), 1e-12)
-    mad = 1.4826 * np.median(np.abs(rel - np.median(rel)))
-    good = rel <= np.median(rel) + 3.0 * max(mad, 1e-12)
-    if np.sum(good) < 5:
-        good[:] = True
-    ids, Pm, a, d, rel = ids[good], Pm[good], a[good], d[good], rel[good]
-    t = (a @ Pm) / (a @ a)
-    t = t / t[np.argmax(np.abs(t))]
-
-    # Peak convention: sub-pixel (interpolated) peak value, for the simulated IFs at their registered
-    # coordinates and for the template, so the pixel sampling of the peak does not bias the gains.
-    sim_pk = np.array([_subpixel_patch(sim_ifs_registered[i], coords[i], 1)[1, 1] for i in ids])
-    t_tapered = t.reshape(P, P) * taper
-    template = t_tapered * (np.median(sim_pk) / _template_peak(t_tapered))
-
-    tp = np.clip(template * np.sign(np.median(sim_pk)), 0.0, None)
-    centroid = np.array([np.sum(tp * yy), np.sum(tp * xx)]) / np.sum(tp)
-
-    return dict(template=template, used=ids, centroid=centroid, half=half,
-                rel_residual=float(np.median(rel)), n_candidates=len(cand))
+    sg_maps = dict(rho=sg[:, 0], alpha=sg[:, 1], beta=sg[:, 2], gamma=sg[:, 3], positions=sg[:, 4:6])
+    return dict(basis=basis, template=tf, superres=superres, radius_pitches=radius_pitches,
+                positions=pos, grid=grid, rho_2d=rho_2d, gamma_2d=gamma_2d, sg=sg_maps, used=used)
 
 
 def _tilt_basis(valid_mask: np.ndarray):
@@ -373,8 +464,10 @@ def fit_amplitudes_to_sim_ifs(
     reg_param: float = 1e-4,
     optimize_coords: bool = True,
     fit_if_template: bool = True,
-    template_halfwidth_pitches: float = 2.5,
-    template_min_snr_frac: float = 0.5,
+    template_radius_pitches: float = 7.5,
+    template_superres: int = 10,
+    template_symmetrize: bool = True,
+    template_grid_iter: int = 5,
     fit_tilt: bool = True,
     return_diagnostics: bool = False
 ):
@@ -382,11 +475,14 @@ def fit_amplitudes_to_sim_ifs(
     Fits measured IFs to registered simulated IFs (dense fit over all actuators).
 
     Steps:
-      0. (fit_if_template) the basis shape is replaced by the AVERAGE MEASURED IF of the
-         high-SNR, fully-inside-the-pupil actuators (see _build_if_template), placed at every
-         actuator's registered position. Since this shape already contains the average coupling
-         of an actuator to its surroundings, the amplitude matrix now describes per-actuator gain
-         (diagonal) and deviations from that average (off-diagonal), not the absolute coupling.
+      0. (fit_if_template) the simulated IF shape is replaced by the empirical 2D IF of Berdeu et
+         al. (2026), Sec. 2.1 (see _build_empirical_2d_if): super-Gaussian fits alternated with
+         a regular-grid fit (template_grid_iter times), MEAN of the gain-normalised measured IFs on
+         a super-resolved de-rotated grid (template_superres samples per pitch, disc of
+         template_radius_pitches), symmetrised (template_symmetrize), and placed at the fitted grid
+         position of every actuator. As in the paper, the 2D IF has unit super-Gaussian amplitude,
+         so the gains (diagonal) are in the units of the measured IFs, and the off-diagonal terms
+         are coupling/shape deviations relative to that common IF.
       1. (optimize_coords) per-actuator sub-pixel shift refinement.
       2. Median is subtracted from every measured and simulated IF over the valid pixels,
          tip/tilt (shared columns, unpenalised) is fitted out (fit_tilt), then a single
@@ -396,8 +492,12 @@ def fit_amplitudes_to_sim_ifs(
     Returns:
         amplitude_matrix: (N_acts, N_acts) array of coupling weights.
         scaled_sim_ifs: (N_acts, H, W) array of the final reconstructed IFs (median-subtracted basis).
-        diagnostics (only if return_diagnostics): dict with 'gain' (diagonal), and, if the template
-            was used, 'template', 'template_actuators', 'template_centroid';
+        diagnostics (only if return_diagnostics): dict with 'gain' (diagonal), and, if the empirical
+            2D IF was used, 'template' (super-resolved IF, actuator-grid frame), 'template_superres',
+            'template_positions' (fitted grid positions), 'template_grid' (pitch, angle_deg, rms, ...),
+            'template_rho_2d' / 'template_gamma_2d' (Eq. 3: gain and offset of each actuator with that
+            IF, no coupling), 'template_sg' (Eq. 1 maps: rho, alpha, beta, gamma, positions) and
+            'template_actuators' (actuators in the average);
             'row_median' (offset removed from each row), 'row_noise_mad' (robust rms of each
             row's entries, a coefficient-noise estimate) and, if fit_tilt, 'tilt' (n_acts x 2,
             fitted [tip, tilt] per measured IF in data units per pupil radius).
@@ -418,24 +518,28 @@ def fit_amplitudes_to_sim_ifs(
     M0 = M0 - np.median(M0, axis=1, keepdims=True)
     M_proj = M0 - (M0 @ Q) @ Q.T if Q is not None else M0
 
-    # --- Phase 0: replace the simulated IF shape by the average measured IF ---
+    # --- Phase 0: replace the simulated IF shape by the empirical 2D IF of the paper (optional) ---
     tpl_info = None
     if fit_if_template:
-        print("Building average measured IF template...")
-        coords_reg = estimate_actuator_peaks(sim_ifs_registered)   # unmasked: sim IFs live on the full frame
-        pitch_est = _nearest_neighbour_pitch(coords_reg)
-        tpl_info = _build_if_template(meas_ifs, valid_mask, sim_ifs_registered, coords_reg, pitch_est,
-                                      halfwidth_pitches=template_halfwidth_pitches,
-                                      min_snr_frac=template_min_snr_frac)
+        print(f"Building empirical 2D IF (Berdeu et al. 2026): {template_grid_iter} super-Gaussian/grid "
+              f"iterations, mean stack, {template_superres} samples/pitch, radius {template_radius_pitches} pitches...")
+        meas_clean = meas_ifs.astype(float).copy()       # piston (median) and, if fit_tilt, tip/tilt removed
+        meas_clean[:, valid_mask] = M_proj
+        coords_reg = estimate_actuator_peaks(sim_ifs_registered)   # registered simulated positions (initial grid)
+        tpl_info = _build_empirical_2d_if(meas_clean, valid_mask, coords_reg,
+                                          radius_pitches=template_radius_pitches, superres=template_superres,
+                                          symmetrize=template_symmetrize, n_grid_iter=template_grid_iter)
         if tpl_info is None:
-            print("   WARNING: too few usable actuators for a template; keeping the simulated IF shapes.")
+            print("   WARNING: too few usable actuators for the 2D IF; keeping the simulated IF shapes.")
         else:
-            cen = tpl_info['centroid']
-            print(f"-> template {2 * tpl_info['half'] + 1}x{2 * tpl_info['half'] + 1} pix from "
-                  f"{len(tpl_info['used'])}/{tpl_info['n_candidates']} inner actuators "
-                  f"(pitch ~ {pitch_est:.2f} pix); median patch misfit {tpl_info['rel_residual']:.3f}; "
-                  f"template centroid offset [dy,dx] = [{cen[0]:.2f}, {cen[1]:.2f}] pix")
-            updated_sim_ifs = _place_template(tpl_info['template'], coords_reg, (h, w))
+            gr, sgm = tpl_info['grid'], tpl_info['sg']
+            print(f"-> grid: pitch {gr['pitch']:.3f} pix, angle {gr['angle_deg']:.2f} deg, rms residual of the "
+                  f"super-Gaussian positions {gr['rms']:.3f} pix ({gr['n_used']} actuators); super-Gaussian "
+                  f"alpha {np.nanmedian(sgm['alpha']):.3f}, beta {np.nanmedian(sgm['beta']):.3f} (medians); "
+                  f"average of {len(tpl_info['used'])} actuators")
+            if gr['rms'] > 0.25 * gr['pitch']:
+                print("   WARNING: large grid residual; the actuators may not lie on a regular square grid.")
+            updated_sim_ifs = tpl_info['basis']
 
     # --- Phase 1: per-actuator sub-pixel shift refinement (independent, no
     # global solve needed here) ---
@@ -479,8 +583,10 @@ def fit_amplitudes_to_sim_ifs(
     if return_diagnostics:
         diagnostics = dict(gain=gain, row_median=row_median, row_noise_mad=row_noise_mad)
         if tpl_info is not None:
-            diagnostics.update(template=tpl_info['template'], template_actuators=tpl_info['used'],
-                               template_centroid=tpl_info['centroid'])
+            diagnostics.update(template=tpl_info['template'], template_superres=tpl_info['superres'],
+                               template_positions=tpl_info['positions'], template_grid=tpl_info['grid'],
+                               template_rho_2d=tpl_info['rho_2d'], template_gamma_2d=tpl_info['gamma_2d'],
+                               template_sg=tpl_info['sg'], template_actuators=tpl_info['used'])
         if Q is not None:
             resid = M0 - amplitude_matrix @ S0
             diagnostics['tilt'] = resid @ T @ np.linalg.inv(T.T @ T)
