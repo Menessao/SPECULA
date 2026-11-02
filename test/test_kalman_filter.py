@@ -1,6 +1,8 @@
 import specula
 specula.init(0, precision=0)  # Default target device, double precision
 
+import os
+import tempfile
 import unittest
 import numpy as np
 from scipy.linalg import block_diag, solve_discrete_are
@@ -8,6 +10,9 @@ from scipy.linalg import block_diag, solve_discrete_are
 from specula import cpuArray
 from specula.base_value import BaseValue
 from specula.processing_objects.kalman_filter import KalmanFilter
+from specula.data_objects.kalman_filter_data import (
+    KalmanFilterData, ar2_stationary_variance, ar2_driving_noise_variance,
+    ar2_is_stationary, stationary_covariance, prediction_projection)
 from test.specula_testlib import cpu_and_gpu
 
 
@@ -828,7 +833,7 @@ class TestKalmanFilterSensorBias(unittest.TestCase):
 
         first = run(0)
         kf.reset_states()
-        np.testing.assert_allclose(cpuArray(kf._x[2:]), [0.5, 0.05])
+        np.testing.assert_allclose(cpuArray(kf._x).reshape(-1)[2:], [0.5, 0.05])
         second = run(n)
         np.testing.assert_allclose(first, second, rtol=1e-12)
 
@@ -855,6 +860,436 @@ class TestKalmanFilterSensorBias(unittest.TestCase):
                  initial_bias_covariance=[np.ones((2, 2)), None])
         with self.assertRaises(ValueError):            # initial bias without bias estimation
             make(initial_bias=[[0.1], [0.1]])
+
+
+
+# ----------------------------------------------------------------------
+# Per-mode ("batched") operation, projection output and KalmanFilterData
+#
+# A modal AO controller runs one small filter per mode (e.g. an AR(2)
+# turbulence model per KL mode). In batched mode the KalmanFilter runs all of
+# them at once; it must give exactly the same result as independent dense
+# filters, one per mode.
+# ----------------------------------------------------------------------
+
+def random_modal_model(n_modes, seed):
+    """Per-mode AR(2)-like A, random SPD Q, and per-mode noise variances."""
+    rng = np.random.default_rng(seed)
+    rho = rng.uniform(0.9, 0.99, n_modes)
+    om = rng.uniform(0.01, 0.3, n_modes)
+    A = np.zeros((n_modes, 2, 2))
+    A[:, 0, 0] = 2 * rho * np.cos(om)
+    A[:, 0, 1] = -rho ** 2
+    A[:, 1, 0] = 1.0
+    L = rng.normal(size=(n_modes, 2, 2)) * 0.3
+    Q = L @ np.swapaxes(L, 1, 2) + 0.01 * np.eye(2)
+    r = [rng.uniform(0.5, 2.0, n_modes), rng.uniform(0.1, 0.5, n_modes)]
+    return A, Q, r
+
+
+class TestKalmanFilterModal(unittest.TestCase):
+
+    @cpu_and_gpu
+    def test_batched_equals_independent_dense_filters(self, target_device_idx, xp):
+        """Two sensors (one every 3rd step, biased), command input and projection:
+        the batched filter matches one dense filter per mode at every step."""
+        N, n_steps = 4, 40
+        A, Q, r = random_modal_model(N, seed=1)
+        H = np.array([[1.0, 0.0]])
+        Bm = np.array([[0.5], [0.0]])
+        C = np.tile(np.array([[0.7, 0.2]]), (N, 1)) * np.arange(1, N + 1)[:, None]
+        qb, b0 = 1e-3 * np.arange(1, N + 1), 0.1 * np.arange(N)
+        rng = np.random.default_rng(2)
+        z0, z1, u = rng.normal(size=(n_steps, N)), rng.normal(size=(n_steps, N)), rng.normal(size=(n_steps, N))
+
+        kw = dict(target_device_idx=target_device_idx, precision=0)
+        kf_b = KalmanFilter(A, [H, np.tile(H, (N, 1, 1))], Q, [r[0], r[1]], command_matrix=Bm,
+                            initial_covariance=np.eye(2) * 3.0,
+                            bias_process_noise_cov=[None, qb], initial_bias=[None, b0],
+                            projection_matrix=C, **kw)
+        rig_b = KalmanRig(kf_b, [N, N], xp, target_device_idx, command_size=N)
+
+        rigs = []
+        for j in range(N):
+            kf_j = KalmanFilter(A[j], [H, H], Q[j], [r[0][j], r[1][j]], command_matrix=Bm,
+                                initial_covariance=np.eye(2) * 3.0,
+                                bias_process_noise_cov=[None, qb[j]], initial_bias=[None, [b0[j]]],
+                                projection_matrix=C[j:j + 1], **kw)
+            rigs.append(KalmanRig(kf_j, [1, 1], xp, target_device_idx, command_size=1))
+
+        for k in range(1, n_steps + 1):
+            fresh_b = {0: z0[k - 1]}
+            if k % 3 == 0:
+                fresh_b[1] = z1[k - 1]
+            x_b, P_b = rig_b.step(k, fresh_b, command=u[k - 1])
+            out_b = {name: cpuArray(kf_b.outputs[name].value)
+                     for name in ('out_bias', 'out_bias_covariance', 'out_projected_state')}
+            self.assertEqual(x_b.shape, (N * 2,))
+            self.assertEqual(P_b.shape, (N, 2, 2))
+            self.assertEqual(out_b['out_projected_state'].shape, (N,))
+
+            for j, rig in enumerate(rigs):
+                fresh = {i: [z[j]] for i, z in fresh_b.items()}
+                x_j, P_j = rig.step(k, fresh, command=[u[k - 1, j]])
+                kf_j = rig.kf
+                np.testing.assert_allclose(x_b[2 * j:2 * j + 2], x_j, rtol=1e-9, atol=1e-12)
+                np.testing.assert_allclose(P_b[j], P_j, rtol=1e-9, atol=1e-12)
+                np.testing.assert_allclose(out_b['out_bias'][j], cpuArray(kf_j.outputs['out_bias'].value)[0],
+                                           rtol=1e-9, atol=1e-12)
+                np.testing.assert_allclose(out_b['out_bias_covariance'][j],
+                                           cpuArray(kf_j.outputs['out_bias_covariance'].value),
+                                           rtol=1e-9, atol=1e-12)
+                np.testing.assert_allclose(out_b['out_projected_state'][j],
+                                           cpuArray(kf_j.outputs['out_projected_state'].value)[0],
+                                           rtol=1e-9, atol=1e-12)
+
+    @cpu_and_gpu
+    def test_dense_projection_output(self, target_device_idx, xp):
+        F, G, H, Q, R = truck_model(1.0, 0.2, 1.0)
+        C = np.array([[1.0, 2.0], [0.0, -1.0], [3.0, 0.5]])
+        kf = KalmanFilter(F, H, Q, R, projection_matrix=C, target_device_idx=target_device_idx, precision=0)
+        rig = KalmanRig(kf, [1], xp, target_device_idx)
+        for k, z in enumerate([0.3, 1.1, -0.4], start=1):
+            x, _ = rig.step(k, {0: [z]})
+            proj = cpuArray(kf.outputs['out_projected_state'].value)
+            np.testing.assert_allclose(proj, C @ x, rtol=1e-12)
+            self.assertEqual(kf.outputs['out_projected_state'].generation_time, k)
+        self.assertNotIn('out_projected_state',
+                         KalmanFilter(F, H, Q, R, target_device_idx=target_device_idx).outputs)
+
+    @cpu_and_gpu
+    def test_batched_shape_conventions_are_equivalent(self, target_device_idx, xp):
+        """Equivalent ways of passing per-mode quantities give identical filters."""
+        N = 3
+        A, Q, r = random_modal_model(N, seed=3)
+        Qd = np.stack([np.diag(np.diag(q)) for q in Q])
+        H = np.array([[1.0, 0.0]])
+        x0 = np.arange(2 * N, dtype=float)
+        C = np.tile([[0.5, 0.5]], (N, 1))
+        variants = [
+            dict(process_noise_cov=Qd, observation_matrix=H, measurement_noise_cov=r[0],
+                 initial_state=x0, projection_matrix=C),
+            dict(process_noise_cov=np.stack([np.diag(q) for q in Qd]),         # (N, n) diagonal
+                 observation_matrix=np.tile(H, (N, 1, 1)),                     # per mode
+                 measurement_noise_cov=r[0][:, None],                          # (N, m)
+                 initial_state=x0.reshape(N, 2),                               # (N, n)
+                 projection_matrix=C[:, None, :]),                             # (N, q, n)
+            dict(process_noise_cov=Qd, observation_matrix=H,
+                 measurement_noise_cov=r[0][:, None, None],                    # (N, m, m)
+                 initial_state=x0, projection_matrix=C),
+        ]
+        z = np.array([0.4, -1.0, 2.0])
+        results = []
+        for v in variants:
+            kf = KalmanFilter(A, target_device_idx=target_device_idx, precision=0, **v)
+            rig = KalmanRig(kf, [N], xp, target_device_idx)
+            x, P = rig.step(1, {0: z})
+            results.append((x, P, cpuArray(kf.outputs['out_projected_state'].value)))
+        for res in results[1:]:
+            for a, b in zip(results[0], res):
+                np.testing.assert_allclose(a, b, rtol=1e-12)
+
+    def test_batched_validation(self):
+        N = 3
+        A, Q, r = random_modal_model(N, seed=4)
+        H = np.array([[1.0, 0.0]])
+        kw = dict(target_device_idx=-1, precision=0)
+        KalmanFilter(A, H, Q, r[0], **kw)                               # valid
+        with self.assertRaises(ValueError):                             # Q for the wrong number of modes
+            KalmanFilter(A, H, Q[:2], r[0], **kw)
+        with self.assertRaises(ValueError):                             # one variance per mode expected
+            KalmanFilter(A, H, Q, r[0][:2], **kw)
+        with self.assertRaises(ValueError):                             # H with wrong number of columns
+            KalmanFilter(A, np.ones((1, 3)), Q, r[0], **kw)
+        with self.assertRaises(ValueError):                             # wrong initial state size
+            KalmanFilter(A, H, Q, r[0], initial_state=np.zeros(N), **kw)
+        with self.assertRaises(ValueError):                             # projection for wrong modes
+            KalmanFilter(A, H, Q, r[0], projection_matrix=np.ones((N + 1, 2)), **kw)
+        with self.assertRaises(ValueError):                             # 4-D A
+            KalmanFilter(A[None], H, Q, r[0], **kw)
+
+        kf = KalmanFilter(A, H, Q, r[0], **kw)
+        rig = KalmanRig(kf, [N + 1], np, -1)
+        with self.assertRaises(ValueError):                             # measurement of wrong size
+            rig.step(1, {0: np.zeros(N + 1)})
+
+    # -- KalmanFilterData ----------------------------------------------------
+
+    def test_data_object_roundtrip_and_filter_equivalence(self):
+        N = 3
+        A, Q, r = random_modal_model(N, seed=5)
+        H = np.tile(np.array([[1.0, 0.0]]), (N, 1, 1))
+        data = KalmanFilterData(A, [H, H], Q, [r[0], 0.7],
+                                initial_covariance=np.eye(2),
+                                bias_process_noise_cov=[None, 1e-4],
+                                initial_bias=[None, np.full(N, 0.2)],
+                                projection_matrix=np.tile([[0.5, 0.5]], (N, 1)))
+        with tempfile.TemporaryDirectory() as tmp:
+            fn = os.path.join(tmp, 'kf.fits')
+            data.save(fn)
+            restored = KalmanFilterData.restore(fn, target_device_idx=-1)
+
+        kw0, kw1 = data.kalman_kwargs(), restored.kalman_kwargs()
+        self.assertEqual(kw0.keys(), kw1.keys())
+        for key in kw0:
+            v0, v1 = kw0[key], kw1[key]
+            if isinstance(v0, list):
+                self.assertEqual(len(v0), len(v1))
+                for a, b in zip(v0, v1):
+                    self.assertEqual(a is None, b is None, msg=key)
+                    if a is not None:
+                        np.testing.assert_array_equal(a, b)
+            elif v0 is None:
+                self.assertIsNone(v1, msg=key)
+            else:
+                np.testing.assert_array_equal(v0, v1)
+        self.assertEqual(np.asarray(restored.measurement_noise_cov[1]).shape, ())   # scalar kept scalar
+
+        z = [np.array([0.1, 0.2, 0.3]), np.array([-0.3, 0.0, 0.5])]
+        outs = []
+        for kf in (KalmanFilter(kalman_filter_data=restored, target_device_idx=-1, precision=0),
+                   KalmanFilter(target_device_idx=-1, precision=0, **kw0)):
+            rig = KalmanRig(kf, [N, N], np, -1)
+            outs.append(rig.step(1, {0: z[0], 1: z[1]}))
+        np.testing.assert_allclose(outs[0][0], outs[1][0], rtol=1e-12)
+        np.testing.assert_allclose(outs[0][1], outs[1][1], rtol=1e-12)
+
+    def test_data_object_and_matrices_are_exclusive(self):
+        A, Q, r = random_modal_model(2, seed=6)
+        data = KalmanFilterData.from_ar2(A[:, 0, 0], A[:, 0, 1], np.ones(2), r[0])
+        with self.assertRaises(ValueError):
+            KalmanFilter(state_transition_matrix=A, kalman_filter_data=data, target_device_idx=-1)
+        with self.assertRaises(ValueError):                             # nothing given
+            KalmanFilter(target_device_idx=-1)
+
+    # -- AR(2) helpers ---------------------------------------------------------
+
+    def test_ar2_helpers(self):
+        rng = np.random.default_rng(7)
+        N = 50
+        rho, om = rng.uniform(0.5, 0.999, N), rng.uniform(0.0, np.pi, N)
+        a1, a2 = 2 * rho * np.cos(om), -rho ** 2
+        sw2 = rng.uniform(0.1, 10.0, N)
+        self.assertTrue(np.all(ar2_is_stationary(a1, a2)))
+        self.assertFalse(ar2_is_stationary(1.5, -0.4))                  # pole at 1.1
+
+        data = KalmanFilterData.from_ar2(a1, a2, sw2, [np.ones(N), 2 * np.ones(N)], delay=1.5)
+        A, P0 = data.state_transition_matrix, data.initial_covariance
+        # stationary covariance: Lyapunov solution, matching the closed-form variance
+        np.testing.assert_allclose(P0, A @ P0 @ np.swapaxes(A, 1, 2) + data.process_noise_cov, rtol=1e-8)
+        np.testing.assert_allclose(P0[:, 0, 0], ar2_stationary_variance(a1, a2, sw2), rtol=1e-8)
+        np.testing.assert_allclose(ar2_driving_noise_variance(a1, a2, ar2_stationary_variance(a1, a2, sw2)),
+                                   sw2, rtol=1e-10)
+        # projection: average of the one- and two-step-ahead predictions of phi
+        e1A = np.stack([a1, a2], axis=1)
+        e1A2 = np.stack([a1 ** 2 + a2, a1 * a2], axis=1)
+        np.testing.assert_allclose(data.projection_matrix, 0.5 * (e1A + e1A2), rtol=1e-12)
+        np.testing.assert_allclose(prediction_projection(A, 2.0), e1A2, rtol=1e-12)
+        np.testing.assert_allclose(prediction_projection(A, 0.0), np.tile([1.0, 0.0], (N, 1)))
+        self.assertEqual(len(data.observation_matrix), 2)
+        self.assertEqual(data.observation_matrix[0].shape, (N, 1, 2))
+
+        with self.assertRaises(ValueError):
+            KalmanFilterData.from_ar2([1.5], [-0.4], [1.0], [1.0])
+        with self.assertRaises(ValueError):
+            KalmanFilterData.from_ar2(a1, a2, sw2, np.ones(N - 1))
+
+    # -- Closed loop with the SPECULA timing ------------------------------------
+
+    def test_ar2_closed_loop_beats_integrator(self):
+        """Modal AO loop with the SPECULA timing of the Ristretto configuration:
+
+        y_k = phi_k - d_k + n_k                 (WFS + modal reconstructor at step k)
+        z_k = y_k + d_k                         (pseudo-open-loop measurement)
+        c_k = C x_k|k                           (KalmanFilter.out_projected_state)
+        d_{k+1} = 0.5 c_k + 0.5 c_{k-1}          (pass-through filter with delay 0.5,
+                                                  DM seen by the WFS one step later)
+
+        Two sensors with different noise are fused. The Kalman controller must
+        beat the best integrator (gain scan, inverse-variance-weighted
+        measurements) on every mode."""
+        N, n_steps, settle = 3, 6000, 500
+        rho = np.array([0.999, 0.99, 0.995])
+        om = np.array([0.01, 0.05, 0.2])
+        a1, a2 = 2 * rho * np.cos(om), -rho ** 2
+        sw2 = np.ones(N)
+        r = [np.array([10.0, 1.0, 0.5]), np.array([20.0, 3.0, 1.0])]
+
+        rng = np.random.default_rng(8)
+        phi = np.zeros((n_steps, N))
+        w = rng.normal(size=(n_steps, N)) * np.sqrt(sw2)
+        for k in range(2, n_steps):
+            phi[k] = a1 * phi[k - 1] + a2 * phi[k - 2] + w[k]
+        noise = [rng.normal(size=(n_steps, N)) * np.sqrt(ri) for ri in r]
+
+        def loop(controller):
+            d = np.zeros(N)
+            c_prev = np.zeros(N)
+            res = np.zeros((n_steps, N))
+            for k in range(n_steps):
+                y = [phi[k] - d + nz[k] for nz in noise]
+                res[k] = phi[k] - d
+                c = controller(k, y, d)
+                d, c_prev = 0.5 * c + 0.5 * c_prev, c
+            return res[settle:].var(axis=0)
+
+        data = KalmanFilterData.from_ar2(a1, a2, sw2, r, delay=1.5)
+        kf = KalmanFilter(kalman_filter_data=data, target_device_idx=-1, precision=0)
+        rig = KalmanRig(kf, [N, N], np, -1)
+
+        def kalman(k, y, d):
+            rig.step(k + 1, {0: y[0] + d, 1: y[1] + d})
+            return cpuArray(kf.outputs['out_projected_state'].value).copy()
+
+        res_kf = loop(kalman)
+
+        wgt = (1 / r[0]) / (1 / r[0] + 1 / r[1])
+        res_int = []
+        for g in np.linspace(0.1, 1.2, 12):
+            state = {'c': np.zeros(N)}
+
+            def integrator(k, y, d, g=g, state=state):
+                state['c'] = state['c'] + g * (wgt * y[0] + (1 - wgt) * y[1])
+                return state['c']
+            with np.errstate(over='ignore', invalid='ignore'):
+                res_int.append(loop(integrator))
+        best_int = np.nanmin(np.array(res_int), axis=0)
+
+        self.assertTrue(np.all(res_kf < 0.7 * best_int), msg=f'KF {res_kf} vs integrator {best_int}')
+        self.assertTrue(np.all(res_kf < 0.01 * phi[settle:].var(axis=0)))
+
+
+
+# ----------------------------------------------------------------------
+# Closed-loop model: integrating (slower) reference sensor + biased fast sensor
+#
+# SPECULA timing of the Ristretto configuration, without pseudo-open-loop
+# measurements: the filter receives the raw modal measurements and, as command
+# input, the DM command d_k seen by the sensors at step k.
+#
+#   fast sensor (every step):        y_k = phi_k - d_k + b + n_k
+#   slow sensor (every T-th step):   y_k = mean_{j<T}(phi_{k-j} - d_{k-j}) + n_k
+#   c_k = C x_k|k ;  d_{k+1} = 0.5 c_k + 0.5 c_{k-1}
+# ----------------------------------------------------------------------
+
+def run_closed_loop_toy(seed, with_bias=True, n_steps=8000, settle=1000, T=4):
+    N = 3
+    rho = np.array([0.999, 0.99, 0.995])
+    om = np.array([0.01, 0.05, 0.2])
+    a1, a2 = 2 * rho * np.cos(om), -rho ** 2
+    sw2 = np.ones(N)
+    r_slow, r_fast = np.array([4.0, 1.0, 0.5]), np.array([1.0, 0.3, 0.2])
+    b = np.array([5.0, -3.0, 2.0])
+
+    rng = np.random.default_rng(seed)
+    phi = np.zeros((n_steps, N))
+    w = rng.normal(size=(n_steps, N)) * np.sqrt(sw2)
+    for k in range(2, n_steps):
+        phi[k] = a1 * phi[k - 1] + a2 * phi[k - 2] + w[k]
+
+    data = KalmanFilterData.from_ar2_closed_loop(
+        a1, a2, sw2, [r_slow, r_fast], integration_steps=[T, 1],
+        bias_process_noise_cov=[None, 0.0] if with_bias else None,
+        initial_bias_covariance=[None, 100.0] if with_bias else None)
+    kf = KalmanFilter(kalman_filter_data=data, target_device_idx=-1, precision=0)
+    rig = KalmanRig(kf, [N, N], np, -1, command_size=N)
+
+    c1, c2 = np.zeros(N), np.zeros(N)
+    res = np.zeros((n_steps, N))
+    acc = np.zeros(N)
+    for k in range(n_steps):
+        d = 0.5 * c1 + 0.5 * c2
+        res[k] = phi[k] - d
+        acc += res[k]
+        fresh = {1: res[k] + b + rng.normal(size=N) * np.sqrt(r_fast)}
+        if (k + 1) % T == 0:
+            fresh[0] = acc / T + rng.normal(size=N) * np.sqrt(r_slow)
+            acc = np.zeros(N)
+        rig.step(k + 1, fresh, command=d)
+        c = cpuArray(kf.outputs['out_projected_state'].value).copy()
+        c2, c1 = c1, c
+
+    out = dict(b=b, mse=np.mean(res[settle:] ** 2, axis=0), mean=res[settle:].mean(axis=0),
+               olvar=phi[settle:].var(axis=0))
+    if with_bias:
+        out['bias'] = cpuArray(kf.outputs['out_bias'].value).copy()
+        out['bias_std'] = np.sqrt(cpuArray(kf.outputs['out_bias_covariance'].value)[:, 0, 0])
+    return out
+
+
+class TestKalmanFilterClosedLoopModel(unittest.TestCase):
+
+    def test_model_structure(self):
+        a1, a2, sw2 = np.array([1.9, 1.5]), np.array([-0.95, -0.6]), np.array([1.0, 2.0])
+        data = KalmanFilterData.from_ar2_closed_loop(
+            a1, a2, sw2, [np.ones(2), 2 * np.ones(2)], integration_steps=[4, 1], measurement_delay=[0, 1],
+            bias_process_noise_cov=[None, 0.0])
+        A, P0 = data.state_transition_matrix, data.initial_covariance
+        L = 4
+        self.assertEqual(A.shape, (2, 2 * L, 2 * L))
+        np.testing.assert_array_equal(A[:, 0, :2], np.stack([a1, a2], axis=1))
+        np.testing.assert_array_equal(A[0, L, :], 0)                     # d_k comes from the command
+        np.testing.assert_array_equal(data.command_matrix[:, 0], np.eye(2 * L)[L])
+        np.testing.assert_allclose(data.observation_matrix[0][0],
+                                   np.r_[np.full(4, 0.25), np.full(4, -0.25)])
+        np.testing.assert_allclose(data.observation_matrix[1][0],
+                                   [0, 1, 0, 0, 0, -1, 0, 0])            # 1-step measurement delay
+        # stationary prior on the turbulence lags, DM commands known exactly
+        Pphi = P0[:, :L, :L]
+        Aphi = A[:, :L, :L]
+        np.testing.assert_allclose(Pphi, Aphi @ Pphi @ np.swapaxes(Aphi, 1, 2) + data.process_noise_cov[:, :L, :L],
+                                   rtol=1e-8)
+        np.testing.assert_allclose(Pphi[:, 0, 0], ar2_stationary_variance(a1, a2, sw2), rtol=1e-8)
+        np.testing.assert_array_equal(P0[:, L:, :], 0)
+        np.testing.assert_allclose(data.projection_matrix[:, :2],
+                                   0.5 * (np.stack([a1, a2], 1) + np.stack([a1 ** 2 + a2, a1 * a2], 1)))
+        np.testing.assert_array_equal(data.projection_matrix[:, 2:], 0)
+
+        with self.assertRaises(ValueError):
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], integration_steps=0)
+        with self.assertRaises(ValueError):
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], integration_steps=[1, 4])
+
+    def test_equivalent_to_pseudo_open_loop_for_a_single_fast_sensor(self):
+        """Known DM commands kept in the state == pseudo-open-loop measurements."""
+        N, n_steps = 3, 300
+        rho, om = np.array([0.999, 0.99, 0.995]), np.array([0.01, 0.05, 0.2])
+        a1, a2, sw2, r = 2 * rho * np.cos(om), -rho ** 2, np.ones(N), np.array([1.0, 0.5, 0.2])
+        rng = np.random.default_rng(10)
+        phi = np.cumsum(rng.normal(size=(n_steps, N)), axis=0)
+        noise = rng.normal(size=(n_steps, N)) * np.sqrt(r)
+
+        kf_cl = KalmanFilter(kalman_filter_data=KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [r]),
+                             target_device_idx=-1, precision=0)
+        kf_pol = KalmanFilter(kalman_filter_data=KalmanFilterData.from_ar2(a1, a2, sw2, [r]),
+                              target_device_idx=-1, precision=0)
+        rig_cl = KalmanRig(kf_cl, [N], np, -1, command_size=N)
+        rig_pol = KalmanRig(kf_pol, [N], np, -1)
+
+        c1, c2 = np.zeros(N), np.zeros(N)
+        for k in range(n_steps):
+            d = 0.5 * c1 + 0.5 * c2
+            y = phi[k] - d + noise[k]
+            rig_cl.step(k + 1, {0: y}, command=d)
+            rig_pol.step(k + 1, {0: y + d})
+            c = cpuArray(kf_cl.outputs['out_projected_state'].value).copy()
+            np.testing.assert_allclose(c, cpuArray(kf_pol.outputs['out_projected_state'].value),
+                                       rtol=1e-7, atol=1e-7)
+            c2, c1 = c1, c
+
+    def test_slow_reference_and_biased_fast_sensor(self):
+        """500 Hz-like reference (4-step frames, unbiased) + fast sensor with a static
+        offset: the offset is estimated, the loop locks on the reference, and the
+        result is much better than a bias-blind filter (which locks on the offset)."""
+        with_bias = run_closed_loop_toy(seed=11)
+        blind = run_closed_loop_toy(seed=11, with_bias=False)
+
+        err = np.abs(with_bias['bias'] - with_bias['b'])
+        self.assertTrue(np.all(err < 4 * with_bias['bias_std']), msg=f'{with_bias["bias"]} vs {with_bias["b"]}')
+        self.assertTrue(np.all(np.abs(with_bias['mean']) < 0.1 * np.abs(with_bias['b'])))
+        self.assertTrue(np.all(np.abs(blind['mean'] + blind['b']) < 0.3 * np.abs(blind['b'])))  # blind: locked on the offset
+        self.assertTrue(np.all(with_bias['mse'] < 0.6 * blind['mse']))
+        self.assertTrue(np.all(with_bias['mse'] < 0.01 * with_bias['olvar']))
 
 
 if __name__ == '__main__':

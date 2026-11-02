@@ -1,0 +1,339 @@
+# Base SPECULA simulation of the Ristretto-like system, Kalman-filter version: VIS modulated pyramid at 500 Hz
+# (reference) fused with an unmodulated NIR pyramid at 2 kHz (its static offset is estimated as a bias). The calib_*.yml files of this folder are applied on top of it
+# (`specula ristretto_main.yml calib_xxx.yml overrides.yml`) by aoeb.generation, which overrides main.root_dir, the pyramid geometry,
+# the sensing wavelength (pyr.wavelengthInNm AND source_ngs.wavelengthInNm: they must be equal), the science wavelength, the DM data
+# objects (from paths.dm_tag), seeing, modes, ... Adapted from the example main yml; the changes are marked with FIX.
+
+# Main simulation parameters
+main:
+  class:             'SimulParams'
+  root_dir:          '/raid1/mmenessini/calibration/WFSW'  # CalibManager root directory (all the data are in subdirectories); overridden by aoeb
+  pixel_pupil:       220                   # Must match influence function computation
+  pixel_pitch:       0.03727272727         # [m] 8.2m / 220 pixels = 0.037272 m/pixel (Nyquist sampling of 10cm r0)
+  total_time:        6.000                 # [s]
+  time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
+  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  display_server:    false                 # Disable for batch runs
+
+# Atmospheric conditions
+seeing:
+  class:             'WaveGenerator'
+  constant:          0.88                  # [arcsec]
+  outputs:           ['output']
+
+wind_speed:
+  class:             'WaveGenerator'
+  constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
+  outputs:           ['output']
+
+wind_direction:
+  class:             'WaveGenerator'
+  constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
+  outputs:           ['output']
+
+
+# Science source, propagated like the NGS up to the science wavelength (ef_prop_science below)
+science_vis:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On axis
+  height:            .inf
+  magnitude:         7.0
+  wavelengthInNm:    550                  # [nm] science wavelength
+
+# Natural guide star for the WFS. Its wavelength and the pyramid wavelength must be the same (aoeb sets both).
+source_vis:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
+  height:            .inf                  # Infinite height (star)
+  magnitude:         7.0
+  wavelengthInNm:    900                   # [nm] sensing wavelength
+
+source_nir:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
+  height:            .inf                  # Infinite height (star)
+  magnitude:         7.0
+  wavelengthInNm:    1300                   # [nm] sensing wavelength
+
+# Science source, propagated like the NGS up to the science wavelength (ef_prop_science below)
+science_nir:
+  class:             'Source'
+  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On axis
+  height:            .inf
+  magnitude:         7.0
+  wavelengthInNm:    1650                  # [nm] science wavelength
+
+# Telescope pupil geometry
+pupilstop:
+  class:             'Pupilstop'
+  tag:               'vlt_pupil_220pixels'
+
+# Multi-layer atmospheric model
+atmo:
+  class:             'AtmoEvolution'
+  simul_params_ref:  'main'
+  L0:                25.0                   # [m] Outer scale
+  heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] at 0 zenith angle
+  Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
+  fov:               0.0                    # [arcsec] Field of view
+  inputs:
+    seeing:          'seeing.output'
+    wind_speed:      'wind_speed.output'
+    wind_direction:  'wind_direction.output'
+  outputs:           ['layer_list']
+
+# Atmospheric propagation of both sources
+prop:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_vis', 'source_nir', 'science_vis', 'science_nir']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop','dm.out_layer:-1']       # Pupil + DM correction
+  outputs:           ['out_source_vis_ef', 'out_source_nir_ef', 'out_science_vis_ef', 'out_science_nir_ef']     # FIX: was out_cource_science_ef
+
+
+
+########################### VIS ##############################
+pyr_vis:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          48.                     # Pupil diameter in subaps.
+  pup_dist:          60.                     # Separation between pupil centers in subaps.
+  fov:               2.0                     # Requested field-of-view [arcsec]
+  fov_errsup:        12
+  mod_amp:           3.0                     # Modulation radius (in lambda/D units)
+  output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    900                     # [nm] Pyramid wavelength
+  inputs:
+    in_ef: 'prop.out_source_vis_ef'
+  # Reference sensor of the Kalman filter (no bias estimated): modulated, read at 500 Hz
+
+cred_vis:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]               # Total detector size
+  dt:                0.002                   # [s] Integration time: 500 Hz = 4 loop steps
+  bandw:             400                     # [nm]
+  photon_noise:      true
+  readout_noise:     true
+  excess_noise:      false
+  readout_level:     0.5                     # [e-/pix/frame]
+  emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
+  quantum_eff:       0.2                     # QE x transmission
+  inputs:
+    in_i:            'pyr_vis.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes_vis:
+  class:                  'PyrSlopec'
+  pupdata_object:         'pyr_pupdata_48x48'
+  # sn_object:            'pyr3.0_48x48_sn'
+  inputs:
+    in_pixels:        'cred_vis.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modes_vis:
+  class:             'Modalrec'
+  recmat_object:     'pyr3.0_48x48_1300modes_wvl900_rec'
+  inputs:
+    in_slopes:       'pyr_slopes_vis.out_slopes'
+  outputs:           ['out_modes']
+
+
+########################### NIR ##############################
+pyr_nir:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          48.                     # Pupil diameter in subaps.
+  pup_dist:          60.                     # Separation between pupil centers in subaps.
+  fov:               2.0                     # Requested field-of-view [arcsec]
+  fov_errsup:        12
+  mod_amp:           0.0                     # Unmodulated (its offset is estimated by the Kalman filter)
+  output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
+  wavelengthInNm:    1300                     # [nm] Pyramid wavelength (FIX: equal to source_ngs.wavelengthInNm)
+  inputs:
+    in_ef: 'prop.out_source_nir_ef'
+
+cred_nir:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]               # Total detector size
+  dt:                0.0005                  # [s] Integration time
+  bandw:             400                     # [nm]
+  photon_noise:      true
+  readout_noise:     true
+  excess_noise:      false
+  readout_level:     0.5                     # [e-/pix/frame]
+  emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
+  quantum_eff:       0.2                     # QE x transmission
+  inputs:
+    in_i:            'pyr_nir.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes_nir:
+  class:                  'PyrSlopec'
+  pupdata_object:         'pyr_pupdata_48x48'
+  # sn_object:            'pyr3.0_48x48_sn'
+  inputs:
+    in_pixels:        'cred_nir.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modes_nir:
+  class:             'Modalrec'
+  recmat_object:     'pyr0.0_48x48_1300modes_wvl1300_rec'   # TO CALIBRATE: unmodulated reconstructor
+  inputs:
+    in_slopes:       'pyr_slopes_nir.out_slopes'
+  outputs:           ['out_modes']
+
+############################ Control: Kalman filter ################################
+# Modal turbulence estimation with one AR(2) model per mode, fusing the two pyramids.
+#
+# Timing (SPECULA): the WFSs see at step k the DM shape d_k computed at step k-1 ('dm.out_layer:-1').
+# The filter receives the raw closed-loop modal measurements and, as command input, d_k itself
+# ('kdelay.out_comm:-1'), which it keeps in its state (last 4 steps), so that:
+#   NIR, unmodulated, every step:          y_k = phi_k - d_k + b + n_k   (b: offset, estimated)
+#   VIS, modulated reference, 500 Hz:      y_k = mean over the 4 integrated steps of (phi - d) + n_k
+# Its command c_k is its prediction of phi 1.5 steps ahead. The 1.5-step plant is kdelay (pass-through
+# with delay 0.5) + the one-step DM delay: d_{k+1} = 0.5 c_k + 0.5 c_{k-1}. If the plant delay or a
+# frame rate changes, rebuild the KalmanFilterData accordingly (make_ristretto_kalman_data.py).
+
+kalman:
+  class:             'KalmanFilter'
+  kalman_filter_data_object: 'kf_ar2_1300modes_vis_nir'   # built by make_ristretto_kalman_data.py
+  time_step:         0.0005                  # [s] AR(2) sampling; only matters if a step has no fresh input
+  inputs:
+    in_measurements_list: ['pyr_modes_vis.out_modes', 'pyr_modes_nir.out_modes']   # order of the data file
+    in_command:      'kdelay.out_comm:-1'    # DM command seen by the WFSs at this step
+  outputs:           ['out_projected_state', 'out_state', 'out_bias']
+
+# Plant: pure delay. Pass-through filter (gain 1, forgetting factor 0) with fractional delay 0.5:
+# total delay 1 + 0.5 = 1.5 steps (the 1 is the 'dm.out_layer:-1' in prop)
+kdelay:
+  class:             'Integrator'
+  simul_params_ref:  'main'
+  int_gain:          [1.0]
+  ff:                [0.0]
+  n_modes:           [1300]
+  delay:             0.5
+  inputs:
+    delta_comm:      'kalman.out_projected_state'
+  outputs:           ['out_comm']
+
+# Previous integrator controller, kept for comparison (to use it: restore this block and bootstrap,
+# set dm.inputs.in_command to 'filter.out_comm' and remove kalman and kdelay).
+# NB: its input referred to 'pyr_modalrec.out_modes', which does not exist in this file (use
+# 'pyr_modes_vis.out_modes'), and delay 0.25 gives a 1.25-step plant, not 1.5.
+# bootstrap:
+#   class:              'ScheduleGenerator'
+#   scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
+#   modes_per_group:    [2,148,650,500] # Ncols
+#   scheduled_times:    [0.01] # Nrows-1
+#
+# filter:
+#   class:                'IirFilter'
+#   simul_params_ref:     'main'
+#   delay:                0.5
+#   iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5'
+#   inputs:
+#     delta_comm: 'pyr_modes_vis.out_modes'
+#     gain_mod: 'bootstrap.output'
+#   outputs:  ['out_comm']
+
+# DM data objects: aoeb names them {paths.dm_tag}_ifunc, _m2c, _kl_inv
+dm:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'       # Our computed influence functions
+  m2c_object:        'bmc2k_vlt_m2c'         # Modal-to-command matrix
+  nmodes:            1800                    # Number of controlled modes
+  height:            0                       # Ground-conjugated DM
+  inputs:
+    in_command:      'kdelay.out_comm'      # Kalman command after the plant delay
+  outputs:           ['out_layer']
+
+
+###########################################################
+##################### POST-PROCESSING #####################
+# Coronagraphic and non-coronagraphic PSFs at the science wavelength
+coro_psf_vis:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    550                    # [nm] science wavelength
+  nd:                4                       # 4x padding for PSF
+  start_time:        0.5
+  verbose: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'prop.out_science_vis_ef'
+
+# psf_vis:
+#   class:             'PSF'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    550                    # [nm] science wavelength
+#   nd:                4
+#   start_time:        1.0
+#   inputs:
+#     in_ef:           'prop.out_science_vis_ef'
+#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+
+coro_psf_nir:
+  class:             'PsfCoronagraph'
+  simul_params_ref:  'main'
+  wavelengthInNm:    1650                    # [nm] science wavelength
+  nd:                4                       # 4x padding for PSF
+  start_time:        0.5
+  verbose: false
+  compute_profile_metrics: true
+  inputs:
+    in_ef:           'prop.out_science_nir_ef'
+
+# psf_nir:
+#   class:             'PSF'
+#   simul_params_ref:  'main'
+#   wavelengthInNm:    1650                    # [nm] science wavelength
+#   nd:                4
+#   start_time:        1.0
+#   inputs:
+#     in_ef:           'prop.out_science_nir_ef'
+#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
+
+res_modes:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  inputs:
+    in_ef: ['prop.out_science_vis_ef']
+  outputs: ['out_modes']
+
+dm_modes:
+  class:            'ModalAnalysis'
+  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  inputs:
+    in_ef: ['dm.out_layer']
+  outputs: ['out_modes']
+
+atmo_modes:
+  class: 'BaseOperation'
+  sub:    true
+  inputs:
+    in_value1: 'res_modes.out_modes'
+    in_value2: 'dm_modes.out_modes'
+  outputs: ['out_value']
+
+# Data store for results
+data_store:
+  class:             'DataStore'
+  store_dir:         '/raid1/mmenessini/resulkts/WFSW'      # Data result directory: 'store_dir'/TN/
+  inputs:
+    input_list: [
+                  'sr_vis-coro_psf_vis.out_sr',
+                  'coro_psf_vis_int-coro_psf_vis.out_int_coronagraph_psf_profile',
+                  'coro_psf_vis_std-coro_psf_vis.out_std_coronagraph_psf_profile',
+                  'sr_nir-coro_psf_nir.out_sr',
+                  'coro_psf_nir_int-coro_psf_nir.out_int_coronagraph_psf_profile',
+                  'coro_psf_nir_std-coro_psf_nir.out_std_coronagraph_psf_profile',
+                  'atmo_res-atmo_modes.out_value',
+                  'dm_res-res_modes.out_modes',
+                  'kf_comm-kalman.out_projected_state',
+                  'kf_bias-kalman.out_bias',       # NIR offset w.r.t. the VIS reference
+                  ]

@@ -1,0 +1,145 @@
+# Noise calibration for the Kalman filter, with a realistic residual in the pyramid pupils.
+#
+#   specula ristretto_main_kalman.yml [calib_xxx.yml ...] calib_kalman_noise.yml
+#
+# Apply it after your usual calib_*.yml files, so that wavelengths, magnitudes, CCD settings and
+# reconstructors are exactly those of the closed-loop run. Seeing and propagation are NOT changed.
+#
+# - The DM is driven open loop by a modal analysis of the turbulence alone (separate propagation with
+#   the pupil only): it removes the first N modes exactly, so the pyramids see the fitting residual of
+#   the higher orders, i.e. realistic pupil intensities and aliasing. Because prop keeps
+#   'dm.out_layer:-1', the correction lags one step: the corrected modes keep a residual phi_k - phi_{k-1}.
+# - Each pyramid is read by two identical cameras, one with photon + readout noise (the existing chain)
+#   and one noiseless twin (*_nn). The difference of their modal measurements is the measurement noise
+#   alone, at this operating point: its temporal variance is R, per frame of each sensor (VIS frames are
+#   4 loop steps long). Aliasing, lag residual and static offsets are identical in both and cancel.
+# - Also stored, for later aliasing / offset studies: the noisy and noiseless modal measurements and the
+#   residual modes. Noiseless measurement minus the true residual modes = aliasing (+ optical-gain effects).
+#
+# NB: the twins copy the camera settings of ristretto_main_kalman.yml; if your calib_*.yml override
+# cred_vis / cred_nir / recmat parameters, override the *_nn twins identically.
+
+main_override:
+  total_time:        1.0                     # [s] 2000 NIR frames (500 VIS): ~3% (~6%) on each variance
+
+remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir']
+
+# ------------------------------------------------------------------------------------------------
+# DM driven by an open-loop modal analysis of the turbulence (first N modes perfectly corrected)
+# ------------------------------------------------------------------------------------------------
+prop_ol:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_vis']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']        # turbulence only, no DM
+  outputs:           ['out_source_vis_ef']
+
+atmo_modes:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  nmodes:            1300                    # N: number of modes corrected (= Kalman modes)
+  inputs:
+    in_ef:           ['prop_ol.out_source_vis_ef']
+  outputs:           ['out_modes']
+
+prop_override:
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop','dm.out_layer']        # turbulence only, no DM
+
+dm_override:
+  inputs:
+    in_command:      'atmo_modes.out_modes'
+
+# ------------------------------------------------------------------------------------------------
+# Noiseless twin cameras (same settings, photon and readout noise off) and their reconstructions
+# ------------------------------------------------------------------------------------------------
+cred_vis_nn:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]
+  dt:                0.002                   # [s] 500 Hz, as cred_vis
+  bandw:             400                     # [nm]
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+  readout_level:     0.5                     # [e-/pix/frame]
+  emccd_gain:        1
+  quantum_eff:       0.2
+  inputs:
+    in_i:            'pyr_vis.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes_vis_nn:
+  class:             'PyrSlopec'
+  pupdata_object:    'pyr_pupdata_48x48'
+  inputs:
+    in_pixels:       'cred_vis_nn.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modes_vis_nn:
+  class:             'Modalrec'
+  recmat_object:     'pyr3.0_48x48_1300modes_wvl900_rec'
+  inputs:
+    in_slopes:       'pyr_slopes_vis_nn.out_slopes'
+  outputs:           ['out_modes']
+
+cred_nir_nn:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]
+  dt:                0.0005                  # [s] 2 kHz, as cred_nir
+  bandw:             400                     # [nm]
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+  readout_level:     0.5                     # [e-/pix/frame]
+  emccd_gain:        1
+  quantum_eff:       0.2
+  inputs:
+    in_i:            'pyr_nir.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes_nir_nn:
+  class:             'PyrSlopec'
+  pupdata_object:    'pyr_pupdata_48x48'
+  inputs:
+    in_pixels:       'cred_nir_nn.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modes_nir_nn:
+  class:             'Modalrec'
+  recmat_object:     'pyr0.0_48x48_1300modes_wvl1300_rec'   # as pyr_modes_nir
+  inputs:
+    in_slopes:       'pyr_slopes_nir_nn.out_slopes'
+  outputs:           ['out_modes']
+
+# Measurement noise alone: noisy minus noiseless modal measurements
+noise_vis:
+  class:             'BaseOperation'
+  sub:               true
+  inputs:
+    in_value1:       'pyr_modes_vis.out_modes'
+    in_value2:       'pyr_modes_vis_nn.out_modes'
+  outputs:           ['out_value']
+
+noise_nir:
+  class:             'BaseOperation'
+  sub:               true
+  inputs:
+    in_value1:       'pyr_modes_nir.out_modes'
+    in_value2:       'pyr_modes_nir_nn.out_modes'
+  outputs:           ['out_value']
+
+data_store_override:
+  inputs:
+    input_list: ['noise_vis-noise_vis.out_value',          # -> R (make_ristretto_kalman_data.py)
+                 'noise_nir-noise_nir.out_value',
+                 'meas_vis-pyr_modes_vis.out_modes',       # noisy measurements
+                 'meas_nir-pyr_modes_nir.out_modes',
+                 'sig_vis-pyr_modes_vis_nn.out_modes',     # noiseless: residual + aliasing + offset
+                 'sig_nir-pyr_modes_nir_nn.out_modes',
+                 'ol-ol_modes.out_modes',                  # turbulence (open loop), first N modes
+                 'res-res_modes.out_modes']                # true residual modes
