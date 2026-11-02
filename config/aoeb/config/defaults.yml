@@ -19,6 +19,7 @@ atmosphere:                             # one profile for the effective wind and
   cn2: [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]
   wind_speed: [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]        # [m/s]
   wind: null                            # effective wind [m/s]; null: Cn2-weighted 5/3 moment of wind_speed
+  temporal: conan                       # temporal spectra: conan (one effective wind) | zernike (multi-layer frozen flow, temporal.py)
 
 sensors:
   n_subaps: [10, 24, 36, 48]
@@ -41,6 +42,7 @@ loop:
   iir_optimize_gain: true               # false: evaluate the filters exactly as given
   scenarios: [standard, multistage]
   n_fold: 3
+  max_sensitivity: 2.0                  # modulus margin: gains keep the peak rejection max|1/(1+L)| <= 2 (6 dB); null: up to 98 % of the stability limit
 
 scan:
   seeings: [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
@@ -61,8 +63,14 @@ chromatic:                              # needs wavelengths.sensing_nm
   delta_n: null                         # override of n_sensing - n_science (skips the refractivity model)
   heights_are_slant: false              # heights already include the airmass (TipTop's Hs)
 
-options: {crosstalk: false, fixed_point: false, kl_pad: 8,
-          asm: true}                    # fitting: true = LBT-ASM law; false = TipTop (von Karman outside the corrected square, k_c = sqrt(N/pi)/D)
+options:
+  crosstalk: false
+  fixed_point: false
+  kl_pad: 8
+  asm: true                             # fitting: true = LBT-ASM law; false = TipTop (von Karman outside the corrected square, k_c = sqrt(N/pi)/D)
+  optimize_freq: true                   # loop.fs values are MAXIMA: lower frame rates (grid freq_min * 2^(k/3)) are tried, the best is kept
+  optimize_modes: true                  # sensors.modes_per_subap values are MAXIMA: the other calibrated counts below are tried too
+  freq_min: 100.0                       # [Hz] lowest frame rate tried
 
 generation:                             # SPECULA calibration runs (generator); every realisation is its own run with seed = seed0 + i + 1
   pixel_pupil: null                     # main.pixel_pupil (must match the pupilstop and the DM influence functions); null: the pupilstop array size.

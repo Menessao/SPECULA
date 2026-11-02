@@ -36,11 +36,11 @@ Example
         -o <root_dir>/<kalman data dir>/kf_ar2_1300modes_vis_nir.fits
 """
 import argparse
-
 import numpy as np
+from astropy.io import fits
 
-from specula.data_objects.kalman_filter_data import (
-    KalmanFilterData, ar2_driving_noise_variance, ar2_stationary_variance, ar2_is_stationary)
+from config.aoeb.e2e.kalman_filter_data import (
+    KalmanFilterData, ar2_driving_noise_variance, ar2_stationary_variance)#, ar2_is_stationary)
 
 
 def load_array(path):
@@ -49,7 +49,6 @@ def load_array(path):
     if path.endswith('.npz'):
         with np.load(path) as f:
             return f[f.files[0]]
-    from astropy.io import fits
     return np.asarray(fits.getdata(path), dtype=float)
 
 

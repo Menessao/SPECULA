@@ -10,7 +10,7 @@ from scipy.linalg import block_diag, solve_discrete_are
 from specula import cpuArray
 from specula.base_value import BaseValue
 from specula.processing_objects.kalman_filter import KalmanFilter
-from specula.data_objects.kalman_filter_data import (
+from config.aoeb.e2e.kalman_filter_data import (
     KalmanFilterData, ar2_stationary_variance, ar2_driving_noise_variance,
     ar2_is_stationary, stationary_covariance, prediction_projection)
 from test.specula_testlib import cpu_and_gpu

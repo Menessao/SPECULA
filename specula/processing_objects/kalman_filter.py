@@ -1,7 +1,7 @@
 from specula.base_processing_obj import BaseProcessingObj, InputDesc, OutputDesc
 from specula.base_value import BaseValue
 from specula.connections import InputValue, InputList
-from specula.data_objects.kalman_filter_data import KalmanFilterData
+from config.aoeb.e2e.kalman_filter_data import KalmanFilterData
 
 
 class KalmanFilter(BaseProcessingObj):

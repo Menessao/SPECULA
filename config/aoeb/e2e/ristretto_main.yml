@@ -1,4 +1,5 @@
-# Base SPECULA simulation of the Ristretto-like system. The calib_*.yml files of this folder are applied on top of it
+# Base SPECULA simulation of the Ristretto-like system, Kalman-filter version: VIS modulated pyramid at 500 Hz
+# (reference) fused with an unmodulated NIR pyramid at 2 kHz (its static offset is estimated as a bias). The calib_*.yml files of this folder are applied on top of it
 # (`specula ristretto_main.yml calib_xxx.yml overrides.yml`) by aoeb.generation, which overrides main.root_dir, the pyramid geometry,
 # the sensing wavelength (pyr.wavelengthInNm AND source_ngs.wavelengthInNm: they must be equal), the science wavelength, the DM data
 # objects (from paths.dm_tag), seeing, modes, ... Adapted from the example main yml; the changes are marked with FIX.
@@ -11,13 +12,13 @@ main:
   pixel_pitch:       0.03727272727         # [m] 8.2m / 220 pixels = 0.037272 m/pixel (Nyquist sampling of 10cm r0)
   total_time:        6.000                 # [s]
   time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
-  zenithAngleInDeg:  30.0                   # [deg] Zenith observation (0 means no airmass)
+  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
 
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          0.65                  # [arcsec]
+  constant:          0.88                  # [arcsec]
   outputs:           ['output']
 
 wind_speed:
@@ -128,13 +129,13 @@ cred_vis:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]               # Total detector size
-  dt:                0.0005                  # [s] Integration time
+  dt:                0.002                   # [s] Integration time: 500 Hz = 4 loop steps
   bandw:             400                     # [nm]
   photon_noise:      true
   readout_noise:     true
   excess_noise:      false
   readout_level:     0.5                     # [e-/pix/frame]
-  emccd_gain:        400
+  emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
   quantum_eff:       0.2                     # QE x transmission
   inputs:
     in_i:            'pyr_vis.out_i'
@@ -150,7 +151,7 @@ pyr_slopes_vis:
 
 pyr_modes_vis:
   class:             'Modalrec'
-  recmat_object:     'pyr3.0_48x48_1300modes_wvl900_rec'
+  recmat_object:     'pyr2.0_48x48_wvl900_bmc2k_vlt_1300modes_rec'
   inputs:
     in_slopes:       'pyr_slopes_vis.out_slopes'
   outputs:           ['out_modes']
@@ -164,7 +165,7 @@ pyr_nir:
   pup_dist:          60.                     # Separation between pupil centers in subaps.
   fov:               2.0                     # Requested field-of-view [arcsec]
   fov_errsup:        12
-  mod_amp:           3.0                     # Modulation radius (in lambda/D units)
+  mod_amp:           0.0                     # Unmodulated (its offset is estimated by the Kalman filter)
   output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
   wavelengthInNm:    1300                     # [nm] Pyramid wavelength (FIX: equal to source_ngs.wavelengthInNm)
   inputs:
@@ -180,7 +181,7 @@ cred_nir:
   readout_noise:     true
   excess_noise:      false
   readout_level:     0.5                     # [e-/pix/frame]
-  emccd_gain:        400
+  emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
   quantum_eff:       0.2                     # QE x transmission
   inputs:
     in_i:            'pyr_nir.out_i'
@@ -196,27 +197,64 @@ pyr_slopes_nir:
 
 pyr_modes_nir:
   class:             'Modalrec'
-  recmat_object:     'pyr3.0_48x48_1300modes_wvl1100_rec'
+  recmat_object:     'pyr0.0_48x48_wvl1300_bmc2k_vlt_1300modes_rec'   # TO CALIBRATE: unmodulated reconstructor
   inputs:
     in_slopes:       'pyr_slopes_nir.out_slopes'
   outputs:           ['out_modes']
 
-############################ Control ################################
-bootstrap:
-  class:              'ScheduleGenerator'
-  scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
-  modes_per_group:    [2,148,650,500] # Ncols
-  scheduled_times:    [0.01] # Nrows-1
+############################ Control: Kalman filter ################################
+# Modal turbulence estimation with one AR(2) model per mode, fusing the two pyramids.
+#
+# Timing (SPECULA): the WFSs see at step k the DM shape d_k computed at step k-1 ('dm.out_layer:-1').
+# The filter receives the raw closed-loop modal measurements and, as command input, d_k itself
+# ('kdelay.out_comm:-1'), which it keeps in its state (last 4 steps), so that:
+#   NIR, unmodulated, every step:          y_k = phi_k - d_k + b + n_k   (b: offset, estimated)
+#   VIS, modulated reference, 500 Hz:      y_k = mean over the 4 integrated steps of (phi - d) + n_k
+# Its command c_k is its prediction of phi 1.5 steps ahead. The 1.5-step plant is kdelay (pass-through
+# with delay 0.5) + the one-step DM delay: d_{k+1} = 0.5 c_k + 0.5 c_{k-1}. If the plant delay or a
+# frame rate changes, rebuild the KalmanFilterData accordingly (make_ristretto_kalman_data.py).
 
-filter:
-  class:                'IirFilter'          # FIX: the Integrator lines were overwritten by this class (duplicate key)
-  simul_params_ref:     'main'
-  delay:                0.25                 # Total temporal delay in time steps is this value +1
-  iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5'
+kalman:
+  class:             'KalmanFilter'
+  kalman_filter_data_object: 'kf_ar2_1300modes_vis_nir'   # built by make_ristretto_kalman_data.py
+  time_step:         0.0005                  # [s] AR(2) sampling; only matters if a step has no fresh input
   inputs:
-    delta_comm: 'pyr_modalrec.out_modes'
-    gain_mod: 'bootstrap.output'             # FIX: was bootstrap1.output (no such object)
-  outputs:  ['out_comm']
+    in_measurements_list: ['pyr_modes_vis.out_modes', 'pyr_modes_nir.out_modes']   # order of the data file
+    in_command:      'kdelay.out_comm:-1'    # DM command seen by the WFSs at this step
+  outputs:           ['out_projected_state', 'out_state', 'out_bias']
+
+# Plant: pure delay. Pass-through filter (gain 1, forgetting factor 0) with fractional delay 0.5:
+# total delay 1 + 0.5 = 1.5 steps (the 1 is the 'dm.out_layer:-1' in prop)
+kdelay:
+  class:             'Integrator'
+  simul_params_ref:  'main'
+  int_gain:          [1.0]
+  ff:                [0.0]
+  n_modes:           [1300]
+  delay:             0.5
+  inputs:
+    delta_comm:      'kalman.out_projected_state'
+  outputs:           ['out_comm']
+
+# Previous integrator controller, kept for comparison (to use it: restore this block and bootstrap,
+# set dm.inputs.in_command to 'filter.out_comm' and remove kalman and kdelay).
+# NB: its input referred to 'pyr_modalrec.out_modes', which does not exist in this file (use
+# 'pyr_modes_vis.out_modes'), and delay 0.25 gives a 1.25-step plant, not 1.5.
+# bootstrap:
+#   class:              'ScheduleGenerator'
+#   scheduled_values:   [[0.2,0.1,0.1,0.0],[0.25,0.2,0.15,0.1]] # Nrows x Ncols, times x gains
+#   modes_per_group:    [2,148,650,500] # Ncols
+#   scheduled_times:    [0.01] # Nrows-1
+#
+# filter:
+#   class:                'IirFilter'
+#   simul_params_ref:     'main'
+#   delay:                0.5
+#   iir_filter_data_object:  'iirfilter_1300modes_exc1_pow1.5'
+#   inputs:
+#     delta_comm: 'pyr_modes_vis.out_modes'
+#     gain_mod: 'bootstrap.output'
+#   outputs:  ['out_comm']
 
 # DM data objects: aoeb names them {paths.dm_tag}_ifunc, _m2c, _kl_inv
 dm:
@@ -227,7 +265,7 @@ dm:
   nmodes:            1800                    # Number of controlled modes
   height:            0                       # Ground-conjugated DM
   inputs:
-    in_command:      'filter.out_comm'
+    in_command:      'kdelay.out_comm'      # Kalman command after the plant delay
   outputs:           ['out_layer']
 
 
@@ -301,7 +339,7 @@ atmo_modes:
 # Data store for results
 data_store:
   class:             'DataStore'
-  store_dir:         '/raid1/mmenessini/resulkts/WFSW'      # Data result directory: 'store_dir'/TN/
+  store_dir:         '/raid1/mmenessini/results/WFSW'      # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
                   'sr_vis-coro_psf_vis.out_sr',
@@ -312,4 +350,6 @@ data_store:
                   'coro_psf_nir_std-coro_psf_nir.out_std_coronagraph_psf_profile',
                   'atmo_res-atmo_modes.out_value',
                   'dm_res-res_modes.out_modes',
+                  'kf_comm-kalman.out_projected_state',
+                  'kf_bias-kalman.out_bias',       # NIR offset w.r.t. the VIS reference
                   ]

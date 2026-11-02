@@ -20,7 +20,7 @@
 # cred_vis / cred_nir / recmat parameters, override the *_nn twins identically.
 
 main_override:
-  total_time:        1.0                     # [s] 2000 NIR frames (500 VIS): ~3% (~6%) on each variance
+  total_time:        5.0                     # [s] 2000 NIR frames (500 VIS): ~3% (~6%) on each variance
 
 remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir']
 
@@ -81,7 +81,7 @@ pyr_slopes_vis_nn:
 
 pyr_modes_vis_nn:
   class:             'Modalrec'
-  recmat_object:     'pyr3.0_48x48_1300modes_wvl900_rec'
+  recmat_object:     'pyr2.0_48x48_wvl900_bmc2k_vlt_1300modes_rec'
   inputs:
     in_slopes:       'pyr_slopes_vis_nn.out_slopes'
   outputs:           ['out_modes']
@@ -90,7 +90,7 @@ cred_nir_nn:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]
-  dt:                0.0005                  # [s] 2 kHz, as cred_nir
+  dt:                0.0005                   # [s] 2000 Hz, as cred_nir
   bandw:             400                     # [nm]
   photon_noise:      false
   readout_noise:     false
@@ -111,7 +111,7 @@ pyr_slopes_nir_nn:
 
 pyr_modes_nir_nn:
   class:             'Modalrec'
-  recmat_object:     'pyr0.0_48x48_1300modes_wvl1300_rec'   # as pyr_modes_nir
+  recmat_object:     'pyr0.0_48x48_wvl1300_bmc2k_vlt_1300modes_rec'
   inputs:
     in_slopes:       'pyr_slopes_nir_nn.out_slopes'
   outputs:           ['out_modes']
@@ -139,7 +139,9 @@ data_store_override:
                  'noise_nir-noise_nir.out_value',
                  'meas_vis-pyr_modes_vis.out_modes',       # noisy measurements
                  'meas_nir-pyr_modes_nir.out_modes',
-                 'sig_vis-pyr_modes_vis_nn.out_modes',     # noiseless: residual + aliasing + offset
+                 'sig_vis-pyr_modes_vis_nn.out_modes',     # noiseless: aliasing + offset
                  'sig_nir-pyr_modes_nir_nn.out_modes',
-                 'ol-ol_modes.out_modes',                  # turbulence (open loop), first N modes
-                 'res-res_modes.out_modes']                # true residual modes
+                 'nir_frames-cred_nir_nn.out_pixels',          # noiseless NIR frames (for aliasing / offset studies)
+                 'vis_frames-cred_vis_nn.out_pixels',          # noiseless VIS frames (for aliasing / offset studies)
+                #  'res-res_modes.out_modes',
+                 ]                # true residual modes

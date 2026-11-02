@@ -43,4 +43,4 @@ cred_vis_override:
 
 # Remove unnecessary objects during calibration
 remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', 'data_store', 'pyr_modes_vis', 'pyr_modes_nir',
-        'dm_modes','res_modes', 'bootstrap', 'filter','coro_psf_vis', 'coro_psf_nir'] 
+        'dm_modes','res_modes', 'kalman', 'kdelay' ,'coro_psf_vis', 'coro_psf_nir'] # 'bootstrap', 'filter',
