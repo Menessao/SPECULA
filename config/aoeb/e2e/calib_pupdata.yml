@@ -3,7 +3,7 @@
 pyr_pupdata:
   class: 'PyrPupdataCalibrator'
   thr1: 0.1
-  thr2: 0.25
+  thr2: 0.15
   display_debug: false
   output_tag:        'pyr_pupdata_40x40'
   overwrite: true

@@ -1,0 +1,22 @@
+main_override:
+  total_time:        1.0                     # [s] 10000 NIR frames (2500 VIS): ~1% (~2%) on each variance
+
+seeing_override:
+  constant: 0.0
+
+prop_override:
+  source_dict_ref:   ['source_vis', 'source_nir']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']       # Pupil  only
+  outputs:           ['out_source_vis_ef', 'out_source_nir_ef']
+
+data_store_override:
+  inputs:
+    input_list: ['meas_vis-pyr_modes_vis.out_modes',       # noise-only measurements
+                 'meas_nir-pyr_modes_nir.out_modes',
+                #  'nir_frames-cred_nir.out_pixels',          # noisy frames
+                #   'vis_frames-cred_vis.out_pixels',          # noisy frames
+                ]
+
+remove: ['kalman', 'kdelay', 'dm', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir','res_modes']
