@@ -22,7 +22,7 @@ from .noise import Detector, PupilGeometry, SlopeNoise, measure_slope_norm, slop
 from .reconstructors import read_rec
 
 DEFAULT_MODES_PER_SUBAP = {12: 50, 16: 150, 24: 300, 48: 1200}
-SCENARIOS, CONTROLLERS = ('standard', 'multistage'), ('int', 'leaky')      # (an IirControllers is also accepted)
+SCENARIOS, CONTROLLERS = ('standard', 'multistage'), ('int', 'leaky', 'wiener')      # (an IirControllers is also accepted)
 STEPS = dict(pupdata='ErrorBudgetGenerator.calibrate_pupdata (step 1)', slopes='calibrate_alias_sn_thrp (step 2)',
              avgframe='calibrate_alias_sn_thrp (step 2)', rec='compute_recs (step 4)', alias='compute_aliases (step 5)',
              im_pc='calibrate_im_pc (step 6)', vec='calibrate_im_pc_levels (step 6b: save_correction_vector)',
@@ -156,10 +156,12 @@ class ErrorBudgetMachine:
     def __init__(self, root_dir, diameter=8.2, L0=25.0, wind=12.0, detector=None,
                  pupilstop_tag='vlt_pupil_160pixels', dm_tag='bmc2k_vlt', modes_per_subap=None,
                  n_modes_ho=1200, kl_pad=8, slopes_from_intensity=False, tables_cache=64, wavelength_nm=None, asm=True,
-                 max_sensitivity=2.0, optimize_freq=True, optimize_modes=True, freq_min=100.0, freq_step=2 ** (1 / 3)):
+                 max_sensitivity=2.0, optimize_freq=True, optimize_modes=True, freq_min=100.0, freq_step=2 ** (1 / 3), wiener_order=2,
+                 temporal=None):
         self.paths = Paths(root_dir, pupilstop_tag, dm_tag)
         self.wavelength_nm = wavelength_nm
         self.D, self.L0, self.wind = diameter, L0, wind
+        self.temporal = temporal        # None: Conan spectra with the effective wind; or temporal.ZernikePSD (multi-layer frozen flow)
         self.detector = detector if detector is not None else Detector()
         self.modes_per_subap = dict(modes_per_subap or DEFAULT_MODES_PER_SUBAP)
         self.n_modes_ho, self.kl_pad = n_modes_ho, kl_pad
@@ -169,6 +171,7 @@ class ErrorBudgetMachine:
         self.optimize_freq, self.optimize_modes = optimize_freq, optimize_modes
         self.freq_min, self.freq_step = float(freq_min), float(freq_step)
         self._missing_modes = set()
+        self.wiener_order = int(wiener_order)    # controller='wiener': order of the per-mode Wiener POL filters (wiener.py)
         self._kl, self._cal, self._orders = None, {}, {}
         self._modes_cache, self._pupil_cache, self._recs, self._norms = None, None, OrderedDict(), {}
         self.skipped = []
@@ -324,15 +327,20 @@ class ErrorBudgetMachine:
                            lambda: read_rec(rpath) @ utils.read_fits(im_path)[:, :N], og_by_level=by_level, alias_seeing=seeing)
 
     # ---- loop tables
-    def _loop_tables(self, fs, latency, orders, alias_order, ff_grid, n_fold, iir=None):
+    def _loop_tables(self, fs, latency, orders, alias_order, ff_grid, n_fold, iir=None, wiener=False):
         key = (round(float(fs), 9), round(float(latency), 9), int(orders.max()), int(alias_order), tuple(ff_grid), n_fold,
-               float(self.wind), float(self.D), None if iir is None else (iir.key(len(orders)), len(orders)), self.max_sensitivity)
+               float(self.wind) if self.temporal is None else id(self.temporal), float(self.D), None if iir is None else (iir.key(len(orders)), len(orders)), self.max_sensitivity,
+               self.wiener_order if wiener else None)
         if key in self._tables:
             self._tables.move_to_end(key)
+        elif wiener:
+            from .wiener import WienerTables
+            self._tables[key] = WienerTables(fs, latency, self.temporal or self.wind, self.D, np.arange(1, orders.max() + 1), alias_order, self.wiener_order,
+                                             n_fold=n_fold, max_sensitivity=self.max_sensitivity)
         else:
-            self._tables[key] = (LoopTables(fs, latency, self.wind, self.D, np.arange(1, orders.max() + 1), alias_order=alias_order,
+            self._tables[key] = (LoopTables(fs, latency, self.temporal or self.wind, self.D, np.arange(1, orders.max() + 1), alias_order=alias_order,
                                             n_fold=n_fold, ff_grid=ff_grid, max_sensitivity=self.max_sensitivity) if iir is None else
-                                 IirTables(fs, latency, self.wind, self.D, orders, alias_order, iir, n_fold=n_fold,
+                                 IirTables(fs, latency, self.temporal or self.wind, self.D, orders, alias_order, iir, n_fold=n_fold,
                                            max_sensitivity=self.max_sensitivity))
             while len(self._tables) > self._tables_cache:
                 self._tables.popitem(last=False)
@@ -385,7 +393,9 @@ class ErrorBudgetMachine:
         """Budget of one configuration. flux: photons/s at the detector (before QE); scenario 'standard' (N modes, aliasing
         from the phase above N) or 'multistage' (aliasing and optical gain from a run with n_modes_ho modes corrected);
         latency_s: end of the exposure -> command applied, any real value (the frame of window + hold is in the model);
-        controller 'int', 'leaky' or an IirControllers (per-mode IIR filters, only their global gain is optimised); og: optical gain override; crosstalk: leak of the residual of the other modes;
+        controller 'int', 'leaky', 'wiener' (per-mode optimal IIR filters on pseudo-open-loop measurements, order machine.wiener_order;
+        result.filters = [(b, a)], wiener.to_iir_filter converts them) or an IirControllers (per-mode IIR filters, only their global
+        gain is optimised); og: optical gain override; crosstalk: leak of the residual of the other modes;
         extra: scalar variances [nm^2] added; chromatic: chromatic.ChromaticModel (needs wavelength_nm; the multiplicative
         term, when enabled, makes the gains optimal for the science residual). The products are those of the seeing rounded
         to 0.1 arcsec; the aliasing is rescaled to the requested seeing."""
@@ -410,7 +420,7 @@ class ErrorBudgetMachine:
         if chromatic is not None and wl is None:
             raise ValueError('chromatic terms need the sensing wavelength: give wavelength_nm')
         eta = chromatic.eta(wl) if mult else None
-        tables = self._loop_tables(fs, latency_s * fs, orders, alias_order, ff_grid, n_fold, iir)
+        tables = self._loop_tables(fs, latency_s * fs, orders, alias_order, ff_grid, n_fold, iir, wiener=ctl == 'wiener')
         photon, readout = cal.noise.modal_variance_parts(self.detector.n_det(flux, fs), self.detector)
         noise_cmd = photon + readout
         alias_cmd = cal.alias_rms ** 2 * (seeing / cal.alias_seeing) ** (5 / 3)            # Kolmogorov: alias variance ~ r0^(-5/3)
@@ -428,6 +438,7 @@ class ErrorBudgetMachine:
                                          freqInHz=fs, photPerMs=flux / 1e3, wavelength_nm=np.nan if wl is None else float(wl),
                                          crosstalk=bool(crosstalk)), og_vec, rms2, photon / np.maximum(noise_cmd, 1e-300),
                                self._fitting(r0, N), extra, chromatic, eta, it + 1)
+            res.filters = getattr(opt, 'filters', None)                 # controller='wiener': per-mode (b, a) of u = F POL
             if not (fixed_point and og is None):
                 return res
             new = float(np.sqrt(np.sum(res.residual)))                    # rms of the controlled modes = the PC level

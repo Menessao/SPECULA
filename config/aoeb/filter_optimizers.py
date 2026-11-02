@@ -18,7 +18,10 @@ DEFAULT_FF_GRID = (1.0, 0.9995, 0.999, 0.998, 0.995, 0.99, 0.98, 0.96, 0.92, 0.8
 
 
 def unit_psd(f, n, wind, D):
-    """One-sided unit-variance temporal PSD of radial order n (Conan 1995); n may be an array (broadcast against f)."""
+    """One-sided unit-variance temporal PSD of radial order n (Conan 1995); n may be an array (broadcast against f). wind: speed [m/s],
+    or a temporal model with unit_psd(f, n) (temporal.ZernikePSD)."""
+    if hasattr(wind, 'unit_psd'):
+        return wind.unit_psd(f, n)
     f, n = np.asarray(f, float), np.asarray(n, float)
     fc = 0.3 * (n + 1) * wind / D
     tilt = n == 1
@@ -33,6 +36,8 @@ def folded_psd(f, fs, n, wind, D, n_fold=3):
 
 def psd_below(n, wind, D, fs, f_min, n_fold=3):
     """Integral of the folded unit PSD over [0, f_min] (analytic); n may be an array."""
+    if hasattr(wind, 'below'):
+        return wind.below(n, fs, f_min, n_fold)
     n = np.asarray(n, float)
     fc = 0.3 * (n + 1) * wind / D
     own = np.where(n == 1, 3.0 * fc ** (2.0 / 3.0) * f_min ** (1.0 / 3.0) / (45.0 * fc / 14.0), f_min / (17.0 * fc / 14.0))

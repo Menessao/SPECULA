@@ -123,6 +123,22 @@ AO design margin); `null` lets them go up to 98 % of the stability limit as befo
 and fragile against optical-gain errors. Note that a small fractional latency raises the stability limit of a pure integrator (the exposure
 averages the old and the new command, which damps the Nyquist resonance), so a lower latency does not always reduce the lag error.
 
+**Wiener controllers.** `controller='wiener'` designs, per mode, the optimal order-`wiener_order` IIR filter u = F(z)·POL acting on
+pseudo-open-loop measurements (`aoeb/wiener.py`, the user's design code: Wiener-Hopf bound, Steiglitz-McBride fit, refinement on the exact
+cost with an exact gradient and a stable denominator), from the mode's temporal spectrum, noise and aliasing, and evaluates it with aoeb's
+residual integrals (identical to the design cost). It assumes the optical gain known (exact POL). `result.filters` holds the per-mode
+(b, a) (powers of z⁻¹); `wiener.to_iir_filter(b, a, latency_frames, og)` gives the equivalent error-based controller in the SPECULA
+`IirFilterData` convention. Designs are cached per radial order and noise / aliasing ratios (0.05 dex), and each new design starts from
+the nearest one of the same radial order (3–6x faster): one budget takes from seconds to about a minute; prefer `optimize_freq=False`
+(or a narrow frame-rate range) in scans. A warning is given when a filter's peak rejection exceeds `loop.max_sensitivity` (the design
+itself has no robustness constraint). The integrator / leaky optimisation is unchanged (`controller='int'` / `'leaky'`).
+
+**Temporal spectra.** By default the temporal PSD of each radial order is Conan's (1995) asymptotic model with one effective wind;
+`atmosphere.temporal: zernike` (or `ErrorBudgetMachine(temporal=ZernikePSD(D, L0=L0, layers=[(cn2, speed), ...]))`, `aoeb/temporal.py`)
+uses the exact multi-layer frozen-flow von Kármán spectra of the radial orders instead, for every controller. Against TipTop's frozen-flow
+servo-lag it agrees to 2–4 % at all orders, where Conan is up to 10 % low beyond ~1000 modes; building the spectra takes about a minute for
+50 radial orders (once per machine).
+
 **Fitting.** `ErrorBudgetMachine(..., asm=True)` (default; `options.asm` in a configuration file) uses the LBT-ASM law 0.2778 N^−0.9
 (D/r0)^5/3 rad²; `asm=False` uses TipTop's fitting: the von Kármán PSD outside the square of corrected frequencies |kx|, |ky| ≤ k_c,
 k_c = √(N/π)/D (a DM with N actuators in the pupil), for the variance and for the PSD / PSF (the azimuthal average of the square mask).

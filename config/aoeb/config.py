@@ -127,7 +127,8 @@ class Config:
                                   pupilstop_tag=p['pupilstop_tag'], dm_tag=p['dm_tag'], modes_per_subap=s['modes_per_subap'],
                                   n_modes_ho=s['n_modes_ho'], kl_pad=o['kl_pad'], slopes_from_intensity=s['slopes_from_intensity'],
                                   asm=o['asm'], max_sensitivity=self.d['loop']['max_sensitivity'], optimize_freq=o['optimize_freq'],
-                                  optimize_modes=o['optimize_modes'], freq_min=o['freq_min'], **kw)
+                                  optimize_modes=o['optimize_modes'], freq_min=o['freq_min'],
+                                  wiener_order=self.d['loop']['wiener_order'], temporal=self.temporal(), **kw)
 
     def iir(self):
         """IirControllers of loop.iir_file (a file saved by SPECULA's IirFilterData); loop.iir_optimize_gain: optimise the global gain."""
@@ -136,6 +137,14 @@ class Config:
         if not lp['iir_file']:
             raise ValueError("controller 'iir' needs loop.iir_file")
         return IirControllers.from_fits(lp['iir_file'], optimize_gain=bool(lp['iir_optimize_gain']))
+
+    def temporal(self):
+        """atmosphere.temporal: 'conan' (None: one effective wind) or 'zernike' (multi-layer frozen flow, temporal.ZernikePSD)."""
+        a, t = self.d['atmosphere'], self.d['telescope']
+        if a['temporal'] == 'conan':
+            return None
+        from .temporal import ZernikePSD
+        return ZernikePSD(t['diameter'], L0=t['L0'], layers=list(zip(a['cn2'], a['wind_speed'])))
 
     def psf_engine(self, machine=None, pad=4):
         from .psf import PsfEngine
