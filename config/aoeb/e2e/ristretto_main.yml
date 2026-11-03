@@ -107,7 +107,7 @@ prop:
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer:-1']       # Pupil + DM correction
-  outputs:           ['out_source_vis_ef', 'out_source_nir_ef', 'out_science_vis_ef', 'out_science_nir_ef']     # FIX: was out_cource_science_ef
+  outputs:           ['out_source_vis_ef', 'out_source_nir_ef', 'out_science_vis_ef', 'out_science_nir_ef']
 
 
 

@@ -20,9 +20,9 @@
 # cred_vis / cred_nir / recmat parameters, override the *_nn twins identically.
 
 main_override:
-  total_time:        5.0
+  total_time:        6.0
 
-remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir']
+remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes']
 
 # ------------------------------------------------------------------------------------------------
 # DM driven by an open-loop modal analysis of the turbulence (first N modes perfectly corrected)
@@ -33,7 +33,7 @@ prop_ol:
   source_dict_ref:   ['source_vis']
   inputs:
     atmo_layer_list: ['atmo.layer_list']
-    common_layer_list: ['pupilstop']        # turbulence only, no DM
+    common_layer_list: ['pupilstop']
   outputs:           ['out_source_vis_ef']
 
 atmo_modes:
@@ -45,9 +45,11 @@ atmo_modes:
   outputs:           ['out_modes']
 
 prop_override:
+  source_dict_ref:   ['source_vis', 'source_nir']
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer']
+  outputs:           ['out_source_vis_ef', 'out_source_nir_ef']
 
 dm_override:
   inputs:
@@ -68,9 +70,10 @@ cred_nir_override:                   # [nm]
 
 
 data_store_override:
+  create_tn: false
   inputs:
-    input_list: ['meas_vis-pyr_modes_vis.out_modes',       # noisy measurements
+    input_list: ['meas_vis-pyr_modes_vis.out_modes',
                  'meas_nir-pyr_modes_nir.out_modes',
                  'nir_frames-cred_nir.out_pixels', 
                  'vis_frames-cred_vis.out_pixels',    
-                 ]                # true residual modes
+                 ] 
