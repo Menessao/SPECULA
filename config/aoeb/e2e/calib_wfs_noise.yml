@@ -15,8 +15,8 @@ data_store_override:
   inputs:
     input_list: ['meas_vis-pyr_modes_vis.out_modes',       # noise-only measurements
                  'meas_nir-pyr_modes_nir.out_modes',
-                #  'nir_frames-cred_nir.out_pixels',          # noisy frames
-                #   'vis_frames-cred_vis.out_pixels',          # noisy frames
+                 'nir_frames-cred_nir.out_pixels',          # noisy frames
+                  'vis_frames-cred_vis.out_pixels',          # noisy frames
                 ]
 
 remove: ['kalman', 'kdelay', 'dm', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir','res_modes']
