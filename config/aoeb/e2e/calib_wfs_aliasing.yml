@@ -58,6 +58,7 @@ dm_override:
 # ------------------------------------------------------------------------------------------------
 # Noiseless twin cameras (same settings, photon and readout noise off) and their reconstructions
 # ------------------------------------------------------------------------------------------------
+
 cred_vis_override:
   photon_noise:      false
   readout_noise:     false

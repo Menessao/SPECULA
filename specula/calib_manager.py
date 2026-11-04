@@ -55,6 +55,8 @@ class CalibManager():
             'm2c': 'm2c/',
             'M2C': 'm2c/',
             'filter': 'filter/',
+            'KalmanFilter': 'filter/',
+            'kalman_filter_data': 'filter/',
             'kernel': 'kernels/',
             'sh': 'kernels/',
             'SH': 'kernels/',

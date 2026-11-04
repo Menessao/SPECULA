@@ -135,7 +135,7 @@ cred_vis:
   readout_noise:     true
   excess_noise:      false
   readout_level:     0.5                     # [e-/pix/frame]
-  emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
+  emccd_gain:        400
   quantum_eff:       0.2                     # QE x transmission
   inputs:
     in_i:            'pyr_vis.out_i'
@@ -145,6 +145,7 @@ pyr_slopes_vis:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_48x48'
   # sn_object:            'pyr3.0_48x48_sn'
+  clip_negative:           false
   inputs:
     in_pixels:        'cred_vis.out_pixels'
   outputs:           ['out_slopes']
@@ -181,7 +182,7 @@ cred_nir:
   readout_noise:     true
   excess_noise:      false
   readout_level:     0.5                     # [e-/pix/frame]
-  emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
+  emccd_gain:        400
   quantum_eff:       0.2                     # QE x transmission
   inputs:
     in_i:            'pyr_nir.out_i'
@@ -191,16 +192,72 @@ pyr_slopes_nir:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_48x48'
   # sn_object:            'pyr3.0_48x48_sn'
+  clip_negative:           false
   inputs:
     in_pixels:        'cred_nir.out_pixels'
   outputs:           ['out_slopes']
 
 pyr_modes_nir:
   class:             'Modalrec'
-  recmat_object:     'pyr0.0_48x48_wvl1300_bmc2k_vlt_1300modes_rec'   # TO CALIBRATE: unmodulated reconstructor
+  recmat_object:     'pyr0.0_48x48_wvl1300_bmc2k_vlt_1300modes_rec'
   inputs:
     in_slopes:       'pyr_slopes_nir.out_slopes'
   outputs:           ['out_modes']
+
+
+############################ Optical Gain #########################################
+# dithering:
+#   class:             'WaveGenerator'
+#   wave_type:         'SIN'
+#   amp:               [5.0]
+#   freq:              [85.0]
+#   outputs: ['output']
+
+# dithered_mode:
+#   class: 'BaseInserter'
+#   indices: [[0],[100]]
+#   output_size: 1800
+#   inputs:
+#     in_value: 'dithering.output'
+#   outputs: ['out_value']
+
+# dithered_command:
+#   class:             'BaseOperation'
+#   add:               true
+#   inputs:
+#     in_value1:       'kdelay.out_comm'
+#     in_value2:       'dithered_mode.out_value'
+#   outputs: ['out_value']
+
+# cmd_demodulator:
+#   class:                'Demodulator'
+#   simul_params_ref:     'main'
+#   mode_numbers:         [100]
+#   carrier_frequencies:  [85.0]
+#   demod_dt:             0.2
+#   inputs:
+#       in_data:         'dithered_command.out_value'
+#   outputs:             ['output']
+
+# meas_demodulator:
+#   class:             'Demodulator'
+#   simul_params_ref:  'main'
+#   mode_numbers:      [100]
+#   carrier_frequencies: [85.0]
+#   demod_dt:           0.2
+#   inputs:
+#       in_data:       'pyr_modes_nir.out_modes'
+#   outputs: ['output']
+
+# optical_gain_estimator:
+#   class:             'OpticalGainEstimator'
+#   gain:              0.3
+#   initial_optical_gain: 1.0
+#   inputs:
+#     in_demod_delta_command: 'cmd_demodulator.output'
+#     in_demod_command: 'meas_demodulator.output'
+#   outputs: ['output','optical_gain']
+
 
 ############################ Control: Kalman filter ################################
 # Modal turbulence estimation with one AR(2) model per mode, fusing the two pyramids.
@@ -227,7 +284,6 @@ kalman:
 # total delay 1 + 0.5 = 1.5 steps (the 1 is the 'dm.out_layer:-1' in prop)
 kdelay:
   class:             'Integrator'
-  simul_params_ref:  'main'
   int_gain:          [1.0]
   ff:                [0.0]
   n_modes:           [1300]

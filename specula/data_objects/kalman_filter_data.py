@@ -1,23 +1,27 @@
 import numpy as np
+from astropy.io import fits
+
+from specula import cpuArray
+from specula.base_data_obj import BaseDataObj
 
 
-class KalmanFilterData:
+class KalmanFilterData(BaseDataObj):
     """
-    Container for the matrices of a :class:`KalmanFilter`, with FITS save/restore,
-    so that a filter can be configured from a YAML file with
-    ``kalman_filter_data_object: '<tag>'``.
+    Matrices of a :class:`~specula.processing_objects.kalman_filter.KalmanFilter`,
+    loaded in YAML with ``kalman_filter_data_object: '<tag>'`` (stored in the
+    'filter' calibration folder).
 
     Fields have the same names, shapes and meaning as the KalmanFilter arguments
     (dense or per-mode "batched" shapes). The per-sensor fields
     (``observation_matrix``, ``measurement_noise_cov``, ``bias_process_noise_cov``,
     ``initial_bias``, ``initial_bias_covariance``) are lists with one item per
-    sensor, in the order of the ``in_measurements_list`` input; the bias items
-    may be None.
+    sensor, in the order of the ``in_measurements_list`` input; bias items may
+    be None (unbiased sensor), and so may the whole bias lists.
 
-    FITS layout: the primary header holds ``N_SENS``; each non-None field is an
-    image extension (``A``, ``Q``, ``B``, ``X0``, ``P0``, ``PROJ``; per-sensor:
-    ``H_<i>``, ``R_<i>``, ``QB_<i>``, ``BX0_<i>``, ``BP0_<i>``). Scalars are
-    stored as 1-element arrays flagged with ``SCALAR = T``.
+    FITS layout (VERSION 1): the primary header holds ``N_SENS``; each non-None
+    field is an image extension (``A``, ``Q``, ``B``, ``X0``, ``P0``, ``PROJ``;
+    per sensor: ``H_<i>``, ``R_<i>``, ``QB_<i>``, ``BX0_<i>``, ``BP0_<i>``).
+    Scalars are stored as 1-element arrays flagged with ``SCALAR = T``.
     """
 
     _single = {'state_transition_matrix': 'A',
@@ -43,38 +47,48 @@ class KalmanFilterData:
                  bias_process_noise_cov=None,
                  initial_bias=None,
                  initial_bias_covariance=None,
-                 projection_matrix=None):
+                 projection_matrix=None,
+                 target_device_idx: int = None,
+                 precision: int = None):
+        super().__init__(target_device_idx=target_device_idx, precision=precision)
+        values = dict(state_transition_matrix=state_transition_matrix,
+                      process_noise_cov=process_noise_cov,
+                      command_matrix=command_matrix,
+                      initial_state=initial_state,
+                      initial_covariance=initial_covariance,
+                      projection_matrix=projection_matrix,
+                      observation_matrix=observation_matrix,
+                      measurement_noise_cov=measurement_noise_cov,
+                      bias_process_noise_cov=bias_process_noise_cov,
+                      initial_bias=initial_bias,
+                      initial_bias_covariance=initial_bias_covariance)
+        for name in ('state_transition_matrix', 'observation_matrix',
+                     'process_noise_cov', 'measurement_noise_cov'):
+            if values[name] is None:
+                raise ValueError(f'{name} is required')
 
-        as_np = lambda v: None if v is None else np.asarray(v, dtype=float)
-        as_list = lambda v: list(v) if isinstance(v, (list, tuple)) else [v]
+        for name in self._single:
+            setattr(self, name, self._to_device(values[name]))
 
-        self.state_transition_matrix = as_np(state_transition_matrix)
-        self.process_noise_cov = as_np(process_noise_cov)
-        self.command_matrix = as_np(command_matrix)
-        self.initial_state = as_np(initial_state)
-        self.initial_covariance = as_np(initial_covariance)
-        self.projection_matrix = as_np(projection_matrix)
-
-        self.observation_matrix = [as_np(h) for h in as_list(observation_matrix)]
-        self.measurement_noise_cov = [as_np(r) for r in as_list(measurement_noise_cov)]
-        self.n_sensors = len(self.observation_matrix)
-        if len(self.measurement_noise_cov) != self.n_sensors:
-            raise ValueError(f'Got {self.n_sensors} observation matrices but '
-                             f'{len(self.measurement_noise_cov)} measurement noise covariances')
-
-        def per_sensor(v, name):
-            if v is None:
-                return None
-            items = as_list(v)
+        self.n_sensors = len(self._as_list(observation_matrix))
+        for name in self._per_sensor:
+            value = values[name]
+            if value is None:
+                setattr(self, name, None)
+                continue
+            items = self._as_list(value)
             if len(items) != self.n_sensors:
                 raise ValueError(f'{name} has {len(items)} items, but there are {self.n_sensors} sensors')
-            return [as_np(x) for x in items]
+            setattr(self, name, [self._to_device(v) for v in items])
 
-        self.bias_process_noise_cov = per_sensor(bias_process_noise_cov, 'bias_process_noise_cov')
-        self.initial_bias = per_sensor(initial_bias, 'initial_bias')
-        self.initial_bias_covariance = per_sensor(initial_bias_covariance, 'initial_bias_covariance')
+    @staticmethod
+    def _as_list(value):
+        """Lists/tuples hold one item per sensor; anything else is a single sensor."""
+        return list(value) if isinstance(value, (list, tuple)) else [value]
 
-    # ------------------------------------------------------------------
+    def _to_device(self, value):
+        return None if value is None else self.to_xp(cpuArray(value), dtype=self.dtype)
+
     def kalman_kwargs(self):
         """Keyword arguments for KalmanFilter (all matrix fields)."""
         return {name: getattr(self, name) for name in list(self._single) + list(self._per_sensor)}
@@ -84,7 +98,7 @@ class KalmanFilterData:
     # ------------------------------------------------------------------
     @classmethod
     def from_ar2(cls, a1, a2, driving_noise_var, measurement_noise_var, delay=1.5,
-                 initial_covariance='stationary'):
+                 initial_covariance='stationary', target_device_idx=None, precision=None):
         """
         Per-mode (batched) Kalman model for modal turbulence following, for each
         mode j, the AR(2) process
@@ -155,13 +169,14 @@ class KalmanFilterData:
 
         return cls(state_transition_matrix=A, observation_matrix=H, process_noise_cov=Q,
                    measurement_noise_cov=R, initial_covariance=P0,
-                   projection_matrix=prediction_projection(A, delay))
+                   projection_matrix=prediction_projection(A, delay),
+                   target_device_idx=target_device_idx, precision=precision)
 
     @classmethod
     def from_ar2_closed_loop(cls, a1, a2, driving_noise_var, measurement_noise_var,
                              integration_steps=1, measurement_delay=0, delay=1.5,
                              bias_process_noise_cov=None, initial_bias=None,
-                             initial_bias_covariance=None):
+                             initial_bias_covariance=None, target_device_idx=None, precision=None):
         """
         Per-mode AR(2) model fed directly with the closed-loop modal measurements
         and the DM command, for sensors that may integrate over several loop
@@ -274,54 +289,70 @@ class KalmanFilterData:
         return cls(state_transition_matrix=A, observation_matrix=H, process_noise_cov=Q,
                    measurement_noise_cov=R, command_matrix=B, initial_covariance=P0,
                    bias_process_noise_cov=bias_process_noise_cov, initial_bias=initial_bias,
-                   initial_bias_covariance=initial_bias_covariance, projection_matrix=C)
+                   initial_bias_covariance=initial_bias_covariance, projection_matrix=C,
+                   target_device_idx=target_device_idx, precision=precision)
 
     # ------------------------------------------------------------------
-    # FITS I/O
+    # FITS I/O and BaseDataObj interface
     # ------------------------------------------------------------------
     def save(self, filename, overwrite=True):
-        from astropy.io import fits
+        hdr = fits.Header()
+        hdr['VERSION'] = 1
+        hdr['N_SENS'] = self.n_sensors
+        hdul = fits.HDUList([fits.PrimaryHDU(header=hdr)])
 
-        def hdu(value, name):
-            value = np.asarray(value, dtype=float)
-            h = fits.ImageHDU(np.atleast_1d(value), name=name)
-            h.header['SCALAR'] = value.ndim == 0
-            return h
+        def append(value, name):
+            value = cpuArray(value)
+            hdu = fits.ImageHDU(data=np.atleast_1d(value), name=name)
+            hdu.header['SCALAR'] = value.ndim == 0
+            hdul.append(hdu)
 
-        primary = fits.PrimaryHDU()
-        primary.header['OBJ_TYPE'] = 'KalmanFilterData'
-        primary.header['N_SENS'] = self.n_sensors
-        hdus = [primary]
-        for attr, ext in self._single.items():
-            value = getattr(self, attr)
-            if value is not None:
-                hdus.append(hdu(value, ext))
-        for attr, ext in self._per_sensor.items():
-            items = getattr(self, attr)
-            for i, value in enumerate(items or []):
+        for name, ext in self._single.items():
+            if getattr(self, name) is not None:
+                append(getattr(self, name), ext)
+        for name, ext in self._per_sensor.items():
+            for i, value in enumerate(getattr(self, name) or []):
                 if value is not None:
-                    hdus.append(hdu(value, f'{ext}_{i}'))
-        fits.HDUList(hdus).writeto(filename, overwrite=overwrite)
+                    append(value, f'{ext}_{i}')
+        hdul.writeto(filename, overwrite=overwrite)
+        hdul.close()  # Force close for Windows
 
-    @classmethod
-    def restore(cls, filename, target_device_idx=None, **kwargs):
-        """Load from FITS. Arrays stay on the CPU (the KalmanFilter moves them)."""
-        from astropy.io import fits
-
+    @staticmethod
+    def restore(filename, target_device_idx=None):
+        # pylint: disable=no-member # members of HDUList[i] are created dynamically by pyfits
         with fits.open(filename) as hdul:
-            n_sensors = int(hdul[0].header['N_SENS'])
+            hdr = hdul[0].header
+            version = hdr['VERSION']
+            if version != 1:
+                raise ValueError(f"Error: unknown version {version} in file {filename}")
+            n_sensors = int(hdr['N_SENS'])
             data = {}
-            for h in hdul[1:]:
-                value = np.array(h.data, dtype=float)
-                if h.header.get('SCALAR', False):
-                    value = value.reshape(())
-                data[h.name] = value
+            for hdu in hdul[1:]:
+                value = np.array(hdu.data)
+                data[hdu.name] = value.reshape(()) if hdu.header.get('SCALAR', False) else value
 
-        fields = {attr: data.get(ext) for attr, ext in cls._single.items()}
-        for attr, ext in cls._per_sensor.items():
+        fields = {name: data.get(ext) for name, ext in KalmanFilterData._single.items()}
+        for name, ext in KalmanFilterData._per_sensor.items():
             items = [data.get(f'{ext}_{i}') for i in range(n_sensors)]
-            fields[attr] = items if any(v is not None for v in items) else None
-        return cls(**fields)
+            fields[name] = items if any(v is not None for v in items) else None
+        return KalmanFilterData(**fields, target_device_idx=target_device_idx)
+
+    def get_fits_header(self):
+        # TODO
+        raise NotImplementedError()
+
+    @staticmethod
+    def from_header(hdr):
+        # TODO
+        raise NotImplementedError()
+
+    def get_value(self):
+        # TODO
+        raise NotImplementedError()
+
+    def set_value(self, v):
+        # TODO
+        raise NotImplementedError()
 
 
 # ----------------------------------------------------------------------

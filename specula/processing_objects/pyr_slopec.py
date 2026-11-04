@@ -27,6 +27,7 @@ class PyrSlopec(Slopec):
                  shlike: bool=False,
                  norm_factor: float=None,
                  thr_value: float=0,
+                 clip_negative: bool = True,
                  slopes_from_intensity: bool=False,
                  target_device_idx: int=None,
                  precision: int=None,
@@ -48,6 +49,7 @@ class PyrSlopec(Slopec):
         self.shlike = shlike
         self.norm_factor = norm_factor
         self.threshold = thr_value
+        self.clip_negative = clip_negative
         self.slopes_from_intensity = slopes_from_intensity
         if self.slopes_from_intensity:
             self.pupdata.set_slopes_from_intensity(slopes_from_intensity)   # TODO we should not modify an external object,
@@ -98,8 +100,8 @@ class PyrSlopec(Slopec):
     def trigger_code(self):
 
         self.flat_pixels -= self.threshold
-
-        clamp_generic_less(0,0,self.flat_pixels, xp=self.xp)
+        if self.clip_negative:
+            clamp_generic_less(0,0,self.flat_pixels, xp=self.xp)
         A = self.flat_pixels[self.pup_idx0].astype(self.xp.float32)
         B = self.flat_pixels[self.pup_idx1].astype(self.xp.float32)
         C = self.flat_pixels[self.pup_idx2].astype(self.xp.float32)
