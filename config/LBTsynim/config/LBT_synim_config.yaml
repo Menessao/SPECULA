@@ -37,7 +37,7 @@ paths:
 
   # Run products (MisReg/IntMat/RecMat, diagnostic plots, temp overrides,
   # correction vectors) -- always relative to root_dir.
-  output_dir: '.output'
+  output_dir: 'output'
 
 # Nominal (binning=1) optics constants. telescope_diameter is shared by
 # both sides; pup_diam/pup_dist/npix are the pyramid/CCD values at bin=1
@@ -60,10 +60,10 @@ systems:
   LUCIsx:
     side: 'sx'
     kl_version: 32
-    flip: true
+    flip: false
     xsign: -1
     ysign: 1
-    misreg_guess: {rotation: 0.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
+    misreg_guess: {rotation: -10.0, shift_x: 0.0, shift_y: 0.0, magnification: 1.0}
   LBTIdx:
     side: 'dx'
     kl_version: 30
@@ -78,6 +78,7 @@ systems:
     xsign: -1
     ysign: 1
     misreg_guess: {rotation: -147.94, shift_x: -0.53, shift_y: -0.79, magnification: 0.995}
+    # misreg_guess: {rotation: -147.94, shift_x: -0.53, shift_y: -0.79, magnification: 0.995}
 
 
 registration:

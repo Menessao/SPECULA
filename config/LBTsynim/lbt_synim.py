@@ -703,8 +703,8 @@ class LBTSynIM:
             fig.colorbar(im, ax=ax, shrink=0.6)
         fig.suptitle(title)
         fig.tight_layout()
-        if out_name:
-            fig.savefig(self.output_dir / out_name, dpi=120)
+        # if out_name:
+        #     fig.savefig(self.output_dir / out_name, dpi=120)
         return fig
 
     # ------------------------------------------------------------------
@@ -1596,8 +1596,7 @@ class LBTSynIM:
         Both imats are in the real system's ("hardware") convention, as
         measured IMs and `compute_interaction_matrix` outputs both are.
 
-        Returns the matplotlib Figure (also saved as
-        ``RegCheck_<system>_mode<mode_idx>.png``). The third panel is
+        Returns the matplotlib Figure. The third panel is
         each map normalized by its own STD before differencing.
         """
         ref = self._resolve_ref_imat(ref_imat)

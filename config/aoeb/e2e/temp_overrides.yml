@@ -1,0 +1,20 @@
+main_override:
+  time_step: 0.0005
+atmo_modes_override:
+  nmodes: 54
+pyr_vis_override:
+  pup_diam: 48
+  pup_dist: 60.0
+  mod_amp: 0.0
+cred_vis_override:
+  dt: 0.0005
+pyr_slopes_vis_override:
+  pupdata_object: pyr_pupdata_48x48
+pyr_nir_override:
+  pup_diam: 48
+  pup_dist: 60.0
+  mod_amp: 0.0
+cred_nir_override:
+  dt: 0.0005
+pyr_slopes_nir_override:
+  pupdata_object: pyr_pupdata_48x48
