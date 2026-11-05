@@ -23,7 +23,8 @@ Per sensing wavelength: <base> = pyr{r}_{n}x{n}[_wvl{lambda_nm}]  (suffix only i
 
 Every product carries its sensing wavelength in the primary header, WVL_NM. A product that was not calibrated at its wavelength but
 derived from another one (reconstructors made by the budget machine from the scaled IM of the nearest calibrated wavelength) also
-carries SRC_WVL, the wavelength of the products it comes from (A37 in ASSUMPTIONS.md).
+carries SRC_WVL, the wavelength of the products it comes from (A37 in ASSUMPTIONS.md). IMs and reconstructors carry DM_TAG, the DM whose modal
+basis they are in: the budget machine refuses any other (scripts/stamp_dm_tag.py tags older files).
 """
 import glob
 import re
@@ -32,6 +33,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 WVL_KEY, SRC_KEY = 'WVL_NM', 'SRC_WVL'          # FITS keywords: sensing wavelength of a product, wavelength it was derived from
+DM_KEY = 'DM_TAG'                                # FITS keyword of the IMs and reconstructors: the DM (modal basis) they were made with
 
 
 def snap_seeing(seeing):

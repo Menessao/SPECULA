@@ -17,7 +17,7 @@ import pandas as pd
 
 from . import utils
 from .filter_optimizers import DEFAULT_FF_GRID, IirControllers, IirTables, LoopTables
-from .naming import Paths, nearest_wavelength, snap_seeing
+from .naming import DM_KEY, Paths, nearest_wavelength, snap_seeing
 from .noise import Detector, PupilGeometry, SlopeNoise, measure_slope_norm, slope_noise_coefficients, slope_noise_cov
 from .reconstructors import compute_reconstructor, read_rec, save_rec
 
@@ -174,6 +174,7 @@ class ErrorBudgetMachine:
         self._missing_modes = set()
         self.wiener_order = int(wiener_order)    # controller='wiener': order of the per-mode Wiener POL filters (wiener.py)
         self._kl, self._cal, self._calw, self._orders, self._derived = None, {}, {}, {}, set()
+        self._basis_ok = set()
         self._modes_cache, self._pupil_cache, self._recs, self._norms = None, None, OrderedDict(), {}
         self.skipped = []
         self._tables, self._tables_cache = OrderedDict(), tables_cache
@@ -345,9 +346,22 @@ class ErrorBudgetMachine:
             self._norms[key] = n_norm
         return _replace(geom, n_norm=self._norms[key])
 
+    def _checked(self, path):
+        """The path of an IM or reconstructor, after checking it is in the modal basis of this machine (header DM_TAG): anything else
+        would silently mix two bases, since the modal variances and the mode shapes come from dm_tag."""
+        if path not in self._basis_ok:
+            tag = utils.header_value(path, DM_KEY)
+            if tag != self.paths.dm_tag:
+                found = f'DM {tag}' if tag else 'no DM_TAG in its header, so its DM is unknown'
+                raise ValueError(f'{op.basename(path)}: {found}, but this machine has dm_tag = {self.paths.dm_tag} (wrong modal basis). Use the '
+                                 'matching dm_tag or regenerate the product; a file whose DM is known but not recorded can be tagged with '
+                                 'aoeb/scripts/stamp_dm_tag.py')
+            self._basis_ok.add(path)
+        return path
+
     def _read_rec(self, path):
         if path not in self._recs:
-            self._recs[path] = read_rec(_need(path, 'rec'))
+            self._recs[path] = read_rec(self._checked(_need(path, 'rec')))
             while len(self._recs) > 2:                                 # ~35 MB each at 1200 modes
                 self._recs.popitem(last=False)
         return self._recs[path]
@@ -373,14 +387,14 @@ class ErrorBudgetMachine:
         Pw = self.paths.at(wl)
         path = Pw.rec(rMod, n_subap, N, method, n_phot, s_rec)
         if op.exists(path) and not overwrite:
-            return path
+            return self._checked(path)
         own = self._has_im(rMod, n_subap, wl)
         src = wl if own else wl0
-        im = utils.read_fits(_need(self.paths.at(src).im_dl(rMod, n_subap), 'im_dl'))
+        im = utils.read_fits(self._checked(_need(self.paths.at(src).im_dl(rMod, n_subap), 'im_dl')))
         if not own:
             im = im * (wl0 / wl)                                             # IM(wl) = IM(wl0) wl0 / wl (linear regime)
         cn = cxy = ca = None
-        info = dict(wvl_nm=wl, src_wvl=src)
+        info = dict(wvl_nm=wl, src_wvl=src, dm_tag=self.paths.dm_tag)
         if method != 'svd':
             if n_phot is None or s_rec is None:
                 raise ValueError(f"reconstructor '{method}' needs n_phot and the seeing")
@@ -413,10 +427,10 @@ class ErrorBudgetMachine:
                 warnings.warn(f'{op.basename(spath)} missing: aliasing of the SVD reconstructor used for the {method} one')
         else:
             alias = np.std(rec @ utils.read_fits(_need(spath, 'slopes')).T, axis=1)
-        by_level = {lvl: og_of(utils.read_fits(P.im_pc(rMod, n_subap, seeing, N_corr, None if lvl == (1.0, 1.0) else lvl)))
+        by_level = {lvl: og_of(utils.read_fits(self._checked(P.im_pc(rMod, n_subap, seeing, N_corr, None if lvl == (1.0, 1.0) else lvl))))
                     for lvl in P.pc_levels(rMod, n_subap, seeing, N_corr)}
         levels = {self._level_residual(P, N_corr, seeing, lvl): og for lvl, og in by_level.items()}
-        im_path = _need(P.im_pc(rMod, n_subap, seeing, N_corr), 'im_pc')
+        im_path = self._checked(_need(P.im_pc(rMod, n_subap, seeing, N_corr), 'im_pc'))
         return Calibration(N, N_corr, og_of(utils.read_fits(im_path)), np.asarray(alias)[:N], noise, levels,
                            lambda: read_rec(rpath) @ (utils.read_fits(im_path)[:, :N] * scale), og_by_level=by_level, alias_seeing=seeing)
 

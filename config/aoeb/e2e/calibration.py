@@ -157,7 +157,7 @@ def calibrate_im(cfg, gpu=0, shard=(0, 1)):
         ov.update({'pyr_im_calibrator': {'im_tag': op.basename(path)[:-5], 'nmodes': cfg.n_modes_im},
                    'pushpull': {'nmodes': cfg.n_modes_im}, 'main': {'total_time': cfg.n_modes_im * 2 * cfg.time_step}})
         run_specula(cfg, ['calib_im.yml'], ov, gpu, op.basename(path)[:-5])
-        au.set_header(path, wvl_nm=float(wl))
+        au.set_header(path, wvl_nm=float(wl), dm_tag=cfg.dm_tag)
 
 
 def compute_recs(cfg, gpu=0, shard=(0, 1)):
@@ -167,7 +167,7 @@ def compute_recs(cfg, gpu=0, shard=(0, 1)):
             for N in cfg.mode_list(n):
                 path = P.rec(r, n, N)
                 if _needed(cfg, path) and op.exists(P.im_dl(r, n)):
-                    save_rec(path, compute_reconstructor(au.read_fits(P.im_dl(r, n)), N), wvl_nm=float(wl), src_wvl=float(wl))
+                    save_rec(path, compute_reconstructor(au.read_fits(P.im_dl(r, n)), N), wvl_nm=float(wl), src_wvl=float(wl), dm_tag=cfg.dm_tag)
 
 
 def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
@@ -212,7 +212,7 @@ def calibrate_pc(cfg, gpu=0, shard=(0, 1)):
             {f'pyr_im_calibrator_{p}': {'im_tag': op.basename(path)[:-5], 'nmodes': N} for p, path in paths.items()})
         run_specula(cfg, ['calib_pc.yml'], ov, gpu, op.basename(paths['vis'])[:-5])
         for p, path in paths.items():
-            au.set_header(path, wvl_nm=float(cfg.wavelengths[p]), seeing=float(s), n_screen=cfg.n_screens)
+            au.set_header(path, wvl_nm=float(cfg.wavelengths[p]), seeing=float(s), n_screen=cfg.n_screens, dm_tag=cfg.dm_tag)
 
 
 def compute_ml(cfg, gpu=0, shard=(0, 1), rMods=(0.0,), n_phot=None):

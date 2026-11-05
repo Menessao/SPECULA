@@ -354,7 +354,7 @@ class ErrorBudgetGenerator:
                     'pyr_im_calibrator': {'im_tag': op.basename(path)[:-5], 'nmodes': c.n_modes_max, 'overwrite': True},
                     'pushpull': {'nmodes': c.n_modes_max}, 'dm': {'nmodes': c.n_modes_max},
                     'main': {'total_time': c.n_modes_max * 2 * c.time_step}}))
-                utils.set_header(path, wvl_nm=float(P.wavelength_nm))
+                utils.set_header(path, wvl_nm=float(P.wavelength_nm), dm_tag=P.dm_tag)
 
     def compute_recs(self):
         """4. SVD reconstructors of the first N modes of the diffraction-limited IM."""
@@ -363,7 +363,7 @@ class ErrorBudgetGenerator:
                 path = P.rec(rMod, n, N)
                 if self._needed(path):
                     save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N), wvl_nm=float(P.wavelength_nm),
-                             src_wvl=float(P.wavelength_nm))
+                             src_wvl=float(P.wavelength_nm), dm_tag=P.dm_tag)
 
     def compute_recs_weighted(self, method, flux, fs, detector, seeing, machine, slopes_from_intensity=None):
         """ML or MAP reconstructors matched to a flux, rate, detector and seeing (machine.ensure_rec: full sx-sy noise covariance; the
@@ -396,7 +396,8 @@ class ErrorBudgetGenerator:
                 'pyr_im_calibrator': {'im_tag': op.basename(path)[:-5], 'nmodes': N, 'overwrite': True}}))
             im = utils.read_fits(path)
             accum = im if accum is None else accum + im
-        utils.write_fits(path, accum / c.n_screens_pc, wvl_nm=float(P.wavelength_nm), seeing=float(seeing), n_screen=c.n_screens_pc)
+        utils.write_fits(path, accum / c.n_screens_pc, wvl_nm=float(P.wavelength_nm), seeing=float(seeing), n_screen=c.n_screens_pc,
+                         dm_tag=P.dm_tag)
 
     def calibrate_im_pc(self):
         """6. IM with N modes perfectly corrected (correction vector of ones)."""

@@ -39,7 +39,7 @@ def plan(root, pupilstop_tag='vlt_pupil_220pixels', dm_tag='bmc2k_vlt'):
     for f in sorted(os.listdir(op.join(root, 'im'))):
         m = re.fullmatch(B + r'_wvl(?P<w>[0-9]+)_bmc2k_vlt_im\.fits', f)
         if m:
-            acts.append(('rename', op.join(root, 'im', f), P(m['w']).im_dl(float(m['r']), int(m['n'])), dict(wvl_nm=float(m['w']))))
+            acts.append(('rename', op.join(root, 'im', f), P(m['w']).im_dl(float(m['r']), int(m['n'])), dict(wvl_nm=float(m['w']), dm_tag=dm_tag)))
     frames = {}
     for f in sorted(os.listdir(op.join(root, 'aliasing'))):
         src = op.join(root, 'aliasing', f)
@@ -62,7 +62,7 @@ def plan(root, pupilstop_tag='vlt_pupil_220pixels', dm_tag='bmc2k_vlt'):
         src = op.join(root, 'rec', f)
         m = re.fullmatch(B + r'_wvl(?P<w>[0-9]+)_bmc2k_vlt_(?P<N>[0-9]+)modes_rec\.fits', f)
         if m:
-            acts.append(('rename', src, P(m['w']).rec(float(m['r']), int(m['n']), int(m['N'])), dict(wvl_nm=float(m['w']),
+            acts.append(('rename', src, P(m['w']).rec(float(m['r']), int(m['n']), int(m['N'])), dict(wvl_nm=float(m['w']), dm_tag=dm_tag,
                                                                                                       src_wvl=float(m['w']))))
             continue
         m = re.fullmatch(B + r'_wvl(?P<w>[0-9]+)_bmc2k_vlt_(?P<N>[0-9]+)modes_mmse_rec\.fits', f)
@@ -74,7 +74,7 @@ def plan(root, pupilstop_tag='vlt_pupil_220pixels', dm_tag='bmc2k_vlt'):
             frame = fits.getdata(fr)
             nph = float((frame.mean(axis=0) if frame.ndim == 3 else frame).sum())
             dst = P(m['w']).rec(float(m['r']), int(m['n']), int(m['N']), 'ml', nph, SEEING_TAG)
-            acts.append(('ml', src, dst, dict(wvl_nm=float(m['w']), src_wvl=float(m['w']), method='ml', n_phot=nph, ron=0.5, f2=1.0,
+            acts.append(('ml', src, dst, dict(wvl_nm=float(m['w']), src_wvl=float(m['w']), dm_tag=dm_tag, method='ml', n_phot=nph, ron=0.5, f2=1.0,
                                              seeing=SEEING_TAG, xycov=True)))
             continue
         if not re.fullmatch(B + r'_wvl[0-9]+_[0-9]+modes_rec.*\.fits', f):      # already in the new layout: not listed
