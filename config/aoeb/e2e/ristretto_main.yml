@@ -10,7 +10,7 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/WFSW'  # CalibManager root directory (all the data are in subdirectories); overridden by aoeb
   pixel_pupil:       220                   # Must match influence function computation
   pixel_pitch:       0.03727272727         # [m] 8.2m / 220 pixels = 0.037272 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        6.000                 # [s]
+  total_time:        1.000                 # [s]
   time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
   display_server:    false                 # Disable for batch runs
@@ -278,8 +278,6 @@ kalman:
     in_command:      'kdelay.out_comm:-1'    # DM command seen by the WFSs at this step
   outputs:           ['out_projected_state', 'out_state', 'out_bias']
 
-# Plant: pure delay. Pass-through filter (gain 1, forgetting factor 0) with fractional delay 0.5:
-# total delay 1 + 0.5 = 1.5 steps (the 1 is the 'dm.out_layer:-1' in prop)
 kdelay:
   class:             'Integrator'
   int_gain:          [1.0]
@@ -290,7 +288,6 @@ kdelay:
     delta_comm:      'kalman.out_projected_state'
   outputs:           ['out_comm']
 
-# DM data objects: aoeb names them {paths.dm_tag}_ifunc, _m2c, _kl_inv
 dm:
   class:             'DM'
   simul_params_ref:  'main'
@@ -312,7 +309,7 @@ coro_psf_vis:
   wavelengthInNm:    550                    # [nm] science wavelength
   nd:                4                       # 4x padding for PSF
   start_time:        0.5
-  verbose: true
+  verbose: false
   compute_profile_metrics: true
   inputs:
     in_ef:           'prop.out_science_vis_ef'
@@ -378,12 +375,13 @@ data_store:
     input_list: [
                   'sr_vis-coro_psf_vis.out_sr',
                   'coro_psf_vis_int-coro_psf_vis.out_int_coronagraph_psf_profile',
-                  'coro_psf_vis_std-coro_psf_vis.out_std_coronagraph_psf_profile',
+                  # 'coro_psf_vis_std-coro_psf_vis.out_std_coronagraph_psf_profile',
                   'sr_nir-coro_psf_nir.out_sr',
                   'coro_psf_nir_int-coro_psf_nir.out_int_coronagraph_psf_profile',
-                  'coro_psf_nir_std-coro_psf_nir.out_std_coronagraph_psf_profile',
-                  'atmo_res-atmo_modes.out_value',
-                  'dm_res-res_modes.out_modes',
+                  # 'coro_psf_nir_std-coro_psf_nir.out_std_coronagraph_psf_profile',
+                  'atmo_modes-atmo_modes.out_value',
+                  'res_modes-res_modes.out_modes',
+                  'dm_modes-dm_modes.out_modes',
                   'kf_comm-kalman.out_projected_state',
                   'kf_bias-kalman.out_bias',       # NIR offset w.r.t. the VIS reference
                   ]
