@@ -154,3 +154,11 @@ def get_static_modes(rMod, nSubaps, nModes, wvl, nCorrModes=None):
     """Modal measurement (reconstructor units) of the saved mean residual frame of one pyramid."""
     frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes)
     return rec @ pyr_slopes_from_frame(frame, pup)
+
+
+def get_pupil_flux(rMod, nSubaps, nModes, wvl, nCorrModes=None):
+    """Flux on the four pupils [e-] per loop step in the saved mean calibration frame
+    (aliasing calibration of main_simul: cameras at the loop rate, magnitudes/QE of ristretto_main.yml).
+    Same definition as PyrSlopec 'out_flux'."""
+    frame, pup, _ = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes)
+    return float(np.sum(frame.ravel()[pup[pup >= 0]]))
