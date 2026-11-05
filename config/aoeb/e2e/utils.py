@@ -51,7 +51,6 @@ def rec_mmse(im, mean_frame, pup, ron_var, rcond=1e-12, use_cross=True, flux=Non
     f = np.asarray(mean_frame, dtype=np.float64).ravel()
     if flux is not None:
         f = f * flux / f.sum()
-    f = np.asarray(mean_frame, dtype=np.float64).ravel()
     A, B, C, Dp = [f[pup[:, k][pup[:, k] >= 0]] for k in range(4)]
     F = (A + B + C + Dp).mean()
     ac, bd = np.maximum(A + C, 0), np.maximum(B + Dp, 0)
