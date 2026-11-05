@@ -4,6 +4,7 @@ specula.init(0, precision=0)  # Default target device, double precision
 import os
 import tempfile
 import unittest
+import warnings
 import numpy as np
 from scipy.linalg import block_diag, solve_discrete_are
 
@@ -14,6 +15,10 @@ from specula.data_objects.kalman_filter_data import (
     KalmanFilterData, ar2_stationary_variance, ar2_driving_noise_variance,
     ar2_is_stationary, stationary_covariance, prediction_projection)
 from test.specula_testlib import cpu_and_gpu
+from specula.data_objects.pixels import Pixels
+from specula.data_objects.pupdata import PupData
+from specula.data_objects.recmat import Recmat
+from specula.processing_objects.pyr_slopec import PyrSlopec
 
 
 # ----------------------------------------------------------------------
@@ -1226,21 +1231,18 @@ class TestKalmanFilterClosedLoopModel(unittest.TestCase):
             bias_process_noise_cov=[None, 0.0])
         A, P0 = data.state_transition_matrix, data.initial_covariance
         L = 4
-        self.assertEqual(A.shape, (2, 2 * L, 2 * L))
+        self.assertEqual(A.shape, (2, L, L))                             # turbulence lags only
         np.testing.assert_array_equal(A[:, 0, :2], np.stack([a1, a2], axis=1))
-        np.testing.assert_array_equal(A[0, L, :], 0)                     # d_k comes from the command
-        np.testing.assert_array_equal(data.command_matrix[:, 0], np.eye(2 * L)[L])
-        np.testing.assert_allclose(data.observation_matrix[0][0],
-                                   np.r_[np.full(4, 0.25), np.full(4, -0.25)])
-        np.testing.assert_allclose(data.observation_matrix[1][0],
-                                   [0, 1, 0, 0, 0, -1, 0, 0])            # 1-step measurement delay
-        # stationary prior on the turbulence lags, DM commands known exactly
-        Pphi = P0[:, :L, :L]
-        Aphi = A[:, :L, :L]
-        np.testing.assert_allclose(Pphi, Aphi @ Pphi @ np.swapaxes(Aphi, 1, 2) + data.process_noise_cov[:, :L, :L],
-                                   rtol=1e-8)
-        np.testing.assert_allclose(Pphi[:, 0, 0], ar2_stationary_variance(a1, a2, sw2), rtol=1e-8)
-        np.testing.assert_array_equal(P0[:, L:, :], 0)
+        self.assertIsNone(data.command_matrix)                           # DM commands: known, not states
+        np.testing.assert_allclose(data.observation_matrix[0][0], np.full(4, 0.25))
+        np.testing.assert_allclose(data.command_observation_matrix[0][0], np.full(4, -0.25))
+        np.testing.assert_allclose(data.observation_matrix[1][0], [0, 1, 0, 0])     # 1-step delay
+        np.testing.assert_allclose(data.command_observation_matrix[1][0], [0, -1, 0, 0])
+        self.assertEqual(data.command_lags, L)
+        self.assertEqual(data.A.shape, (2, L + 1, L + 1))                # + the bias of sensor 1
+        # stationary prior on the turbulence lags
+        np.testing.assert_allclose(P0, A @ P0 @ np.swapaxes(A, 1, 2) + data.process_noise_cov, rtol=1e-8)
+        np.testing.assert_allclose(P0[:, 0, 0], ar2_stationary_variance(a1, a2, sw2), rtol=1e-8)
         np.testing.assert_allclose(data.projection_matrix[:, :2],
                                    0.5 * (np.stack([a1, a2], 1) + np.stack([a1 ** 2 + a2, a1 * a2], 1)))
         np.testing.assert_array_equal(data.projection_matrix[:, 2:], 0)
@@ -1290,6 +1292,414 @@ class TestKalmanFilterClosedLoopModel(unittest.TestCase):
         self.assertTrue(np.all(np.abs(blind['mean'] + blind['b']) < 0.3 * np.abs(blind['b'])))  # blind: locked on the offset
         self.assertTrue(np.all(with_bias['mse'] < 0.6 * blind['mse']))
         self.assertTrue(np.all(with_bias['mse'] < 0.01 * with_bias['olvar']))
+
+
+
+# ----------------------------------------------------------------------
+# Aliasing states and adaptive measurement noise
+# ----------------------------------------------------------------------
+
+def frame_average_variance(c1, c2, var, T):
+    """Variance of the mean of T consecutive samples of a stationary AR(2)."""
+    acf = [1.0, c1 / (1 - c2)]
+    for _ in range(2, T):
+        acf.append(c1 * acf[-1] + c2 * acf[-2])
+    return var * (T + 2 * sum((T - k) * acf[k] for k in range(1, T))) / T ** 2
+
+
+def run_aliasing_toy(seed, mode, n_steps=8000, settle=1000, T=4):
+    """Closed loop (SPECULA timing) with a 4-step reference sensor and a fast sensor,
+    each with its own temporally correlated aliasing. mode: 'states' (aliasing
+    AR(2) in the state), 'white' (frame-averaged aliasing variance added to R)
+    or 'ignore'."""
+    N = 3
+    rho, om = np.array([0.999, 0.99, 0.995]), np.array([0.01, 0.05, 0.2])
+    a1, a2 = 2 * rho * np.cos(om), -rho ** 2
+    sw2 = np.ones(N)
+    r = [np.array([1.0, 0.3, 0.2]), np.array([1.0, 0.3, 0.2])]
+    aa1, aa2 = 2 * 0.98 * np.cos(0.3), -0.98 ** 2                 # faster than the modes
+    av = [np.array([3.0, 1.0, 0.6]), np.array([3.0, 1.0, 0.6])]   # single-step variance
+
+    rng = np.random.default_rng(seed)
+    phi = np.zeros((n_steps, N))
+    w = rng.normal(size=(n_steps, N)) * np.sqrt(sw2)
+    for k in range(2, n_steps):
+        phi[k] = a1 * phi[k - 1] + a2 * phi[k - 2] + w[k]
+    alias = np.zeros((2, n_steps, N))
+    for s in range(2):
+        wa = rng.normal(size=(n_steps, N)) * np.sqrt(ar2_driving_noise_variance(aa1, aa2, av[s]))
+        for k in range(2, n_steps):
+            alias[s, k] = aa1 * alias[s, k - 1] + aa2 * alias[s, k - 2] + wa[k]
+
+    if mode == 'states':
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, r, integration_steps=[T, 1],
+                                                     aliasing_var=av, aliasing_a1=aa1, aliasing_a2=aa2)
+    elif mode == 'white':
+        data = KalmanFilterData.from_ar2_closed_loop(
+            a1, a2, sw2, [r[0] + frame_average_variance(aa1, aa2, av[0], T), r[1] + av[1]],
+            integration_steps=[T, 1])
+    else:
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, r, integration_steps=[T, 1])
+    kf = KalmanFilter(kalman_filter_data=data, target_device_idx=-1, precision=0)
+    rig = KalmanRig(kf, [N, N], np, -1, command_size=N)
+
+    c1, c2 = np.zeros(N), np.zeros(N)
+    res = np.zeros((n_steps, N))
+    acc = np.zeros(N)
+    for k in range(n_steps):
+        d = 0.5 * c1 + 0.5 * c2
+        res[k] = phi[k] - d
+        acc += res[k] + alias[0, k]
+        fresh = {1: res[k] + alias[1, k] + rng.normal(size=N) * np.sqrt(r[1])}
+        if (k + 1) % T == 0:
+            fresh[0] = acc / T + rng.normal(size=N) * np.sqrt(r[0])
+            acc = np.zeros(N)
+        rig.step(k + 1, fresh, command=d)
+        c = cpuArray(kf.outputs['out_projected_state'].value).copy()
+        c2, c1 = c1, c
+    return np.mean(res[settle:] ** 2, axis=0)
+
+
+class TestKalmanFilterAliasingAndAdaptiveNoise(unittest.TestCase):
+
+    def test_aliasing_state_structure(self):
+        a1, a2, sw2 = np.array([1.9, 1.5]), np.array([-0.95, -0.6]), np.array([1.0, 2.0])
+        aa1, aa2 = 1.5, -0.6
+        data = KalmanFilterData.from_ar2_closed_loop(
+            a1, a2, sw2, [np.ones(2), np.ones(2)], integration_steps=[4, 1],
+            aliasing_var=[np.array([0.5, 0.2]), 0.3], aliasing_a1=aa1, aliasing_a2=aa2)
+        A, P0, H = data.state_transition_matrix, data.initial_covariance, data.observation_matrix
+        self.assertEqual(A.shape, (2, 10, 10))                       # 4 phi + 4 + 2 aliasing lags
+        np.testing.assert_allclose(H[0][0, 4:8], 0.25)                # frame-averaged aliasing
+        np.testing.assert_array_equal(H[0][0, 8:], 0)
+        np.testing.assert_array_equal(H[1][0, 4:8], 0)
+        np.testing.assert_array_equal(H[1][0, 8:], [1, 0])
+        np.testing.assert_array_equal(A[:, 4, 4:6], np.tile([aa1, aa2], (2, 1)))
+        np.testing.assert_array_equal(A[:, 8, 8:10], np.tile([aa1, aa2], (2, 1)))
+        np.testing.assert_allclose(P0[:, 4, 4], [0.5, 0.2], rtol=1e-8)          # stationary variances
+        np.testing.assert_allclose(P0[:, 8, 8], [0.3, 0.3], rtol=1e-8)
+        np.testing.assert_array_equal(P0[:, :4, 4:], 0)
+        np.testing.assert_array_equal(data.projection_matrix[:, 2:], 0)          # never commanded
+
+        no_alias = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)] * 2, integration_steps=[4, 1],
+                                                         aliasing_var=[None, None])
+        self.assertEqual(no_alias.state_transition_matrix.shape, (2, 4, 4))
+        with self.assertRaises(ValueError):                                       # dynamics missing
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], aliasing_var=[0.3])
+        with self.assertRaises(ValueError):                                       # non-stationary
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], aliasing_var=[0.3],
+                                                  aliasing_a1=1.5, aliasing_a2=-0.4)
+        with self.assertRaises(ValueError):                                       # one item per sensor
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)] * 2, aliasing_var=[0.3],
+                                                  aliasing_a1=aa1, aliasing_a2=aa2)
+
+    def test_aliasing_states_beat_white_approximation(self):
+        """With temporally correlated aliasing, modelling it in the state gives a
+        lower residual than adding its variance to R, or ignoring it."""
+        states = run_aliasing_toy(21, 'states')
+        white = run_aliasing_toy(21, 'white')
+        ignore = run_aliasing_toy(21, 'ignore')
+        self.assertTrue(np.all(states < 0.85 * white), msg=f'{states} vs white {white}')
+        self.assertTrue(np.all(states < 0.97 * ignore), msg=f'{states} vs ignore {ignore}')
+
+
+# ----------------------------------------------------------------------
+# Gain freezing
+# ----------------------------------------------------------------------
+
+def run_two_rate_filter(kf, z, slow_period=4, noise_change=None):
+    """Drive kf with a slow sensor (every slow_period steps) and a fast one (every step).
+    noise_change: (step, sensor, new variances) applied with set_measurement_noise."""
+    n_steps, _, N = z.shape
+    rig = KalmanRig(kf, [N, N], np, -1)
+    states, frozen = [], []
+    for k in range(1, n_steps + 1):
+        if noise_change is not None and k == noise_change[0]:
+            kf.set_measurement_noise(noise_change[1], noise_change[2])
+        fresh = {1: z[k - 1, 1]}
+        if k % slow_period == 0:
+            fresh[0] = z[k - 1, 0]
+        states.append(rig.step(k, fresh)[0])
+        frozen.append(kf._frozen)
+    return np.array(states), np.array(frozen)
+
+
+class TestKalmanFilterGainFreezing(unittest.TestCase):
+
+    def setUp(self):
+        self.N = 4
+        self.A, self.Q, self.r = random_modal_model(self.N, seed=41)
+        self.H = np.array([[1.0, 0.0]])
+        self.z = np.random.default_rng(42).normal(size=(1500, 2, self.N))
+
+    def make(self, **kw):
+        return KalmanFilter(self.A, [self.H, self.H], self.Q, self.r,
+                            target_device_idx=-1, precision=0, **kw)
+
+    def test_frozen_gains_match_full_filter(self):
+        """With a two-rate schedule (period 4) the gains freeze, and the state then
+        matches the full time-varying filter to within the gain tolerance."""
+        full, _ = run_two_rate_filter(self.make(), self.z)
+        frozen_run, frozen = run_two_rate_filter(self.make(gain_period=4, gain_tolerance=1e-8), self.z)
+        self.assertTrue(frozen[-1])
+        first = int(np.argmax(frozen))
+        self.assertGreater(first, 4)                                  # learnt first, then frozen
+        np.testing.assert_allclose(frozen_run, full, rtol=1e-5, atol=1e-6 * np.abs(full).max())
+
+    def test_noise_change_unfreezes_and_refreezes(self):
+        change = (800, 1, np.full(self.N, 0.05))
+        full, _ = run_two_rate_filter(self.make(), self.z, noise_change=change)
+        frozen_run, frozen = run_two_rate_filter(self.make(gain_period=4, gain_tolerance=1e-8), self.z,
+                                                 noise_change=change)
+        self.assertTrue(frozen[change[0] - 2])                        # frozen before the change
+        self.assertFalse(frozen[change[0] - 1])                       # unfrozen by it
+        self.assertTrue(frozen[-1])                                   # frozen again later
+        np.testing.assert_allclose(frozen_run, full, rtol=1e-5, atol=1e-6 * np.abs(full).max())
+
+    def test_schedule_change_unfreezes(self):
+        """A slow measurement at an unexpected phase falls back to the full filter."""
+        kf = self.make(gain_period=4, gain_tolerance=1e-8)
+        run_two_rate_filter(kf, self.z[:800])
+        self.assertTrue(kf._frozen)
+        rig = KalmanRig(kf, [self.N, self.N], np, -1)
+        rig.step(801, {0: self.z[0, 0], 1: self.z[0, 1]})             # phase 0 instead of 3
+        self.assertFalse(kf._frozen)
+
+    def test_no_freezing_without_gain_period(self):
+        _, frozen = run_two_rate_filter(self.make(), self.z[:400])
+        self.assertFalse(frozen.any())
+
+
+# ----------------------------------------------------------------------
+# Measurement noise rescaled with the PyrSlopec flux
+# ----------------------------------------------------------------------
+
+def pyramid_modal_variance_mc(rec, intensity, ron, n_frames, rng, photon_noise=True):
+    """Empirical modal noise variance of PyrSlopec slopes (global normalisation)
+    through a reconstructor, for pupil intensities (4, n_subap) [e-/frame]."""
+    S = intensity.shape[1]
+    f = rng.poisson(intensity, (n_frames, 4, S)) if photon_noise else np.broadcast_to(intensity, (n_frames, 4, S))
+    f = f + rng.normal(0, ron, (n_frames, 4, S))
+    A, B, C, D = (f[:, q] for q in range(4))
+    g = S / f.sum(axis=(1, 2))
+    sx, sy = (A + B - C - D) * g[:, None], (B + C - A - D) * g[:, None]
+    return (np.concatenate([sx, sy], axis=1) @ rec.T).var(axis=0)
+
+
+class TestFluxScaledNoise(unittest.TestCase):
+
+    def test_scaling_law_matches_monte_carlo(self):
+        """With global normalisation, the photon part of the modal variance scales
+        as F_ref / F and the read-out part as (F_ref / F)^2."""
+        rng = np.random.default_rng(61)
+        S, n_modes, ron = 40, 10, 2.0
+        rec = rng.normal(size=(n_modes, 2 * S))
+        shape = rng.uniform(0.8, 1.2, (4, S))                      # pupil illumination pattern
+        f_ref = 40.0                                                 # e- per pixel at the reference flux
+        photon = pyramid_modal_variance_mc(rec, f_ref * shape, 0.0, 8000, rng)
+        readout = pyramid_modal_variance_mc(rec, f_ref * shape, ron, 8000, rng, photon_noise=False)
+        for scale in (0.25, 2.0):                                    # flux F = scale * F_ref
+            measured = pyramid_modal_variance_mc(rec, scale * f_ref * shape, ron, 8000, rng)
+            predicted = photon / scale + readout / scale ** 2
+            np.testing.assert_allclose(measured / predicted, 1, atol=0.12)
+            self.assertAlmostEqual(float(np.mean(measured / predicted)), 1, delta=0.04)
+
+    def test_filter_rescales_noise_with_flux(self):
+        """Sensor 0 has flux scaling: R_0 follows the running mean of its flux every
+        flux_update_period frames, keeping the rest of R (e.g. white aliasing);
+        sensor 1 keeps the R of the model."""
+        N = 5
+        A, Q, r = random_modal_model(N, seed=62)
+        H = np.array([[1.0, 0.0]])
+        photon, readout, extra = np.full(N, 0.4), np.full(N, 0.1), np.arange(N) * 0.01
+        f_ref = 1000.0
+        data = KalmanFilterData(A, [H, H], Q, [photon + readout + extra, r[1]],
+                                photon_noise_var=[photon, None], readout_noise_var=[readout, None],
+                                reference_flux=[f_ref, None])
+        with tempfile.TemporaryDirectory() as tmp:                   # survives save/restore
+            fn = os.path.join(tmp, 'kf.fits')
+            data.save(fn)
+            data = KalmanFilterData.restore(fn, target_device_idx=-1)
+        self.assertEqual(data.noise_scaling[0][2], f_ref)
+        self.assertIsNone(data.noise_scaling[1])
+
+        kf = KalmanFilter(kalman_filter_data=data, flux_update_period=5, flux_averaging_frames=1000,
+                          target_device_idx=-1, precision=0)
+        flux = BaseValue(value=np.zeros(1), target_device_idx=-1, precision=0)
+        kf.inputs['in_flux_list'].set([flux])
+        rig = KalmanRig(kf, [N, N], np, -1)
+        rng = np.random.default_rng(63)
+        fluxes = rng.uniform(400, 600, 10)                           # about half the reference flux
+        R0 = cpuArray(kf.R[0])[:, 0, 0].copy()
+        for k in range(1, 11):
+            flux.value[:] = fluxes[k - 1]
+            flux.generation_time = k
+            rig.step(k, {0: rng.normal(size=N), 1: rng.normal(size=N)})
+            if k < 5:
+                np.testing.assert_allclose(cpuArray(kf.R[0])[:, 0, 0], R0)
+            if k in (5, 10):
+                ratio = f_ref / fluxes[:k].mean()
+                expected = photon * ratio + readout * ratio ** 2 + extra
+                np.testing.assert_allclose(cpuArray(kf.R[0])[:, 0, 0], expected, rtol=1e-8)
+        np.testing.assert_allclose(cpuArray(kf.R[1])[:, 0, 0], r[1])
+
+        with self.assertRaises(ValueError):                          # incomplete scaling terms
+            KalmanFilterData(A, [H, H], Q, [r[0], r[1]], photon_noise_var=[photon, None])
+        with self.assertRaises(ValueError):
+            KalmanFilterData(A, [H, H], Q, [r[0], r[1]], photon_noise_var=[photon, None],
+                             readout_noise_var=[readout, None], reference_flux=[0.0, None])
+        self.assertNotIn('in_flux_list', KalmanFilter(A, [H, H], Q, r, target_device_idx=-1).inputs)
+
+    def test_pyr_slopec_out_flux(self):
+        """PyrSlopec 'out_flux' is the total pupil flux of the frame, refreshed with the slopes."""
+        rng = np.random.default_rng(64)
+        S, frame = 50, (16, 16)
+        idx = rng.permutation(frame[0] * frame[1])[:4 * S].reshape(S, 4)
+        slopec = PyrSlopec(PupData(ind_pup=idx, framesize=list(frame)), target_device_idx=-1)
+        pixels = Pixels(*frame, target_device_idx=-1)
+        pixels.pixels[:] = rng.poisson(10.0, frame)
+        pixels.generation_time = 3
+        slopec.inputs['in_pixels'].set(pixels)
+        slopec.setup()
+        slopec.check_ready(3)
+        slopec.trigger()
+        slopec.post_trigger()
+        expected = cpuArray(pixels.pixels).reshape(-1)[idx].sum()
+        np.testing.assert_allclose(cpuArray(slopec.outputs['out_flux'].value)[0], expected)
+        self.assertEqual(slopec.outputs['out_flux'].generation_time, 3)
+
+
+# ----------------------------------------------------------------------
+# Kalman prediction + plant-inverse IIR (ristretto_main_kalman.yml architecture)
+# ----------------------------------------------------------------------
+
+def ar2_turbulence(a1, a2, sw2, n_steps, rng):
+    phi = np.zeros((n_steps, a1.size))
+    w = rng.normal(size=phi.shape) * np.sqrt(sw2)
+    for k in range(2, n_steps):
+        phi[k] = a1 * phi[k - 1] + a2 * phi[k - 2] + w[k]
+    return phi
+
+
+class TestKalmanPlusPlantInverse(unittest.TestCase):
+
+    def test_plant_inverse_reaches_one_step_prediction_error(self):
+        """Closed loop with the SPECULA timing: the filter outputs E[phi[k+1] | k], the
+        IIR (1 + beta) z / (z + beta) inverts d[k+1] = 0.5 c[k] + 0.5 c[k-1]. The DM
+        residual must then be the one-step prediction error of the filter."""
+        N, n_steps, settle, beta = 3, 8000, 1000, 0.99
+        rho, om = np.array([0.999, 0.99, 0.995]), np.array([0.01, 0.05, 0.2])
+        a1, a2, sw2 = 2 * rho * np.cos(om), -rho ** 2, np.ones(N)
+        r = np.array([10.0, 1.0, 0.5])
+        rng = np.random.default_rng(65)
+        phi = ar2_turbulence(a1, a2, sw2, n_steps, rng)
+        noise = rng.normal(size=(n_steps, N)) * np.sqrt(r)
+
+        kf = KalmanFilter(kalman_filter_data=KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [r], delay=1.0),
+                          target_device_idx=-1, precision=0)
+        rig = KalmanRig(kf, [N], np, -1, command_size=N)
+        c_prev, d = np.zeros(N), np.zeros(N)
+        res, pred_err = np.zeros((n_steps, N)), np.zeros((n_steps, N))
+        for k in range(n_steps - 1):
+            res[k] = phi[k] - d
+            rig.step(k + 1, {0: res[k] + noise[k]}, command=d)
+            u = cpuArray(kf.outputs['out_projected_state'].value).copy()       # E[phi[k+1] | k]
+            pred_err[k + 1] = phi[k + 1] - u
+            c = (1 + beta) * u - beta * c_prev                                  # plant inverse
+            d, c_prev = 0.5 * c + 0.5 * c_prev, c                               # plant
+        var_res = res[settle:-1].var(axis=0)
+        var_pred = pred_err[settle:-1].var(axis=0)
+        self.assertTrue(np.all(var_res <= 1.01 * var_pred), msg=f'{var_res} vs {var_pred}')
+        self.assertTrue(np.all(var_res < 0.01 * phi[settle:].var(axis=0)))
+
+    def test_command_hold_projection(self):
+        """command_hold_steps T: the output is the mean of the 1..T-step predictions."""
+        a1, a2, sw2 = np.array([1.9, 1.5]), np.array([-0.95, -0.6]), np.ones(2)
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], integration_steps=4,
+                                                     command_hold_steps=4)
+        A = data.state_transition_matrix
+        expected = np.mean([prediction_projection(A, float(j)) for j in range(1, 5)], axis=0)
+        np.testing.assert_allclose(data.projection_matrix, expected, rtol=1e-12)
+        one = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], delay=1.0)
+        np.testing.assert_allclose(one.projection_matrix,
+                                   prediction_projection(one.state_transition_matrix, 1.0), rtol=1e-12)
+
+
+class TestReviewFixes(unittest.TestCase):
+
+    def setUp(self):
+        self.N = 4
+        self.A, self.Q, self.r = random_modal_model(self.N, seed=71)
+        self.H = np.array([[1.0, 0.0]])
+
+    def test_frame_triggered_filter_freezes(self):
+        """A single slow sensor (frame of 4 steps, triggered at frame rate, time_step
+        set) stays frozen and matches the full filter."""
+        rho, om = np.array([0.999, 0.99, 0.995]), np.array([0.01, 0.05, 0.2])
+        a1, a2, sw2, r = 2 * rho * np.cos(om), -rho ** 2, np.ones(3), np.array([4.0, 1.0, 0.5])
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [r], integration_steps=4, command_hold_steps=4)
+        z = np.random.default_rng(72).normal(size=(400, 3))
+        states, frozen = {}, None
+        for gp in (None, 4):
+            kf = KalmanFilter(kalman_filter_data=data, time_step=1e-3, gain_period=gp, gain_tolerance=1e-8,
+                              target_device_idx=-1, precision=0)
+            rig = KalmanRig(kf, [3], np, -1, command_size=3)
+            out, flags = [], []
+            for j in range(400):
+                out.append(rig.step(kf.seconds_to_t((j + 1) * 4e-3), {0: z[j]}, command=0.1 * z[j - 1])[0])
+                flags.append(kf._frozen)
+            states[gp] = np.array(out)
+            if gp:
+                frozen = np.array(flags)
+        self.assertTrue(frozen[200:].all())                         # stays frozen once converged
+        np.testing.assert_allclose(states[4], states[None], rtol=1e-5, atol=1e-6 * np.abs(states[None]).max())
+
+    def make_flux_filter(self):
+        photon, readout = np.full(self.N, 0.5), np.full(self.N, 0.5)
+        kf = KalmanFilter(self.A, [self.H, self.H], self.Q, [np.ones(self.N), self.r[1]],
+                          photon_noise_var=[photon, None], readout_noise_var=[readout, None],
+                          reference_flux=[100.0, None], flux_update_period=1,
+                          target_device_idx=-1, precision=0)
+        flux = BaseValue(value=np.zeros(1), target_device_idx=-1, precision=0)
+        kf.inputs['in_flux_list'].set([flux])
+        return kf, flux, KalmanRig(kf, [self.N, self.N], np, -1)
+
+    def test_reset_restores_model_noise(self):
+        kf, flux, rig = self.make_flux_filter()
+        flux.value[:], flux.generation_time = 25.0, 1                  # flux / 4: R = 0.5*4 + 0.5*16
+        rig.step(1, {1: np.zeros(self.N)})
+        np.testing.assert_allclose(cpuArray(kf.R[0])[:, 0, 0], 10.0)
+        kf.reset_states()
+        np.testing.assert_allclose(cpuArray(kf.R[0])[:, 0, 0], 1.0)
+
+    def test_explicit_noise_survives_flux_update_and_reset(self):
+        kf, flux, rig = self.make_flux_filter()
+        kf.set_measurement_noise(0, np.full(self.N, 7.0))
+        flux.value[:], flux.generation_time = 100.0, 1                 # reference flux: no rescaling
+        rig.step(1, {1: np.zeros(self.N)})
+        np.testing.assert_allclose(cpuArray(kf.R[0])[:, 0, 0], 7.0)
+        kf.reset_states()
+        np.testing.assert_allclose(cpuArray(kf.R[0])[:, 0, 0], 7.0)
+
+    def test_non_finite_measurement_is_skipped(self):
+        """A NaN frame (e.g. zero flux) is skipped, as if the sensor had not been refreshed."""
+        z = np.random.default_rng(73).normal(size=(3, 2, self.N))
+        outs = []
+        for bad in (True, False):
+            kf = KalmanFilter(self.A, [self.H, self.H], self.Q, self.r, target_device_idx=-1, precision=0)
+            rig = KalmanRig(kf, [self.N, self.N], np, -1)
+            rig.step(1, {0: z[0, 0], 1: z[0, 1]})
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                if bad:
+                    rig.step(2, {0: np.full(self.N, np.nan), 1: z[1, 1]})
+                    self.assertEqual(len(caught), 1)
+                else:
+                    rig.step(2, {1: z[1, 1]})
+            outs.append(rig.step(3, {0: z[2, 0], 1: z[2, 1]}))
+        self.assertTrue(np.all(np.isfinite(outs[0][0])))
+        np.testing.assert_allclose(outs[0][0], outs[1][0], rtol=1e-12)
+        np.testing.assert_allclose(outs[0][1], outs[1][1], rtol=1e-12)
 
 
 if __name__ == '__main__':

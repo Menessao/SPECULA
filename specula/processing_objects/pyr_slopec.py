@@ -1,6 +1,7 @@
 from specula import fuse
 from specula.processing_objects.slopec import Slopec
 from specula.base_processing_obj import OutputDesc
+from specula.base_value import BaseValue
 from specula.data_objects.pupdata import PupData
 from specula.data_objects.slopes import Slopes
 
@@ -63,6 +64,9 @@ class PyrSlopec(Slopec):
         self.pup_idx2 = pupil_idx(2)[pupil_idx(2) >= 0]   # Exclude -1 padding
         self.pup_idx3 = pupil_idx(3)[pupil_idx(3) >= 0]   # Exclude -1 padding
         self.outputs['out_pupdata'] = self.pupdata
+        # Total pupil flux per frame [e-], e.g. to scale the photon noise of a Kalman filter.
+        # TODO: per-pixel pupil intensities, for the full spatial photon-noise model.
+        self.outputs['out_flux'] = self.total_counts
         
         if self.slopes_from_intensity:
             self.slopes.single_mask = self.pupdata.complete_mask()
@@ -76,6 +80,7 @@ class PyrSlopec(Slopec):
         result = super().output_names()
         result.update({
             'out_pupdata': OutputDesc(PupData, 'Pupil data with subaperture geometry'),
+            'out_flux': OutputDesc(BaseValue, 'Total pupil flux of the frame (optional)'),
         })
         return result
 
@@ -158,3 +163,4 @@ class PyrSlopec(Slopec):
         super().post_trigger()
 
         self.outputs['out_pupdata'].generation_time = self.current_time
+        self.total_counts.generation_time = self.current_time
