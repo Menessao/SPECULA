@@ -31,7 +31,7 @@ sensors:
 detector: {ron_e: 0.5, qe: 0.2, excess_noise: true, excess_delta: 1.0}
 
 wavelengths:
-  sensing_nm: [850.0,1250.0]                   # one set of products per wavelength; pyr.wavelengthInNm and source_ngs.wavelengthInNm are both set to it
+  sensing_nm: [850.0]                   # one set of products per wavelength; pyr.wavelengthInNm and source_ngs.wavelengthInNm are both set to it
   science_nm: 1650.0                    # chromatic terms; source_science.wavelengthInNm of the aliasing run
 
 loop:

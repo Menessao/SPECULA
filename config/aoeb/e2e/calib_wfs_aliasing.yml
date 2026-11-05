@@ -20,44 +20,63 @@
 # cred_vis / cred_nir / recmat parameters, override the *_nn twins identically.
 
 main_override:
-  total_time:        6.0
+  total_time:        1.0
 
-remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes']
-
-# ------------------------------------------------------------------------------------------------
-# DM driven by an open-loop modal analysis of the turbulence (first N modes perfectly corrected)
-# ------------------------------------------------------------------------------------------------
-prop_ol:
-  class:             'AtmoPropagation'
-  simul_params_ref:  'main'
-  source_dict_ref:   ['source_vis']
-  inputs:
-    atmo_layer_list: ['atmo.layer_list']
-    common_layer_list: ['pupilstop']
-  outputs:           ['out_source_vis_ef']
+# remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes']
+remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'wind_speed', 'wind_direction', 'atmo', 'prop', 'coro_psf_vis', 'coro_psf_nir',
+         'science_vis', 'science_nir', 'res_modes', 'pyr_modes_vis', 'pyr_modes_nir']
 
 atmo_modes:
   class:             'ModalAnalysis'
   ifunc_inv_object:  'bmc2k_vlt_kl_inv'
   nmodes:            1300                    # N: number of modes corrected (= Kalman modes)
   inputs:
-    in_ef:           ['prop_ol.out_source_vis_ef']
+    in_ef:           ['atmo_random.out_source_vis_ef']
   outputs:           ['out_modes']
 
-prop_override:
-  source_dict_ref:   ['source_vis', 'source_nir']
+atmo_random:
+  class:                'AtmoRandomPhase'
+  simul_params_ref:     'main'
+  L0:                   25               # [m] Outer scale
+  source_dict_ref:      ['source_vis','source_nir']
+  update_interval:      1
   inputs:
-    atmo_layer_list: ['atmo.layer_list']
-    common_layer_list: ['pupilstop','dm.out_layer']
-  outputs:           ['out_source_vis_ef', 'out_source_nir_ef']
+    seeing:             'seeing.output'
+    pupilstop:          'pupilstop'
+  outputs:              ['out_source_vis_ef', 'out_source_nir_ef']
+
+ef_prop_vis:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_vis_ef'    # Turbulence
+    in_ef2: 'dm.out_layer'                      # Partial correction
+  outputs: ['out_ef']
+
+ef_prop_nir:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_nir_ef'    # Turbulence
+    in_ef2: 'dm.out_layer'                      # Partial correction
+  outputs: ['out_ef']
+
+# prop_override:
+#   source_dict_ref:   ['source_vis', 'source_nir']
+#   inputs:
+#     atmo_layer_list: ['atmo.layer_list']
+#     common_layer_list: ['pupilstop','dm.out_layer']
+#   outputs:           ['out_source_vis_ef', 'out_source_nir_ef']
 
 dm_override:
   inputs:
     in_command:      'atmo_modes.out_modes'
 
-# ------------------------------------------------------------------------------------------------
-# Noiseless twin cameras (same settings, photon and readout noise off) and their reconstructions
-# ------------------------------------------------------------------------------------------------
+pyr_vis_override:
+  inputs:
+    in_ef:            'ef_prop_vis.out_ef'
+
+pyr_nir_override:
+  inputs:
+    in_ef:            'ef_prop_nir.out_ef'
 
 cred_vis_override:
   photon_noise:      false
@@ -73,8 +92,11 @@ cred_nir_override:                   # [nm]
 data_store_override:
   create_tn: false
   inputs:
-    input_list: ['meas_vis-pyr_modes_vis.out_modes',
-                 'meas_nir-pyr_modes_nir.out_modes',
+    input_list: ['slopes_vis-pyr_slopes_vis.out_slopes',
+                 'slopes_nir-pyr_slopes_nir.out_slopes',
+                #  'meas_vis-pyr_modes_vis.out_modes',
+                #  'meas_nir-pyr_modes_nir.out_modes',
                  'nir_frames-cred_nir.out_pixels', 
-                 'vis_frames-cred_vis.out_pixels',    
+                 'vis_frames-cred_vis.out_pixels',  
+                #  'res_ef-ef_prop_vis.out_ef',  
                  ] 
