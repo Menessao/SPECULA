@@ -75,6 +75,16 @@ def frame_spectra(f, fs, n, wind, D, n_fold, latency):
     return out if n.ndim else tuple(o[0] for o in out)
 
 
+def aliasing_frame_fraction(fs, alias_order, wind, D, n_fold=3, f_min=1e-3, n_f=2000):
+    """Variance of the aliasing measured in ONE frame at rate fs, as a fraction of the snapshot variance the calibration gives (A10):
+    integral over [0, fs/2] of the folded, exposure-filtered unit PSD of radial order alias_order (P1 of frame_spectra). This is the
+    open-loop value (K = 1) of the aliasing integral T_a of the loop tables: the budget applies it, and the loop rejection, by itself."""
+    f = np.geomspace(f_min, 0.5 * fs, n_f)
+    w = _trapz_weights(f)
+    w[0] += f_min
+    return float(frame_spectra(f, fs, alias_order, wind, D, n_fold, 0.0)[1] @ w)
+
+
 def gain_margin(l0):
     """Largest stable x for the loop gain x*l0(f) (f from ~0 to Nyquist): smallest -1/Re(l0) at the phase crossovers."""
     re, im = l0.real, l0.imag

@@ -1,0 +1,33 @@
+# aoeb study file of the e2e products (calibration.py writes them in the aoeb layout, naming.py): the budget machine reads them as any
+# aoeb root.   from aoeb.config import Config; m = Config.load('budget_e2e.yml', ['paths.specula_dir=<this folder>']).machine()
+# (calibration.machine() does exactly that). Keys: aoeb/config/defaults.yml.
+paths:
+  root_dir: /raid1/mmenessini/calibration/WFSW
+  specula_dir: null                     # set to this folder by calibration.machine() (atmosphere.from_specula is read from it)
+  main: ristretto_main.yml
+  pupilstop_tag: vlt_pupil_220pixels
+  dm_tag: bmc2k_vlt
+
+telescope: {diameter: 8.2, L0: 25.0}
+
+atmosphere:
+  from_specula: ristretto_main.yml       # heights, Cn2 and the wind_speed block of the e2e simulation
+
+sensors:
+  n_subaps: [10, 14, 24, 36, 48]
+  modes_per_subap: {10: [54], 14: [54, 100], 24: [54, 100, 300], 36: [54, 100, 300, 800], 48: [54, 100, 300, 800, 1300]}
+  n_modes_ho: 1300                      # 'multistage' is not calibrated in e2e (no aliasing run with 1300 modes corrected below 48x48)
+  rMods: [0.0, 0.5, 1.0, 2.0, 3.0]
+  slopes_from_intensity: false
+
+detector: {ron_e: 0.5, qe: 0.2, excess_noise: false, excess_delta: 1.0}    # cred_vis / cred_nir of ristretto_main.yml
+
+wavelengths:
+  sensing_nm: [900.0, 1300.0]           # pyr_vis / pyr_nir; any other wavelength is derived from the nearest of these (A37)
+  science_nm: 1650.0
+
+loop:
+  scenarios: [standard]
+
+scan:
+  seeings: [0.6, 0.75, 0.9, 1.05]

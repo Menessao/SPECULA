@@ -73,9 +73,30 @@ def read_fits(path, ext=None, hint=None):
         raise FileNotFoundError(f'{path} not found' + (f' (created by: {hint})' if hint else '')) from e
 
 
-def write_fits(path, data, overwrite=True, header=None):
+def write_fits(path, data, overwrite=True, header=None, **cards):
+    """`cards`: extra header keywords (upper-cased, 8 characters), e.g. wvl_nm=900 -> WVL_NM (see naming.py)."""
     os.makedirs(op.dirname(op.abspath(path)), exist_ok=True)
-    fits.writeto(path, np.asarray(data), header, overwrite=overwrite)
+    hdr = fits.Header() if header is None else header.copy()
+    for k, v in cards.items():
+        if v is not None:
+            hdr[k.upper()[:8]] = v
+    fits.writeto(path, np.asarray(data), hdr, overwrite=overwrite)
+
+
+def set_header(path, **cards):
+    """Add / replace keywords in the primary header of an existing file (e.g. WVL_NM of an IM written by SPECULA)."""
+    with fits.open(path, mode='update') as hdul:
+        for k, v in cards.items():
+            if v is not None:
+                hdul[0].header[k.upper()[:8]] = v
+
+
+def header_value(path, key, default=None):
+    """Keyword of the primary header, `default` when it (or the file) is missing."""
+    try:
+        return fits.getheader(path).get(key.upper()[:8], default)
+    except FileNotFoundError:
+        return default
 
 
 # ----------------------------------------------------------------------------- pupil geometry

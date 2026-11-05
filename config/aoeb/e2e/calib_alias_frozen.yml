@@ -1,0 +1,64 @@
+# Test of the frame-rate dependence of the aliasing (test_alias_rate.py): as calib_wfs_aliasing.yml, but with the REAL frozen-flow atmosphere
+# of ristretto_main.yml instead of independent screens. The N modes are removed exactly at every step; noiseless cameras at one time step,
+# whose frames are binned afterwards to any exposure.
+main_override:
+  total_time:        3.0
+
+remove: ['kalman', 'kpred', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes',
+         'pyr_modes_vis', 'pyr_modes_nir']
+
+prop_override:
+  source_dict_ref:   ['source_vis', 'source_nir']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']
+  outputs:           ['out_source_vis_ef', 'out_source_nir_ef']
+
+atmo_modes:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  nmodes:            1300                    # overridden
+  inputs:
+    in_ef:           ['prop.out_source_vis_ef']
+  outputs:           ['out_modes']
+
+ef_prop_vis:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_vis_ef'
+    in_ef2: 'dm.out_layer'
+  outputs: ['out_ef']
+
+ef_prop_nir:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_nir_ef'
+    in_ef2: 'dm.out_layer'
+  outputs: ['out_ef']
+
+dm_override:
+  inputs:
+    in_command:      'atmo_modes.out_modes'
+
+pyr_vis_override:
+  inputs:
+    in_ef:            'ef_prop_vis.out_ef'
+
+pyr_nir_override:
+  inputs:
+    in_ef:            'ef_prop_nir.out_ef'
+
+cred_vis_override:
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+
+cred_nir_override:
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+
+data_store_override:
+  create_tn: false
+  inputs:
+    input_list: ['vis_frames-cred_vis.out_pixels', 'nir_frames-cred_nir.out_pixels']

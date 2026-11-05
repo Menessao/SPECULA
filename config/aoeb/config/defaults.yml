@@ -43,6 +43,7 @@ loop:
   scenarios: [standard, multistage]
   n_fold: 3
   max_sensitivity: 2.0                  # modulus margin: gains keep the peak rejection max|1/(1+L)| <= 2 (6 dB); null: up to 98 % of the stability limit
+  wiener_order: 2                       # controller wiener: order of the per-mode Wiener POL filters (wiener.py)
 
 scan:
   seeings: [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]

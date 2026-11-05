@@ -19,7 +19,7 @@ pyr_slopes_vis_override:
   pupdata_object:         'pyr_pupdata_10x10'
 
 pyr_modes_vis_override:
-  recmat_object:     'pyr2.0_10x10_wvl900_bmc2k_vlt_54modes_rec' 
+  recmat_object:     'pyr2.0_10x10_wvl900_54modes_rec'
 
 
 pyr_nir_override:
@@ -30,7 +30,7 @@ pyr_slopes_nir_override:
   pupdata_object:         'pyr_pupdata_24x24'
 
 pyr_modes_nir_override:
-  recmat_object:     'pyr0.0_24x24_wvl1300_bmc2k_vlt_300modes_rec' 
+  recmat_object:     'pyr0.0_24x24_wvl1300_300modes_rec'
 
 prop_override:
   source_dict_ref:   ['source_vis', 'source_nir']
@@ -47,4 +47,4 @@ data_store_override:
                   'vis_frames-cred_vis.out_pixels',          # noisy frames
                 ]
 
-remove: ['kalman', 'kdelay', 'dm', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir','res_modes']
+remove: ['kalman', 'kpred', 'dm', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir','res_modes']

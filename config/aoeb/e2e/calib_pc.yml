@@ -1,0 +1,138 @@
+# Interaction matrices of BOTH pyramids (VIS and NIR) measured on a perfectly corrected atmosphere (the aoeb "PC IM", the optical gain
+# of the budget machine): the N controlled modes of each random screen are removed by a second DM through a correction vector of ones
+# (BaseValue in <root>/data, aoeb.generation.save_correction_vector); the push-pull DM is added on top.
+#
+#   specula ristretto_main.yml calib_pc.yml overrides.yml        (written and run by calibration.py, step `pc`)
+#
+# ONE run per case: `ncycles` push-pull cycles (= the number of screens) of 2 N steps; atmo_random draws a new screen every 2 N steps
+# (update_interval), so every cycle sees its own screen, and the ImCalibrator averages the cycles (it divides by the number of
+# commands of every mode). One seed provides (8192 / pixel_pupil)^2 = 1369 pupil-sized screens.
+# calibration.py overrides: main.{root_dir, time_step, total_time}, cred_*.dt, pyr_*.{pup_diam, pup_dist, mod_amp, wavelengthInNm},
+# source_*.wavelengthInNm, pyr_slopes_*.pupdata_object, seeing_random.constant, atmo_random.{update_interval, seed},
+# modal_analysis_random.nmodes, scale_random.constant_mul_data, dm_random.nmodes, dm.nmodes, pushpull.{nmodes, ncycles},
+# pyr_im_calibrator_*.{im_tag, nmodes}.
+
+seeing_random:
+  class:             'RandomGenerator'
+  amp:               0.0
+  constant:          0.9                 # overridden [arcsec]
+  distribution:      'UNIFORM'
+  outputs: ['output']
+
+atmo_random:
+  class:             'AtmoRandomPhase'
+  simul_params_ref:  'main'
+  L0:                25                  # [m] as atmo.L0 of ristretto_main.yml
+  update_interval:   2600                # overridden: 2 N steps per screen
+  source_dict_ref:   ['source_vis', 'source_nir']
+  inputs:
+    seeing: 'seeing_random.output'
+    pupilstop: 'pupilstop'
+  outputs: ['out_source_vis_ef', 'out_source_nir_ef']
+
+# Modal analysis of the turbulence (OPD: the same for both sources), scaled by the correction vector, applied by a second DM
+modal_analysis_random:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  nmodes:            1300                # overridden
+  inputs:
+    in_ef: 'atmo_random.out_source_vis_ef'
+  outputs: ['out_modes']
+
+scale_random:
+  class:             'BaseOperation'
+  constant_mul_data: 'correction_vector_1300modes_c1.00-1.00'   # overridden: stem of the BaseValue file in <root>/data
+  inputs:
+    in_value1: 'modal_analysis_random.out_modes'
+  outputs: ['out_value']
+
+dm_random:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'
+  m2c_object:        'bmc2k_vlt_m2c'
+  nmodes:            1300                # overridden
+  height:            0
+  inputs:
+    in_command: 'scale_random.out_value'
+  outputs: ['out_layer']
+
+atmo_pc_vis:
+  class:             'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_vis_ef'   # turbulence
+    in_ef2: 'dm_random.out_layer'             # correction of the N modes
+  outputs: ['out_ef']
+
+atmo_pc_nir:
+  class:             'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_nir_ef'
+    in_ef2: 'dm_random.out_layer'
+  outputs: ['out_ef']
+
+# Corrected turbulence + the push-pull DM
+ef_mode_vis:
+  class:             'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_pc_vis.out_ef'
+    in_ef2: 'dm.out_layer'
+  outputs: ['out_ef']
+
+ef_mode_nir:
+  class:             'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_pc_nir.out_ef'
+    in_ef2: 'dm.out_layer'
+  outputs: ['out_ef']
+
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       1300                     # overridden
+  ncycles:      70                       # overridden: number of screens
+  amp:          25                       # [nm], as aoeb's calib_pc.yml
+  outputs:      ['output']
+
+pyr_im_calibrator_vis:
+  class:        'ImCalibrator'
+  nmodes:       1300                     # overridden
+  im_tag:       'pyr_im_pc_vis'          # overridden
+  overwrite:    true
+  inputs:
+    in_slopes:    'pyr_slopes_vis.out_slopes'
+    in_commands:  'pushpull.output'
+
+pyr_im_calibrator_nir:
+  class:        'ImCalibrator'
+  nmodes:       1300                     # overridden
+  im_tag:       'pyr_im_pc_nir'          # overridden
+  overwrite:    true
+  inputs:
+    in_slopes:    'pyr_slopes_nir.out_slopes'
+    in_commands:  'pushpull.output'
+
+dm_override:
+  sign: 1                                 # as calib_im.yml (the diffraction-limited IM): same sign convention
+  inputs:
+    in_command: 'pushpull.output'
+
+pyr_vis_override:
+  inputs:
+    in_ef: 'ef_mode_vis.out_ef'
+
+pyr_nir_override:
+  inputs:
+    in_ef: 'ef_mode_nir.out_ef'
+
+cred_vis_override:
+  photon_noise:   false
+  readout_noise:  false
+  excess_noise:   false
+
+cred_nir_override:
+  photon_noise:   false
+  readout_noise:  false
+  excess_noise:   false
+
+remove: ['atmo', 'seeing', 'wind_speed', 'wind_direction', 'prop', 'data_store', 'pyr_modes_vis', 'pyr_modes_nir',
+         'dm_modes', 'res_modes', 'atmo_modes', 'kalman', 'kpred', 'coro_psf_vis', 'coro_psf_nir']

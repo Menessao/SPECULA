@@ -17,13 +17,13 @@ import pandas as pd
 
 from . import utils
 from .filter_optimizers import DEFAULT_FF_GRID, IirControllers, IirTables, LoopTables
-from .naming import Paths, snap_seeing
-from .noise import Detector, PupilGeometry, SlopeNoise, measure_slope_norm, slope_noise_coefficients
-from .reconstructors import read_rec
+from .naming import Paths, nearest_wavelength, snap_seeing
+from .noise import Detector, PupilGeometry, SlopeNoise, measure_slope_norm, slope_noise_coefficients, slope_noise_cov
+from .reconstructors import compute_reconstructor, read_rec, save_rec
 
 DEFAULT_MODES_PER_SUBAP = {12: 50, 16: 150, 24: 300, 48: 1200}
 SCENARIOS, CONTROLLERS = ('standard', 'multistage'), ('int', 'leaky', 'wiener')      # (an IirControllers is also accepted)
-STEPS = dict(pupdata='ErrorBudgetGenerator.calibrate_pupdata (step 1)', slopes='calibrate_alias_sn_thrp (step 2)',
+STEPS = dict(pupdata='ErrorBudgetGenerator.calibrate_pupdata (step 1)', im_dl='calibrate_im_dl (step 3)', slopes='calibrate_alias_sn_thrp (step 2)',
              avgframe='calibrate_alias_sn_thrp (step 2)', rec='compute_recs (step 4)', alias='compute_aliases (step 5)',
              im_pc='calibrate_im_pc (step 6)', vec='calibrate_im_pc_levels (step 6b: save_correction_vector)',
              kl='the KL basis of the SPECULA calibration')
@@ -61,6 +61,7 @@ class Calibration:
     mixing: Callable = None         # () -> R @ IM_PC, read from disk on demand (crosstalk only)
     og_by_level: dict = field(default_factory=dict)  # (max_corr, min_corr) of the correction vector -> og ((1, 1) = perfect)
     alias_seeing: float = None      # seeing of the aliasing product (the budget rescales it to the requested seeing)
+    source_wavelength: float = None  # wavelength of the products it comes from (A37)
 
     @property
     def thrp(self):
@@ -172,7 +173,7 @@ class ErrorBudgetMachine:
         self.freq_min, self.freq_step = float(freq_min), float(freq_step)
         self._missing_modes = set()
         self.wiener_order = int(wiener_order)    # controller='wiener': order of the per-mode Wiener POL filters (wiener.py)
-        self._kl, self._cal, self._orders = None, {}, {}
+        self._kl, self._cal, self._calw, self._orders, self._derived = None, {}, {}, {}, set()
         self._modes_cache, self._pupil_cache, self._recs, self._norms = None, None, OrderedDict(), {}
         self.skipped = []
         self._tables, self._tables_cache = OrderedDict(), tables_cache
@@ -228,31 +229,73 @@ class ErrorBudgetMachine:
         r0 = float(utils.r0_from_seeing(seeing))
         return self._kl[2][:N] * r0 ** (-5 / 3), self._kl[1][:N], r0
 
+    # ---- wavelengths (A37)
+    def source_wavelength(self, rMod, n_subap, N_corr, wl):
+        """Wavelength of the products used at sensing wavelength wl [nm]: wl itself when it has perfect-correction IMs (any seeing),
+        else the nearest calibrated wavelength in log(lambda) (warning). N_corr None: wavelengths with a diffraction-limited IM (enough
+        for an SVD reconstructor). wl None: the untagged products."""
+        if wl is None:
+            return None
+        if (self._has_im(rMod, n_subap, wl) if N_corr is None else self.paths.at(wl).simulated_seeings(rMod, n_subap, N_corr)):
+            return wl
+        cands = self.paths.calibrated_wavelengths(rMod, n_subap, N_corr)
+        if not cands:
+            what = 'a diffraction-limited IM' if N_corr is None else f'{N_corr} modes corrected'
+            raise FileNotFoundError(f'no calibrated wavelength for {self.paths.at(None).base(rMod, n_subap)} with {what} '
+                                    f'(created by {STEPS["im_dl" if N_corr is None else "im_pc"]})')
+        wl0 = nearest_wavelength(wl, cands)
+        key = (float(rMod), int(n_subap), N_corr, wl, wl0)
+        if key not in self._derived:
+            self._derived.add(key)
+            warnings.warn(f'{self.paths.at(wl).base(rMod, n_subap)}, {f"{N_corr} modes corrected" if N_corr else "IM"}: not calibrated at {wl:g} nm, derived from '
+                          f'{wl0:g} nm (IM x {wl0 / wl:.4f}, equivalent seeing x {(wl0 / wl) ** 1.2:.4f})')
+        return wl0
+
+    @staticmethod
+    def _wl(wl):
+        return None if wl is None else float(round(float(wl)))          # tag resolution 1 nm (A29)
+
     # ---- calibration products
     def calibration(self, rMod, n_subap, seeing, N=None, N_corr=None, rec=('svd',), wavelength_nm=None):
-        """rec: ('svd',), ('ml', n_phot) or ('map', n_phot). The products of the seeing rounded to 0.1 arcsec when it was simulated;
-        otherwise they are estimated from the simulated seeings, with a warning (see _interpolate)."""
+        """rec: ('svd',), ('ml', n_phot) or ('map', n_phot). The products of the seeing rounded to 0.05 arcsec when it was simulated;
+        otherwise they are estimated from the simulated seeings, with a warning (see _interpolate). A sensing wavelength without
+        products is derived from the nearest calibrated one (A37): a pyramid at wl and seeing s sees the same phase in radians as at
+        wl0 and s_eff = s (wl0 / wl)^(6/5), so the products of wl0 at s_eff are used, with the IMs scaled by wl0 / wl and the
+        reconstructors recomputed from the scaled IM (ensure_rec)."""
         N = N or self.max_modes(n_subap)
         N_corr = N_corr or N
-        wl = self.wavelength_nm if wavelength_nm is None else wavelength_nm
+        wl = self._wl(self.wavelength_nm if wavelength_nm is None else wavelength_nm)
+        wl0 = self.source_wavelength(rMod, n_subap, N_corr, wl)
+        k = 1.0 if wl0 == wl else (wl0 / wl) ** 1.2                      # seeing at wl0 equivalent to seeing at wl: k * seeing
+        key = (float(rMod), int(n_subap), float(seeing), int(N), int(N_corr), tuple(rec), wl)
+        if key not in self._calw:
+            cal = self._calibration0(rMod, n_subap, float(seeing) * k, N, N_corr, tuple(rec), wl0, wl)
+            if k != 1.0:                       # back to the units of wl: seeing / k, residual [nm] of the PC levels x wl / wl0
+                cal = _replace(cal, alias_seeing=cal.alias_seeing / k, og_levels={r * wl / wl0: v for r, v in cal.og_levels.items()})
+            cal.source_wavelength = wl0
+            self._calw[key] = cal
+        return self._calw[key]
+
+    def _calibration0(self, rMod, n_subap, seeing, N, N_corr, rec, wl0, wl):
+        """Calibration from the products of wl0 at the seeing `seeing` of wl0 (alias_seeing and og_levels in the units of wl0)."""
         s_tag = snap_seeing(seeing)
-        simulated = op.exists(self.paths.at(wl).im_pc(rMod, n_subap, s_tag, N_corr))
+        simulated = op.exists(self.paths.at(wl0).im_pc(rMod, n_subap, s_tag, N_corr))
         s_key = s_tag if simulated else ('estimated', float(seeing))
-        key = (float(rMod), int(n_subap), s_key, int(N), int(N_corr), tuple(rec), wl)
+        key = (float(rMod), int(n_subap), s_key, int(N), int(N_corr), tuple(rec), wl0, wl)
         if key not in self._cal:
-            self._cal[key] = (self._load(rMod, n_subap, s_tag, N, N_corr, rec, wl) if simulated else
-                              self._interpolate(rMod, n_subap, float(seeing), N, N_corr, rec, wl))
+            self._cal[key] = (self._load(rMod, n_subap, s_tag, N, N_corr, rec, wl0, wl) if simulated else
+                              self._interpolate(rMod, n_subap, float(seeing), N, N_corr, rec, wl0, wl))
         return self._cal[key]
 
-    def _interpolate(self, rMod, n_subap, seeing, N, N_corr, rec, wl):
+    def _interpolate(self, rMod, n_subap, seeing, N, N_corr, rec, wl0, wl):
         """Calibration at a seeing that was not simulated: optical gains (perfect and partial correction) and noise coefficients by a
         quadratic least-squares fit against the simulated seeings (linear with 2 of them, constant with 1); aliasing and crosstalk from
         the nearest simulated seeing (the budget rescales the aliasing variance by (seeing / that seeing)^(5/3), Kolmogorov)."""
-        P = self.paths.at(wl)
+        P = self.paths.at(wl0)
         sims = P.simulated_seeings(rMod, n_subap, N_corr)
         if not sims:
             raise FileNotFoundError(f'no seeing simulated for {P.sim(rMod, n_subap, seeing, N_corr)} (created by {STEPS["im_pc"]})')
-        cals = [self.calibration(rMod, n_subap, s, N, N_corr, rec, wl) for s in sims]
+        cals = [self._calibration0(rMod, n_subap, s, N, N_corr, rec, wl0, wl) for s in sims]
         near = int(np.argmin(np.abs(np.asarray(sims) - seeing)))
         fit = lambda values: regress(sims, values, seeing)
         og = fit([c.og for c in cals])
@@ -267,7 +310,8 @@ class ErrorBudgetMachine:
         levels = {self._level_residual(P, N_corr, seeing, lvl): v for lvl, v in by_level.items()}
         kind = {1: 'constant', 2: 'linear'}.get(len(sims), 'quadratic')
         outside = not sims[0] <= seeing <= sims[-1]
-        warnings.warn(f'seeing {seeing:g} arcsec not simulated for {P.base(rMod, n_subap)}, {N_corr} modes corrected: optical gains and '
+        via = '' if wl0 == wl else f' (equivalent seeing of {wl:g} nm)'
+        warnings.warn(f'seeing {seeing:g} arcsec{via} not simulated for {P.base(rMod, n_subap)}, {N_corr} modes corrected: optical gains and '
                       f'noise coefficients by {kind} regression over the simulated seeings {sims}'
                       f'{" (EXTRAPOLATED)" if outside else ""}; aliasing and crosstalk from {sims[near]:g} arcsec')
         return Calibration(N, N_corr, og, cals[near].alias_rms, noise, levels, cals[near].mixing, og_by_level=by_level,
@@ -308,23 +352,73 @@ class ErrorBudgetMachine:
                 self._recs.popitem(last=False)
         return self._recs[path]
 
-    def _load(self, rMod, n_subap, seeing, N, N_corr, rec_spec, wl):
-        P = self.paths.at(wl)
+    def ensure_rec(self, rMod, n_subap, N, rec_spec=('svd',), seeing=None, wavelength_nm=None, overwrite=False):
+        """Path of the reconstructor of N modes at a sensing wavelength, computed and saved if missing (A37): from the IM of that
+        wavelength, or from the IM of the nearest calibrated wavelength scaled by wl0 / wl. rec_spec ('svd',), ('ml', n_phot) or
+        ('map', n_phot); ML / MAP need the seeing (noise weights from the average frame, MAP prior) and use the full sx-sy covariance."""
+        wl = self._wl(self.wavelength_nm if wavelength_nm is None else wavelength_nm)
+        wl0 = self.source_wavelength(rMod, n_subap, None if rec_spec[0] == 'svd' else N, wl)
+        k = 1.0 if wl0 == wl else (wl0 / wl) ** 1.2
+        s_rec = None if seeing is None else snap_seeing(seeing)
+        return self._ensure_rec(rMod, n_subap, N, tuple(rec_spec), s_rec, wl, wl0,
+                                None if seeing is None else snap_seeing(seeing * k), overwrite)
+
+    def _has_im(self, rMod, n_subap, wl):
+        return op.exists(self.paths.at(wl).im_dl(rMod, n_subap))
+
+    def _ensure_rec(self, rMod, n_subap, N, rec_spec, s_rec, wl, wl0, s0, overwrite=False):
+        """s_rec: seeing tag of the reconstructor (units of wl); s0: seeing of the wl0 products for the noise weights."""
         method = rec_spec[0]
-        rpath = P.rec(rMod, n_subap, N, method, rec_spec[1] if len(rec_spec) > 1 else None, seeing)
+        n_phot = rec_spec[1] if len(rec_spec) > 1 else None
+        Pw = self.paths.at(wl)
+        path = Pw.rec(rMod, n_subap, N, method, n_phot, s_rec)
+        if op.exists(path) and not overwrite:
+            return path
+        own = self._has_im(rMod, n_subap, wl)
+        src = wl if own else wl0
+        im = utils.read_fits(_need(self.paths.at(src).im_dl(rMod, n_subap), 'im_dl'))
+        if not own:
+            im = im * (wl0 / wl)                                             # IM(wl) = IM(wl0) wl0 / wl (linear regime)
+        cn = cxy = ca = None
+        info = dict(wvl_nm=wl, src_wvl=src)
+        if method != 'svd':
+            if n_phot is None or s_rec is None:
+                raise ValueError(f"reconstructor '{method}' needs n_phot and the seeing")
+            P0 = self.paths.at(wl0)
+            frame = utils.read_fits(_need(P0.avgframe(rMod, n_subap, s0, N), 'avgframe'))
+            cn, cxy = slope_noise_cov(frame, self.slope_geometry(rMod, n_subap, s0, N, wl0, frame), n_phot, self.detector,
+                                      self.slopes_from_intensity)
+            ca = self.turbulence(s_rec, N)[0] if method == 'map' else None
+            info.update(method=method, n_phot=float(n_phot), ron=self.detector.ron_e, f2=self.detector.f2, seeing=s_rec)
+        save_rec(path, compute_reconstructor(im, N, method, cn_diag=cn, ca_diag=ca, cn_xy=cxy), **info)
+        if not own:
+            warnings.warn(f'saved {op.basename(path)}, derived from the {wl0:g} nm IM')
+        return path
+
+    def _load(self, rMod, n_subap, seeing, N, N_corr, rec_spec, wl0, wl):
+        """Products of wl0 at the (simulated) seeing `seeing` of wl0, used at the sensing wavelength wl: IMs x wl0 / wl, the
+        reconstructor of wl (ensure_rec). The slopes are those of wl (same phase in radians), so the aliasing is std(R_wl @ slopes)."""
+        P = self.paths.at(wl0)
+        scale = 1.0 if wl0 == wl else wl0 / wl
+        method = rec_spec[0]
+        rpath = self._ensure_rec(rMod, n_subap, N, rec_spec, snap_seeing(seeing / scale ** 1.2), wl, wl0, seeing)
         rec = self._read_rec(rpath)
-        og_of = lambda im: np.einsum('ij,ji->i', rec, im[:, :N])
+        og_of = lambda im: np.einsum('ij,ji->i', rec, im[:, :N]) * scale
         frame = utils.read_fits(_need(P.avgframe(rMod, n_subap, seeing, N_corr), 'avgframe'))
-        noise = slope_noise_coefficients(rec, frame, self.slope_geometry(rMod, n_subap, seeing, N_corr, wl, frame), self.slopes_from_intensity)
-        apath = P.alias(rMod, n_subap, seeing, N, N_corr)
-        alias = (utils.read_fits(apath) if method == 'svd' and op.exists(apath)
-                 else np.std(rec @ utils.read_fits(_need(P.slopes(rMod, n_subap, seeing, N_corr), 'slopes')).T, axis=1))
+        noise = slope_noise_coefficients(rec, frame, self.slope_geometry(rMod, n_subap, seeing, N_corr, wl0, frame), self.slopes_from_intensity)
+        apath, spath = P.alias(rMod, n_subap, seeing, N, N_corr), P.slopes(rMod, n_subap, seeing, N_corr)
+        if op.exists(apath) and (not op.exists(spath) or (method == 'svd' and scale == 1.0)):
+            alias = utils.read_fits(apath) / scale                           # SVD aliasing of wl0: std x wl / wl0
+            if method != 'svd':
+                warnings.warn(f'{op.basename(spath)} missing: aliasing of the SVD reconstructor used for the {method} one')
+        else:
+            alias = np.std(rec @ utils.read_fits(_need(spath, 'slopes')).T, axis=1)
         by_level = {lvl: og_of(utils.read_fits(P.im_pc(rMod, n_subap, seeing, N_corr, None if lvl == (1.0, 1.0) else lvl)))
                     for lvl in P.pc_levels(rMod, n_subap, seeing, N_corr)}
         levels = {self._level_residual(P, N_corr, seeing, lvl): og for lvl, og in by_level.items()}
         im_path = _need(P.im_pc(rMod, n_subap, seeing, N_corr), 'im_pc')
         return Calibration(N, N_corr, og_of(utils.read_fits(im_path)), np.asarray(alias)[:N], noise, levels,
-                           lambda: read_rec(rpath) @ utils.read_fits(im_path)[:, :N], og_by_level=by_level, alias_seeing=seeing)
+                           lambda: read_rec(rpath) @ (utils.read_fits(im_path)[:, :N] * scale), og_by_level=by_level, alias_seeing=seeing)
 
     # ---- loop tables
     def _loop_tables(self, fs, latency, orders, alias_order, ff_grid, n_fold, iir=None, wiener=False):

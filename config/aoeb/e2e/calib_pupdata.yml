@@ -18,5 +18,5 @@ main_override:
 
 # Remove unnecessary components to avoid issues and speed up the calibration
 remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'dm', 'pyr_slopes_vis', 'pyr_slopes_nir',
-        'kalman', 'kdelay', 'dm_modes', 'coro_psf_vis', 'coro_psf_nir', #  'filter', 'bootstrap'
+        'kalman', 'kpred', 'dm_modes', 'coro_psf_vis', 'coro_psf_nir', #  'filter', 'bootstrap'
             'pyr_modes_vis', 'pyr_modes_nir', 'atmo_modes', 'res_modes']

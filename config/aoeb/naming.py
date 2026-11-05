@@ -1,6 +1,6 @@
 """File layout shared by the generator and the budget machine (one place, one scheme).
 
-Tag resolution (values are ROUNDED to it, in the generator and in the machine alike): seeing 0.1 arcsec, rMod 0.1, wavelength 1 nm,
+Tag resolution (values are ROUNDED to it, in the generator and in the machine alike): seeing 0.05 arcsec (s0.9, s0.75), rMod 0.1, wavelength 1 nm,
 L0 1 m. The generator simulates the rounded value, so a product is what its name says; the machine rescales the aliasing to the
 requested seeing (alias variance ~ seeing^(5/3)).
 
@@ -20,6 +20,10 @@ Per sensing wavelength: <base> = pyr{r}_{n}x{n}[_wvl{lambda_nm}]  (suffix only i
   frames/   <base>_s{seeing}_{N}modes_avgframe.fits
   slopenulls/ <base>_s{seeing}_{N}modes_sn.fits               (mean slopes)
   throughput/ <base>_s{seeing}_{N}modes_thrp.fits             (fraction of detector counts in the pupils)
+
+Every product carries its sensing wavelength in the primary header, WVL_NM. A product that was not calibrated at its wavelength but
+derived from another one (reconstructors made by the budget machine from the scaled IM of the nearest calibrated wavelength) also
+carries SRC_WVL, the wavelength of the products it comes from (A37 in ASSUMPTIONS.md).
 """
 import glob
 import re
@@ -27,10 +31,24 @@ import os.path as op
 from dataclasses import dataclass, replace
 from typing import Optional
 
+WVL_KEY, SRC_KEY = 'WVL_NM', 'SRC_WVL'          # FITS keywords: sensing wavelength of a product, wavelength it was derived from
 
 
 def snap_seeing(seeing):
-    return round(float(seeing), 1)
+    """Seeing rounded to the tag resolution, 0.05 arcsec."""
+    return round(round(float(seeing) * 20.0) / 20.0, 2)
+
+
+def seeing_tag(seeing):
+    """0.9 -> '0.9', 1.0 -> '1.0', 0.75 -> '0.75'."""
+    t = f'{seeing:.2f}'
+    return t[:-1] if t.endswith('0') else t
+
+
+def nearest_wavelength(wl, candidates):
+    """The candidate closest to wl in log(wavelength) (the smallest seeing remap, see A37)."""
+    import math
+    return min(candidates, key=lambda c: (abs(math.log(c / wl)), c))
 
 
 @dataclass(frozen=True)
@@ -50,7 +68,7 @@ class Paths:
         return tag if self.wavelength_nm is None else f'{tag}_wvl{self.wavelength_nm:.0f}'
 
     def sim(self, rMod, n_subap, seeing, N):
-        return f'{self.base(rMod, n_subap)}_s{seeing:.1f}_{N:.0f}modes'
+        return f'{self.base(rMod, n_subap)}_s{seeing_tag(seeing)}_{N:.0f}modes'
 
     def _f(self, folder, name):
         return op.join(self.root, folder, name + '.fits')
@@ -100,6 +118,19 @@ class Paths:
                 out.append(float(m.group(1)))
         return sorted(set(out))
 
+    def calibrated_wavelengths(self, rMod, n_subap, N=None):
+        """Sensing wavelengths [nm] calibrated for this sensor, sorted: with at least one perfect-correction IM on disk (N modes
+        corrected), or with a diffraction-limited IM (N None)."""
+        out = set()
+        stem = f'pyr{rMod:.1f}_{n_subap:.0f}x{n_subap:.0f}_wvl'
+        pat, rx = ((stem + '*_im_dl', r'_wvl([0-9]+)_im_dl\.fits$') if N is None else
+                   (stem + f'*_s*_{N:.0f}modes_im_pc', r'_wvl([0-9]+)_s[0-9.]+_[0-9]+modes_im_pc\.fits$'))
+        for p in glob.glob(self._f('im', pat)):
+            m = re.search(rx, p)
+            if m:
+                out.add(float(m.group(1)))
+        return sorted(out)
+
     def pc_levels(self, rMod, n_subap, seeing, N):
         """(max_corr, min_corr) of the partial-correction IMs on disk, sorted; (1.0, 1.0) stands for the perfect-correction IM."""
         pat = self._f('im', self.sim(rMod, n_subap, seeing, N) + '_im_pc_c*-*')
@@ -116,7 +147,7 @@ class Paths:
         """SVD: flux independent. ML / MAP: depend on the photons per frame and on the seeing (noise weights, prior)."""
         tag = f'{self.base(rMod, n_subap)}_{N:.0f}modes_rec'
         if method != 'svd':
-            tag += f'_{method}_{n_phot:.4g}ph_s{seeing:.1f}'
+            tag += f'_{method}_{n_phot:.4g}ph_s{seeing_tag(seeing)}'
         return self._f('rec', tag)
 
     # ---- aliasing run products
@@ -136,7 +167,7 @@ class Paths:
         return self._f('throughput', self.sim(rMod, n_subap, seeing, N) + '_thrp')
 
     def alias(self, rMod, n_subap, seeing, N_rec, N_corr):
-        return self._f('aliasing', f'{self.base(rMod, n_subap)}_s{seeing:.1f}_{N_rec:.0f}modes_corr{N_corr:.0f}_alias')
+        return self._f('aliasing', f'{self.base(rMod, n_subap)}_s{seeing_tag(seeing)}_{N_rec:.0f}modes_corr{N_corr:.0f}_alias')
 
     # ---- cached analytical quantities
     def kl_variance(self, L0, D, pad):

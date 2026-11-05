@@ -65,7 +65,8 @@ signal std(R slopes) -> IM with N modes perfectly corrected -> (optional) IMs wi
 * **Wavelengths.** The pyramid and its source must have the same wavelength: `wavelengths_nm` (sensing, required) sets
   `pyr.wavelengthInNm` and `source_ngs.wavelengthInNm` together in every run. The science source (`science_nm`) is propagated like the NGS
   (same screens, same DM) in the aliasing run. The pupil data are made once (first wavelength), the other products carry `_wvl{nm}`
-  (`pyr3.0_48x48_wvl1650_s0.9_1200modes_im_pc.fits`).
+  (`pyr3.0_48x48_wvl1650_s0.9_1200modes_im_pc.fits`) and `WVL_NM` in their header. One calibrated wavelength is enough: the budget derives
+  the others (section 2, "Wavelengths that were not calibrated").
 * **DM objects.** One tag, `dm_tag` (`bmc2k_vlt`), names them: `{dm_tag}_ifunc`, `{dm_tag}_m2c`, `{dm_tag}_kl_inv`, in SPECULA (overrides)
   and in the budget machine alike.
 * **Correction vectors** (`generation.save_correction_vector`, as your reference script): `<root>/data/correction_vector_{N}modes_c{max}-{min}.fits`
@@ -149,12 +150,22 @@ noise, noise_photon, noise_ron, alias, xtalk, chrom_mult). The terms add in quad
 noise_ron²); a term whose variance is negative (the signed cross term `chrom_mult`) is shown as −sqrt|v|. `variances()` gives the nm² values;
 the arrays of a `BudgetResult` (`r.lag`, `r.residual`, ...) stay variances.
 
-**Seeings that were not simulated.** The products of the seeing rounded to 0.1" are used when that seeing was simulated (the aliasing
+**Seeings that were not simulated.** The products of the seeing rounded to 0.05" are used when that seeing was simulated (the aliasing
 is rescaled to the exact seeing, variance ∝ seeing^(5/3)). Otherwise the calibration is estimated from the simulated seeings, with a warning
 (once per configuration; it also says when the seeing is outside the simulated range, i.e. extrapolated): optical gains (perfect and
 partial correction) and noise coefficients by a quadratic least-squares fit against the simulated seeings (linear with two, constant with
 one), aliasing and crosstalk from the nearest simulated seeing (aliasing rescaled as above). The turbulence and fitting terms are always
 analytic at the exact seeing.
+
+**Wavelengths that were not calibrated** (ASSUMPTIONS A37). `wavelength_nm` may be any value. Without perfect-correction IMs at that
+wavelength, the products of the calibrated wavelength nearest in log λ are used, with a warning: IMs × λ₀/λ, reconstructors recomputed from
+the scaled IM and saved under the requested wavelength (`machine.ensure_rec`, header `SRC_WVL`), everything measured in turbulence at the
+equivalent seeing s·(λ₀/λ)^(6/5), aliasing std(R_λ @ slopes). The seeing grid must reach that equivalent seeing, or the regression
+extrapolates. `calibration(...).source_wavelength` tells which wavelength was used.
+
+**Frame rate and aliasing.** The calibrated aliasing is a snapshot variance, independent of the rate of the run, so the products have no
+rate tag. The budget applies the rate through a temporal model: `aliasing_frame_fraction(fs, order, wind, D)` is the variance kept in one
+frame, and the loop filter comes on top (ASSUMPTIONS A10).
 
 * `flux`: photons/s at the detector (before QE). `latency_s`: latency from the end of the exposure to the command applied, any
   real value (fractional frames allowed); the frame of exposure window + DM hold is part of the model, never add it.

@@ -21,7 +21,7 @@ import yaml
 
 from . import utils
 from .naming import Paths, snap_seeing
-from .noise import PupilGeometry, pixel_fractions, slope_variance_diag
+from .noise import PupilGeometry, pixel_fractions
 from .reconstructors import compute_reconstructor, read_rec, save_rec
 
 HERE = op.dirname(op.abspath(__file__))
@@ -111,13 +111,18 @@ def save_correction_vector(root_dir, max_corr, min_corr, Nmodes, Ncorrmodes=None
 
 
 # ----------------------------------------------------------------------------- post-processing
-def _load_run(scratch, discard):
-    slopes, frames, turb = (utils.read_fits(op.join(scratch, f'{n}.fits')) for n in ('slopes', 'pyr_frames', 'turb_modes'))
+DATA_STORE_NAMES = ('slopes', 'pyr_frames', 'turb_modes')          # data-store names of slopes, frames, turbulence modes (calib_alias_sn_thrp)
+
+
+def _load_run(scratch, discard, names=DATA_STORE_NAMES):
+    """(slopes, frames, turbulence modes or None) of one run; names: data-store names, the turbulence one may be None (not stored)."""
+    slopes, frames = (utils.read_fits(op.join(scratch, f'{n}.fits')) for n in names[:2])
+    turb = utils.read_fits(op.join(scratch, f'{names[2]}.fits')) if names[2] else None
     if not np.any(slopes):
         raise ValueError(f'{scratch}: all the slopes are zero (the SPECULA run produced nothing usable)')
     first = int(np.argmax(np.any(slopes != 0, axis=1)))               # leading all-zero frames are start-up artefacts
     start = max(discard, first)
-    return slopes[start:], frames[start:], turb[start:]
+    return slopes[start:], frames[start:], None if turb is None else turb[start:]
 
 
 def check_independent(turb_modes, tol=0.5):
@@ -129,19 +134,24 @@ def check_independent(turb_modes, tol=0.5):
                       f'{np.nanmedian(r) if r else 1.0:.2f}): check atmo_random.update_interval and seed')
 
 
-def process_aliasing_runs(paths, rMod, n_subap, seeing, N, scratch_dirs, discard=0):
-    """Pool the data-store output of the independent aliasing runs into the products; `slopes` (the "done" marker) is written last."""
-    runs = [_load_run(d, discard) for d in scratch_dirs]
-    slopes, turb = np.concatenate([r[0] for r in runs]), np.concatenate([r[2] for r in runs])
+def process_aliasing_runs(paths, rMod, n_subap, seeing, N, scratch_dirs, discard=0, names=DATA_STORE_NAMES):
+    """Pool the data-store output of the independent aliasing runs into the products; `slopes` (the "done" marker) is written last.
+    names: data-store names of (slopes, frames, turbulence modes), see _load_run. Every product gets WVL_NM = paths.wavelength_nm."""
+    runs = [_load_run(d, discard, names) for d in scratch_dirs]
+    slopes = np.concatenate([r[0] for r in runs])
+    turb = None if runs[0][2] is None else np.concatenate([r[2] for r in runs])
     counts = np.array([len(r[1]) for r in runs], float)
     avg = sum(r[1].mean(axis=0) * c for r, c in zip(runs, counts)) / counts.sum()
-    check_independent(turb)
+    if turb is not None:
+        check_independent(turb)
     thrp = pixel_fractions(avg, PupilGeometry.from_file(paths.pupdata(n_subap), n_subap, avg.shape[0]))[1]
-    utils.write_fits(paths.turbmodes(rMod, n_subap, seeing, N), turb.astype(np.float32))
-    utils.write_fits(paths.avgframe(rMod, n_subap, seeing, N), avg)
-    utils.write_fits(paths.sn(rMod, n_subap, seeing, N), slopes.mean(axis=0))
-    utils.write_fits(paths.thrp(rMod, n_subap, seeing, N), np.array([thrp]))
-    utils.write_fits(paths.slopes(rMod, n_subap, seeing, N), slopes.astype(np.float32))
+    wl = dict(wvl_nm=paths.wavelength_nm, seeing=float(seeing))
+    if turb is not None:
+        utils.write_fits(paths.turbmodes(rMod, n_subap, seeing, N), turb.astype(np.float32), **wl)
+    utils.write_fits(paths.avgframe(rMod, n_subap, seeing, N), avg, **wl)
+    utils.write_fits(paths.sn(rMod, n_subap, seeing, N), slopes.mean(axis=0), **wl)
+    utils.write_fits(paths.thrp(rMod, n_subap, seeing, N), np.array([thrp]), **wl)
+    utils.write_fits(paths.slopes(rMod, n_subap, seeing, N), slopes.astype(np.float32), **wl)
     return thrp
 
 
@@ -150,7 +160,7 @@ def compute_alias_product(paths, rMod, n_subap, seeing, N_rec, N_corr):
     rec = read_rec(paths.rec(rMod, n_subap, N_rec))
     slopes = utils.read_fits(paths.slopes(rMod, n_subap, seeing, N_corr)).astype(float)
     alias = np.std(rec @ slopes.T, axis=1)
-    utils.write_fits(paths.alias(rMod, n_subap, seeing, N_rec, N_corr), alias)
+    utils.write_fits(paths.alias(rMod, n_subap, seeing, N_rec, N_corr), alias, wvl_nm=paths.wavelength_nm, seeing=float(seeing))
     return alias
 
 
@@ -344,6 +354,7 @@ class ErrorBudgetGenerator:
                     'pyr_im_calibrator': {'im_tag': op.basename(path)[:-5], 'nmodes': c.n_modes_max, 'overwrite': True},
                     'pushpull': {'nmodes': c.n_modes_max}, 'dm': {'nmodes': c.n_modes_max},
                     'main': {'total_time': c.n_modes_max * 2 * c.time_step}}))
+                utils.set_header(path, wvl_nm=float(P.wavelength_nm))
 
     def compute_recs(self):
         """4. SVD reconstructors of the first N modes of the diffraction-limited IM."""
@@ -351,21 +362,17 @@ class ErrorBudgetGenerator:
             for N in self.mode_list(n):
                 path = P.rec(rMod, n, N)
                 if self._needed(path):
-                    save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N))
+                    save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N), wvl_nm=float(P.wavelength_nm),
+                             src_wvl=float(P.wavelength_nm))
 
-    def compute_recs_weighted(self, method, flux, fs, detector, seeing, machine, slopes_from_intensity=False):
-        """ML or MAP reconstructors matched to a flux, rate, detector and seeing."""
+    def compute_recs_weighted(self, method, flux, fs, detector, seeing, machine, slopes_from_intensity=None):
+        """ML or MAP reconstructors matched to a flux, rate, detector and seeing (machine.ensure_rec: full sx-sy noise covariance; the
+        machine's detector and slopes_from_intensity are used, the arguments are checked against them)."""
+        if detector != machine.detector or (slopes_from_intensity is not None and slopes_from_intensity != machine.slopes_from_intensity):
+            raise ValueError('compute_recs_weighted: detector / slopes_from_intensity differ from those of the machine')
         n_phot, seeing = detector.n_det(flux, fs), snap_seeing(seeing)
         for (P, n, rMod), N in ((s, N) for s in self._sensors() for N in self.mode_list(s[1])):
-            path = P.rec(rMod, n, N, method, n_phot, seeing)
-            if not self._needed(path):
-                continue
-            frame = utils.read_fits(P.avgframe(rMod, n, seeing, N))
-            cn = slope_variance_diag(frame, machine.slope_geometry(rMod, n, seeing, N, P.wavelength_nm, frame), n_phot, detector,
-                                     slopes_from_intensity)
-            ca = machine.turbulence(seeing, N)[0] if method == 'map' else None
-            save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N, method, cn_diag=cn, ca_diag=ca),
-                     method=method, n_phot=float(n_phot), ron=detector.ron_e, f2=detector.f2, seeing=seeing)
+            machine.ensure_rec(rMod, n, N, (method, n_phot), seeing, P.wavelength_nm, overwrite=self.cfg.overwrite)
 
     def compute_aliases(self):
         """5. aliasing modal signal std(R @ slopes) for the standard and the multistage case."""
@@ -389,7 +396,7 @@ class ErrorBudgetGenerator:
                 'pyr_im_calibrator': {'im_tag': op.basename(path)[:-5], 'nmodes': N, 'overwrite': True}}))
             im = utils.read_fits(path)
             accum = im if accum is None else accum + im
-        utils.write_fits(path, accum / c.n_screens_pc)
+        utils.write_fits(path, accum / c.n_screens_pc, wvl_nm=float(P.wavelength_nm), seeing=float(seeing), n_screen=c.n_screens_pc)
 
     def calibrate_im_pc(self):
         """6. IM with N modes perfectly corrected (correction vector of ones)."""

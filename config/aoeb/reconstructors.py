@@ -4,7 +4,8 @@ D is the interaction matrix (n_slopes, N) in slopes per command unit; modes are 
   SVD : R = D^+                                  (what the SPECULA calibration uses)
   ML  : R = (D^T Cn^-1 D)^-1 D^T Cn^-1           (weighted least squares)
   MAP : R = (D^T Cn^-1 D + Ca^-1)^-1 D^T Cn^-1   (= Ca D^T (D Ca D^T + Cn)^-1)
-Cn: slope noise covariance (diagonal), Ca: modal prior covariance (diagonal, command^2).
+Cn: slope noise covariance (diagonal, or block diagonal with the sx-sy covariance of each subaperture: noise.slope_noise_cov), Ca: modal
+prior covariance (diagonal, command^2).
 ML and MAP depend on the flux through Cn: the file tag carries the photons per frame.
 """
 import os
@@ -21,24 +22,42 @@ def svd_reconstructor(D, rcond=0.0):
     return (vt.T[:, keep] / s[keep]) @ u[:, keep].T
 
 
-def weighted_reconstructor(D, cn_diag, ca_diag=None):
-    """ML (ca_diag None) or MAP reconstructor: (D^T Cn^-1 D [+ Ca^-1])^-1 D^T Cn^-1."""
+def noise_weighted(D, cn_diag, cn_xy=None):
+    """Cn^-1 D. cn_diag: slope variances; cn_xy (n,): covariance of slope j and slope j + n (quad-cell sx_j, sy_j, rows [x; y]):
+    Cn is then block diagonal with 2x2 blocks, inverted in closed form."""
+    D, v = np.asarray(D, float), np.asarray(cn_diag, float)
+    if cn_xy is None:
+        return D / v[:, None]
+    c = np.asarray(cn_xy, float)
+    n = len(c)
+    if len(v) != 2 * n or D.shape[0] != 2 * n:
+        raise ValueError(f'cn_xy needs 2 x {n} slopes, got {len(v)} variances and an IM with {D.shape[0]} rows')
+    vx, vy = v[:n], v[n:]
+    det = vx * vy - c ** 2
+    if np.any(det <= 0):
+        raise ValueError('the slope noise covariance is not positive definite')
+    dx, dy = D[:n], D[n:]
+    return np.vstack([(vy[:, None] * dx - c[:, None] * dy) / det[:, None], (vx[:, None] * dy - c[:, None] * dx) / det[:, None]])
+
+
+def weighted_reconstructor(D, cn_diag, ca_diag=None, cn_xy=None):
+    """ML (ca_diag None) or MAP reconstructor: (D^T Cn^-1 D [+ Ca^-1])^-1 D^T Cn^-1; cn_xy: see noise_weighted."""
     D = np.asarray(D, float)
-    wd = D / np.asarray(cn_diag, float)[:, None]
+    wd = noise_weighted(D, cn_diag, cn_xy)
     h = D.T @ wd
     if ca_diag is not None:
         h = h + np.diag(1.0 / np.asarray(ca_diag, float))
     return cho_solve(cho_factor(h), wd.T)
 
 
-def compute_reconstructor(im, N, method='svd', cn_diag=None, ca_diag=None):
+def compute_reconstructor(im, N, method='svd', cn_diag=None, ca_diag=None, cn_xy=None):
     """Reconstructor for the first N modes of `im` (n_slopes, n_modes_total); method 'svd', 'ml' or 'map'."""
     D = np.asarray(im, float)[:, :N]
     if method == 'svd':
         return svd_reconstructor(D)
     if method not in ('ml', 'map') or cn_diag is None or (method == 'map' and ca_diag is None):
         raise ValueError(f"method '{method}' needs cn_diag (and ca_diag for 'map')")
-    return weighted_reconstructor(D, cn_diag, ca_diag[:N] if method == 'map' else None)
+    return weighted_reconstructor(D, cn_diag, ca_diag[:N] if method == 'map' else None, cn_xy)
 
 
 def save_rec(path, rec, overwrite=True, **info):

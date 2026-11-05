@@ -3,18 +3,71 @@ Helper functions shared by the main_simul, run_simul and plots notebooks of this
 
 The calibration helpers read their files from the module-level ``calib_dir``: to use another
 directory, set ``utils.calib_dir = '...'`` (rebinding the name imported in a notebook is not enough).
+File names are those of aoeb (aoeb/naming.py, written by calibration.py): ``paths(wvl)`` gives them.
+A sensing wavelength without products is derived from the nearest calibrated one (aoeb ASSUMPTIONS.md, A37):
+its reconstructor is computed from the scaled IM and saved, the frames and slopes are those of the
+calibrated wavelength at the equivalent seeing seeing * (wvl0 / wvl)^(6/5).
 """
+import glob
 import os
+import re
 import subprocess
+import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 
 E2E_DIR = os.path.dirname(os.path.abspath(__file__))   # folder of the YAML files
+sys.path.insert(0, os.path.dirname(os.path.dirname(E2E_DIR)))   # config/: the aoeb package
+from aoeb.naming import Paths, nearest_wavelength, snap_seeing                       # noqa: E402
+from aoeb.filter_optimizers import aliasing_frame_fraction                           # noqa: E402
+from aoeb.utils import radial_order                                                  # noqa: E402
 
 calib_dir = '/raid1/mmenessini/calibration/WFSW'
 result_dir = '/raid1/mmenessini/results/WFSW'
+PUPILSTOP_TAG, DM_TAG = 'vlt_pupil_220pixels', 'bmc2k_vlt'
+SEEING = 0.9          # seeing of the calibration products [arcsec] (the first e2e runs were made at 0.88 and are named s0.9)
+D = 8.2               # [m]
+
+
+def paths(wvl):
+    """aoeb file layout of calib_dir at sensing wavelength wvl [nm]."""
+    return Paths(calib_dir, PUPILSTOP_TAG, DM_TAG).at(float(wvl))
+
+
+_MACHINES = {}
+
+
+def machine():
+    """aoeb budget machine of calib_dir (calibration.machine, cached per calib_dir)."""
+    if calib_dir not in _MACHINES:
+        import calibration
+        _MACHINES[calib_dir] = calibration.machine(calibration.E2EConfig(calib_dir=calib_dir))
+    return _MACHINES[calib_dir]
+
+
+def _source(rMod, nSubaps, nCorrModes, wvl, seeing=SEEING):
+    """(wvl0, seeing0): the products of wvl at that seeing, or those of the nearest wavelength with an average frame at the
+    equivalent seeing seeing * (wvl0 / wvl)^(6/5) (rounded to 0.1 arcsec)."""
+    seeing = snap_seeing(seeing)
+    if os.path.exists(paths(wvl).avgframe(rMod, nSubaps, seeing, nCorrModes)):
+        return float(wvl), seeing
+    pat = os.path.join(calib_dir, 'frames', f'pyr{rMod:.1f}_{nSubaps}x{nSubaps}_wvl*_s*_{nCorrModes}modes_avgframe.fits')
+    cands = sorted({float(re.search(r'_wvl([0-9]+)_', p).group(1)) for p in glob.glob(pat)} - {float(wvl)})
+    if not cands:
+        raise FileNotFoundError(f'no average frame for pyr{rMod:.1f}_{nSubaps}x{nSubaps}, {nCorrModes} modes corrected (calibration.py alias)')
+    w0 = nearest_wavelength(float(wvl), cands)
+    s0 = snap_seeing(seeing * (w0 / wvl) ** 1.2)
+    if not os.path.exists(paths(w0).avgframe(rMod, nSubaps, s0, nCorrModes)):
+        raise FileNotFoundError(f'{wvl:g} nm at {seeing} arcsec needs the {w0:g} nm products at {s0} arcsec (not simulated): calibrate '
+                                'that seeing, or use the budget machine (utils.machine()), which interpolates in seeing')
+    return w0, s0
+
+
+def get_rec(rMod, nSubaps, nModes, wvl):
+    """SVD reconstructor (nModes, n_slopes) at wvl [nm]; computed and saved from the scaled IM of the nearest wavelength if missing."""
+    return np.asarray(fits.getdata(machine().ensure_rec(float(rMod), int(nSubaps), int(nModes), ('svd',), None, float(wvl))))
 
 
 ############################ Running SPECULA ############################
@@ -44,27 +97,7 @@ def latest_tn(store_dir=None):
     return sorted(tns)[-1]
 
 
-############################ Reconstructors (main_simul) ############################
-
-def rec_mmse(im, mean_frame, pup, ron_var, rcond=1e-12, use_cross=True, flux=None):
-    """R = (D^T Cn^-1 D)^-1 D^T Cn^-1, with im = D of shape (2N, nmodes)."""
-    f = np.asarray(mean_frame, dtype=np.float64).ravel()
-    if flux is not None:
-        f = f * flux / f.sum()
-    A, B, C, Dp = [f[pup[:, k][pup[:, k] >= 0]] for k in range(4)]
-    F = (A + B + C + Dp).mean()
-    ac, bd = np.maximum(A + C, 0), np.maximum(B + Dp, 0)
-    var_s = (ac + bd + 4 * ron_var) / F**2        # Cn diagonal
-    cov_xy = (bd - ac) / F**2 if use_cross else np.zeros_like(var_s)
-    det = var_s**2 - cov_xy**2
-    inv_d, inv_o = (var_s / det)[:, None], (-cov_xy / det)[:, None]
-    N = var_s.size
-    D = im
-    Cinv_D = np.vstack([inv_d * D[:N] + inv_o * D[N:],
-                        inv_o * D[:N] + inv_d * D[N:]])
-    C_modes = np.linalg.pinv(D.T @ Cinv_D, rcond=rcond, hermitian=True)
-    return C_modes @ Cinv_D.T, C_modes
-
+############################ Reconstructors ############################
 
 def plot_rec_cov(rec,nSubap:int=48):
     plt.loglog(np.arange(rec.shape[0])+1,np.diag(rec @ rec.T)*(nSubap**2)/(48**2))
@@ -105,35 +138,48 @@ def propagated_noise_var(s_phot, s_read, flux, sigma_e, wvl=1.0, excess=1.0):
     read = (s_read * sigma_e * wvl)**2 / flux**2
     return phot, read
 
-def _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes=None):
-    """Mean frame, pupil indices and reconstructor of one pyramid configuration."""
+def _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING):
+    """Mean frame, pupil indices and SVD reconstructor of one pyramid configuration at wvl [nm]."""
     nCorrModes = nModes if nCorrModes is None else nCorrModes
-    tag = f'pyr{rMod:1.1f}_{nSubaps}x{nSubaps}'
-    frame = fits.getdata(os.path.join(calib_dir, 'aliasing', f'{tag}_{nCorrModes}corrmodes_wvl{wvl}_frame.fits'))
-    if frame.ndim == 3:                       # old files: stack of frames
-        frame = np.mean(frame, axis=0)
-    pup = fits.getdata(os.path.join(calib_dir, 'pupils', f'pyr_pupdata_{nSubaps}x{nSubaps}.fits'), 1)
-    rec = fits.getdata(os.path.join(calib_dir, 'rec', f'{tag}_wvl{wvl}_bmc2k_vlt_{nModes}modes_rec.fits'), 1)
-    return frame, pup, rec
+    w0, s0 = _source(rMod, nSubaps, nCorrModes, wvl, seeing)
+    frame = fits.getdata(paths(w0).avgframe(rMod, nSubaps, s0, nCorrModes))
+    pup = fits.getdata(paths(w0).pupdata(nSubaps), 1)
+    return frame, pup, get_rec(rMod, nSubaps, nModes, wvl)
 
-def get_noise_propagation(rMod, nSubaps, nModes, wvl, sigma_e, flux, nCorrModes=None, pupil_flux=False):
-    """Per-mode noise std, in reconstructor units (rec computed at wvl [nm]).
+def get_noise_propagation(rMod, nSubaps, nModes, wvl, sigma_e, flux, nCorrModes=None, pupil_flux=False, seeing=SEEING):
+    """Per-mode noise std, in reconstructor units (rec at wvl [nm]).
     flux: total frame flux [e-], or, with pupil_flux=True, the flux on the four pupils only
     (what PyrSlopec 'out_flux' reports)."""
-    frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes)
+    frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes, seeing)
     if pupil_flux:   # convert to total frame flux, the convention of noise_sensitivities
         pix = pup[pup >= 0]
         flux = flux * np.sum(frame) / np.sum(frame.ravel()[pix])
-    s_phot, s_read = noise_sensitivities(rec, frame, pup, wvl=wvl)
-    phot, read = propagated_noise_var(s_phot, s_read, flux=flux, sigma_e=sigma_e, wvl=wvl)
+    s_phot, s_read = noise_sensitivities(rec, frame, pup)
+    phot, read = propagated_noise_var(s_phot, s_read, flux=flux, sigma_e=sigma_e)
     return np.sqrt(phot+read)
 
-def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, dt=5e-4):
-    """Per-mode aliasing variance, single loop step (frames at 1/dt), in reconstructor units."""
+def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, dt=None, seeing=SEEING, fs=None, wind=None):
+    """Per-mode aliasing variance in reconstructor units (rec at wvl [nm]).
+    fs=None: snapshot variance, as calibrated (independent screens every frame: no frame-rate dependence).
+    fs [Hz]: variance of the aliasing averaged over ONE frame of a sensor at fs, the snapshot one times
+    aoeb.filter_optimizers.aliasing_frame_fraction (turbulence-like temporal PSD of the radial order of the first
+    uncorrected mode, effective wind of ristretto_main.yml unless `wind`) -- the same model the budget machine uses.
+    A wavelength without products: std(R_wvl @ slopes) of the nearest wavelength at the equivalent seeing (A37),
+    rescaled to `seeing` as seeing^(5/3). dt: old argument (the rate tag of the old files), ignored."""
     nCorrModes = nModes if nCorrModes is None else nCorrModes
-    alias = fits.getdata(os.path.join(calib_dir, 'aliasing',
-            f'pyr{rMod:1.1f}_{nSubaps}x{nSubaps}_{nCorrModes}corrmodes_{nModes}modes_wvl{wvl}_{1/dt:1.0f}Hz_alias.fits'))
-    return alias if alias.ndim == 1 else np.var(alias, axis=0)   # files store the variance already
+    w0, s0 = _source(rMod, nSubaps, nCorrModes, wvl, seeing)
+    P0, k = paths(w0), (w0 / wvl) ** 1.2
+    if w0 == wvl:
+        alias = fits.getdata(P0.alias(rMod, nSubaps, s0, nModes, nCorrModes))
+    elif os.path.exists(P0.slopes(rMod, nSubaps, s0, nCorrModes)):
+        slopes = fits.getdata(P0.slopes(rMod, nSubaps, s0, nCorrModes)).astype(float)
+        alias = np.std(get_rec(rMod, nSubaps, nModes, wvl) @ slopes.T, axis=1)
+    else:
+        alias = fits.getdata(P0.alias(rMod, nSubaps, s0, nModes, nCorrModes)) * (wvl / w0)
+    var = np.asarray(alias, float) ** 2 * (float(seeing) * k / s0) ** (5 / 3)
+    if fs is not None:
+        var = var * aliasing_frame_fraction(fs, int(radial_order(nCorrModes)), machine().wind if wind is None else wind, D)
+    return var
 
 def get_atmo_coeffs(dt, nLayers=10, windRMS=12.9):
     data = fits.getdata(os.path.join(calib_dir,'atmo',f'turb_coeffs_{1/dt:1.0f}Hz_{nLayers}layers_{windRMS}wind.fits'))
@@ -150,15 +196,15 @@ def pyr_slopes_from_frame(frame, pup):
     norm = (A + B + C + D).sum() / pup.shape[0]
     return np.concatenate([A + B - C - D, B + C - A - D]) / norm
 
-def get_static_modes(rMod, nSubaps, nModes, wvl, nCorrModes=None):
+def get_static_modes(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING):
     """Modal measurement (reconstructor units) of the saved mean residual frame of one pyramid."""
-    frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes)
+    frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes, seeing)
     return rec @ pyr_slopes_from_frame(frame, pup)
 
 
-def get_pupil_flux(rMod, nSubaps, nModes, wvl, nCorrModes=None):
+def get_pupil_flux(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING):
     """Flux on the four pupils [e-] per loop step in the saved mean calibration frame
     (aliasing calibration of main_simul: cameras at the loop rate, magnitudes/QE of ristretto_main.yml).
     Same definition as PyrSlopec 'out_flux'."""
-    frame, pup, _ = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes)
+    frame, pup, _ = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes, seeing)
     return float(np.sum(frame.ravel()[pup[pup >= 0]]))
