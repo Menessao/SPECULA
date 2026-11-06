@@ -1,6 +1,6 @@
 """Greedy search of the best single-WFS configuration (pyr_vis only). Metric: mean raw contrast in 2-5 lambda/D at 550 nm; SR saved too.
 
-  1. modulation at mag 7, 2 kHz; the best one is kept
+  1. modulation at mag 7, 2 kHz; the best one is kept (--rmod: use this one instead)
   2. mag 8...12: run at the frequency of the previous magnitude, then lower it by 100 Hz until the contrast stops improving
   3. check: the other modulations at mag 12, at its best frequency (reported only)
 
@@ -40,7 +40,7 @@ FS_START, FS_STEP = 2000.0, 100.0
 START_TIME = 0.5                       # [s] coro_psf_*.start_time of ristretto_main.yml
 RAD = (2.0, 5.0)                       # [lambda/D]
 FLUX_TOL, SMALL_CHANGE = 0.10, 0.01    # warning thresholds
-UNITY_TAG = f'unity_{N_MODES}modes'
+UNITY_TAG = f'sweep_contrast_unity_{N_MODES}modes'   # not shared with the notebooks: another process rewriting it mid-sweep changes every later run
 FIELDS = ('phase', 'rMod', 'mag', 'fs', 'tau', 'flux_pred', 'flux_ratio', 'contrast_vis', 'sr_vis', 'contrast_nir', 'sr_nir', 'notes', 'tn')
 
 
@@ -120,8 +120,8 @@ def metrics(path, band, fs):
 
 
 class Sweep:
-    def __init__(self, out, gpu, total_time):
-        self.out, self.gpu, self.total_time = out, gpu, total_time
+    def __init__(self, out, gpu, total_time, rmod=None):
+        self.out, self.gpu, self.total_time, self.rmod = out, gpu, total_time, rmod
         self.store = op.join(out, 'runs')
         self.csv = op.join(out, 'results.csv')
         for d in (self.store, op.join(out, 'logs'), op.join(out, 'overrides')):
@@ -182,11 +182,11 @@ class Sweep:
     def run(self):
         check_ar2()
         save_plant_inverse_iir(UNITY_TAG, calib_dir, N_MODES, beta=0.0)
-        rows = [self.evaluate('rMod', r, MAG_START, FS_START) for r in RMODS]
+        rows = [self.evaluate('rMod', r, MAG_START, FS_START) for r in (RMODS if self.rmod is None else (self.rmod,))]
         best = min(rows, key=lambda x: x['contrast_vis'])
         rmod, fs = best['rMod'], FS_START
         selected = [(rmod, MAG_START, fs)]
-        print(f'best modulation: {rmod}', flush=True)
+        print(f'modulation: {rmod}', flush=True)
         for mag in MAGS:
             best = self.evaluate('magnitude', rmod, mag, fs)
             f = fs - FS_STEP
@@ -232,9 +232,10 @@ def main():
     ap.add_argument('--gpu', type=int, default=0)
     ap.add_argument('--total-time', type=float, default=3.0, help='[s] of each run')
     ap.add_argument('--out', default=op.join(result_dir, 'sweep_contrast_20261106'))
+    ap.add_argument('--rmod', type=float, help='fixed modulation: skip the modulation selection')
     a = ap.parse_args()
     os.environ['PATH'] = op.dirname(sys.executable) + os.pathsep + os.environ['PATH']   # the specula CLI of this environment
-    Sweep(a.out, a.gpu, a.total_time).run()
+    Sweep(a.out, a.gpu, a.total_time, a.rmod).run()
 
 
 if __name__ == '__main__':
