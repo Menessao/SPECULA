@@ -355,7 +355,7 @@ class ErrorBudgetMachine:
                 found = f'DM {tag}' if tag else 'no DM_TAG in its header, so its DM is unknown'
                 raise ValueError(f'{op.basename(path)}: {found}, but this machine has dm_tag = {self.paths.dm_tag} (wrong modal basis). Use the '
                                  'matching dm_tag or regenerate the product; a file whose DM is known but not recorded can be tagged with '
-                                 'aoeb/scripts/stamp_dm_tag.py')
+                                 'aoeb.utils.set_header(path, dm_tag=...)')
             self._basis_ok.add(path)
         return path
 

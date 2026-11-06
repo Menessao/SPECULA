@@ -172,7 +172,7 @@ def compute_recs(cfg, gpu=0, shard=(0, 1)):
 
 def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
     """Aliasing run (independent screens, N modes removed exactly) of both pyramids; products of each pyramid at its wavelength,
-    aliasing of every reconstructor with N_rec <= N. Cases already on disk (also those migrated from the old e2e names, which have
+    aliasing of every reconstructor with N_rec <= N. Cases already on disk (also those renamed from the old e2e names, which have
     no slopes) are skipped."""
     names = {p: (f'slopes_{p}', f'{p}_frames', 'turb_modes') for p in PYRS}
     for r, n, s, N in _shard(cfg.cases(), shard):
@@ -191,7 +191,7 @@ def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
             for N_rec in cfg.mode_list(n):
                 if N_rec <= N:
                     if not op.exists(P.rec(r, n, N_rec)):
-                        raise FileNotFoundError(f'{P.rec(r, n, N_rec)} missing: run the recs step (or the migration) first')
+                        raise FileNotFoundError(f'{P.rec(r, n, N_rec)} missing: run the recs step first')
                     compute_alias_product(P, r, n, s, N_rec, N)
         shutil.rmtree(store, ignore_errors=True)
 
