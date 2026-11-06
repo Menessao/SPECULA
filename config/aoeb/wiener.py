@@ -292,14 +292,14 @@ class WienerTables:
     the WFS: divided by og^2); designs are cached on those ratios rounded to `ratio_step` dex. The residual is evaluated with aoeb's
     continuous-time integrals for the command response K = F (exact POL)."""
 
-    def __init__(self, fs, latency, wind, D, orders, alias_order, order=2, n_fold=3, M=2 ** 12, design_fold=10, ratio_step=0.05,
+    def __init__(self, fs, latency, wind, D, orders, alias, order=2, n_fold=3, M=2 ** 12, design_fold=10, ratio_step=0.05,
                  max_sensitivity=None):
         from . import filter_optimizers as fo
         self.fo, self.fs, self.latency, self.wind, self.D = fo, float(fs), float(latency), wind, float(D)      # wind: speed or temporal model
-        self.order, self.alias_order, self.M, self.design_fold, self.step = int(order), int(alias_order), M, design_fold, ratio_step
+        self.order, self.alias, self.M, self.design_fold, self.step = int(order), alias, M, design_fold, ratio_step
         self.max_sensitivity = max_sensitivity
         self.uo = np.unique(np.asarray(orders, int))
-        self.g = fo._grids(fs, wind, D, self.uo, alias_order, n_fold, latency, 1e-3, 600)
+        self.g = fo._grids(fs, wind, D, self.uo, alias, n_fold, latency, 1e-3, 600)
         self.z = np.exp(-2j * np.pi * self.g['f'] / fs)
         self.P = fo.delay_response(self.g['f'], fs, 1.0 + latency)
         self.cache, self.warned, self.done = {}, False, {}            # done: radial order -> [(qn, qa, info['v'])] (warm starts)
@@ -312,7 +312,7 @@ class WienerTables:
         if key not in self.cache:
             fo, nu, al = self.fo, 0.0 if qn is None else 10 ** qn, 0.0 if qa is None else 10 ** qa
             spec = ModeSpectra(lambda f: fo.unit_psd(f, n, self.wind, self.D), self.fs, self.latency,
-                               S_alias=None if al == 0 else (lambda f: al * fo.unit_psd(f, self.alias_order, self.wind, self.D)),
+                               S_alias=None if al == 0 else (lambda f: al * self.alias.unit_psd(f)),
                                noise=nu, M=self.M, n_fold=self.design_fold)
             near = min(self.done.get(int(n), []), default=None,
                        key=lambda d: abs((d[0] or -9) - (qn or -9)) + abs((d[1] or -9) - (qa or -9)))

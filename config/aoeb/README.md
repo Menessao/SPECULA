@@ -164,8 +164,8 @@ equivalent seeing s·(λ₀/λ)^(6/5), aliasing std(R_λ @ slopes). The seeing g
 extrapolates. `calibration(...).source_wavelength` tells which wavelength was used.
 
 **Frame rate and aliasing.** The calibrated aliasing is a snapshot variance, independent of the rate of the run, so the products have no
-rate tag. The budget applies the rate through a temporal model: `aliasing_frame_fraction(fs, order, wind, D)` is the variance kept in one
-frame, and the loop filter comes on top (ASSUMPTIONS A10).
+rate tag. The budget applies the rate through an empirical temporal spectrum, `AliasSpectrum` (fitted at 0.9", N >= 100): `aliasing_frame_fraction(fs, alias)`
+is the variance kept in one frame, and the loop filter comes on top (ASSUMPTIONS A10; 6.7 % worst case at 50 Hz, 2.5 % at 100 Hz).
 
 * `flux`: photons/s at the detector (before QE). `latency_s`: latency from the end of the exposure to the command applied, any
   real value (fractional frames allowed); the frame of exposure window + DM hold is part of the model, never add it.

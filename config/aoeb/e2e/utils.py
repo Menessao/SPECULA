@@ -22,7 +22,6 @@ E2E_DIR = os.path.dirname(os.path.abspath(__file__))   # folder of the YAML file
 sys.path.insert(0, os.path.dirname(os.path.dirname(E2E_DIR)))   # config/: the aoeb package
 from aoeb.naming import Paths, nearest_wavelength, snap_seeing                       # noqa: E402
 from aoeb.filter_optimizers import aliasing_frame_fraction                           # noqa: E402
-from aoeb.utils import radial_order                                                  # noqa: E402
 
 calib_dir = '/raid1/mmenessini/calibration/WFSW'
 result_dir = '/raid1/mmenessini/results/WFSW'
@@ -158,12 +157,11 @@ def get_noise_propagation(rMod, nSubaps, nModes, wvl, sigma_e, flux, nCorrModes=
     phot, read = propagated_noise_var(s_phot, s_read, flux=flux, sigma_e=sigma_e)
     return np.sqrt(phot+read)
 
-def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, dt=None, seeing=SEEING, fs=None, wind=None):
+def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, dt=None, seeing=SEEING, fs=None):
     """Per-mode aliasing variance in reconstructor units (rec at wvl [nm]).
     fs=None: snapshot variance, as calibrated (independent screens every frame: no frame-rate dependence).
     fs [Hz]: variance of the aliasing averaged over ONE frame of a sensor at fs, the snapshot one times
-    aoeb.filter_optimizers.aliasing_frame_fraction (turbulence-like temporal PSD of the radial order of the first
-    uncorrected mode, effective wind of ristretto_main.yml unless `wind`) -- the same model the budget machine uses.
+    aoeb.filter_optimizers.aliasing_frame_fraction (AliasSpectrum, layers of ristretto_main.yml) -- the model of the budget machine.
     A wavelength without products: std(R_wvl @ slopes) of the nearest wavelength at the equivalent seeing (A37),
     rescaled to `seeing` as seeing^(5/3). dt: old argument (the rate tag of the old files), ignored."""
     nCorrModes = nModes if nCorrModes is None else nCorrModes
@@ -178,7 +176,7 @@ def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, dt=None,
         alias = fits.getdata(P0.alias(rMod, nSubaps, s0, nModes, nCorrModes)) * (wvl / w0)
     var = np.asarray(alias, float) ** 2 * (float(seeing) * k / s0) ** (5 / 3)
     if fs is not None:
-        var = var * aliasing_frame_fraction(fs, int(radial_order(nCorrModes)), machine().wind if wind is None else wind, D)
+        var = var * aliasing_frame_fraction(fs, machine().alias_spectrum(wvl))
     return var
 
 def get_atmo_coeffs(dt, nLayers=10, windRMS=12.9):

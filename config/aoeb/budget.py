@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from . import utils
-from .filter_optimizers import DEFAULT_FF_GRID, IirControllers, IirTables, LoopTables
+from .filter_optimizers import DEFAULT_FF_GRID, AliasSpectrum, IirControllers, IirTables, LoopTables
 from .naming import DM_KEY, Paths, nearest_wavelength, snap_seeing
 from .noise import Detector, PupilGeometry, SlopeNoise, measure_slope_norm, slope_noise_coefficients, slope_noise_cov
 from .reconstructors import compute_reconstructor, read_rec, save_rec
@@ -158,10 +158,12 @@ class ErrorBudgetMachine:
                  pupilstop_tag='vlt_pupil_160pixels', dm_tag='bmc2k_vlt', modes_per_subap=None,
                  n_modes_ho=1200, kl_pad=8, slopes_from_intensity=False, tables_cache=64, wavelength_nm=None, asm=True,
                  max_sensitivity=2.0, optimize_freq=True, optimize_modes=True, freq_min=100.0, freq_step=2 ** (1 / 3), wiener_order=2,
-                 temporal=None):
+                 temporal=None, alias_layers=None):
         self.paths = Paths(root_dir, pupilstop_tag, dm_tag)
         self.wavelength_nm = wavelength_nm
         self.D, self.L0, self.wind = diameter, L0, wind
+        self.alias_layers = ((1.0, wind),) if alias_layers is None else alias_layers    # (Cn2, speed) of the aliasing spectrum (A10)
+        self._alias = {}
         self.temporal = temporal        # None: Conan spectra with the effective wind; or temporal.ZernikePSD (multi-layer frozen flow)
         self.detector = detector if detector is not None else Detector()
         self.modes_per_subap = dict(modes_per_subap or DEFAULT_MODES_PER_SUBAP)
@@ -435,20 +437,27 @@ class ErrorBudgetMachine:
                            lambda: read_rec(rpath) @ (utils.read_fits(im_path)[:, :N] * scale), og_by_level=by_level, alias_seeing=seeing)
 
     # ---- loop tables
-    def _loop_tables(self, fs, latency, orders, alias_order, ff_grid, n_fold, iir=None, wiener=False):
-        key = (round(float(fs), 9), round(float(latency), 9), int(orders.max()), int(alias_order), tuple(ff_grid), n_fold,
+    def alias_spectrum(self, wavelength_nm=None):
+        """Temporal spectrum of the aliasing at a sensing wavelength (A10; None: the reference, 900 nm)."""
+        wl = self._wl(wavelength_nm)
+        if wl not in self._alias:
+            self._alias[wl] = AliasSpectrum(self.alias_layers, wl)
+        return self._alias[wl]
+
+    def _loop_tables(self, fs, latency, orders, alias, ff_grid, n_fold, iir=None, wiener=False):
+        key = (round(float(fs), 9), round(float(latency), 9), int(orders.max()), alias.key(), tuple(ff_grid), n_fold,
                float(self.wind) if self.temporal is None else id(self.temporal), float(self.D), None if iir is None else (iir.key(len(orders)), len(orders)), self.max_sensitivity,
                self.wiener_order if wiener else None)
         if key in self._tables:
             self._tables.move_to_end(key)
         elif wiener:
             from .wiener import WienerTables
-            self._tables[key] = WienerTables(fs, latency, self.temporal or self.wind, self.D, np.arange(1, orders.max() + 1), alias_order, self.wiener_order,
+            self._tables[key] = WienerTables(fs, latency, self.temporal or self.wind, self.D, np.arange(1, orders.max() + 1), alias, self.wiener_order,
                                              n_fold=n_fold, max_sensitivity=self.max_sensitivity)
         else:
-            self._tables[key] = (LoopTables(fs, latency, self.temporal or self.wind, self.D, np.arange(1, orders.max() + 1), alias_order=alias_order,
+            self._tables[key] = (LoopTables(fs, latency, self.temporal or self.wind, self.D, np.arange(1, orders.max() + 1), alias,
                                             n_fold=n_fold, ff_grid=ff_grid, max_sensitivity=self.max_sensitivity) if iir is None else
-                                 IirTables(fs, latency, self.temporal or self.wind, self.D, orders, alias_order, iir, n_fold=n_fold,
+                                 IirTables(fs, latency, self.temporal or self.wind, self.D, orders, alias, iir, n_fold=n_fold,
                                            max_sensitivity=self.max_sensitivity))
             while len(self._tables) > self._tables_cache:
                 self._tables.popitem(last=False)
@@ -522,13 +531,13 @@ class ErrorBudgetMachine:
         turb_cmd, rms, r0 = self.turbulence(seeing, N)
         if N not in self._orders:
             self._orders[N] = utils.radial_order(np.arange(N))
-        orders, alias_order = self._orders[N], int(utils.radial_order(N_corr))
+        orders = self._orders[N]
         ff_grid = tuple(ff_grid if ff_grid is not None else (DEFAULT_FF_GRID if ctl == 'leaky' else (1.0,)))
         mult = chromatic is not None and chromatic.multiplicative
         if chromatic is not None and wl is None:
             raise ValueError('chromatic terms need the sensing wavelength: give wavelength_nm')
         eta = chromatic.eta(wl) if mult else None
-        tables = self._loop_tables(fs, latency_s * fs, orders, alias_order, ff_grid, n_fold, iir, wiener=ctl == 'wiener')
+        tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wl), ff_grid, n_fold, iir, wiener=ctl == 'wiener')
         photon, readout = cal.noise.modal_variance_parts(self.detector.n_det(flux, fs), self.detector)
         noise_cmd = photon + readout
         alias_cmd = cal.alias_rms ** 2 * (seeing / cal.alias_seeing) ** (5 / 3)            # Kolmogorov: alias variance ~ r0^(-5/3)

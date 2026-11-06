@@ -15,6 +15,7 @@ OG_FLOOR = 1e-3            # optical gains below this are clipped (poorly sensed
 X_UNBOUNDED = 10.0         # gain limit when the loop has no phase crossover (unconditionally stable)
 SEARCH_CHUNK = 64          # rows per matrix product (keeps the cost matrix in cache)
 DEFAULT_FF_GRID = (1.0, 0.9995, 0.999, 0.998, 0.995, 0.99, 0.98, 0.96, 0.92, 0.85, 0.7)
+ALIAS_K_MIN, ALIAS_K_MAX_900, ALIAS_SLOPE = 0.461, 7.682, -1.347     # AliasSpectrum: [c/m], [c/m] at 900 nm, slope of the radial spectrum
 
 
 def unit_psd(f, n, wind, D):
@@ -75,14 +76,45 @@ def frame_spectra(f, fs, n, wind, D, n_fold, latency):
     return out if n.ndim else tuple(o[0] for o in out)
 
 
-def aliasing_frame_fraction(fs, alias_order, wind, D, n_fold=3, f_min=1e-3, n_f=2000):
+class AliasSpectrum:
+    """Unit-variance temporal PSD of the aliasing (A10): frozen-flow layers (weight, speed) carrying a radial spatial spectrum k^ALIAS_SLOPE,
+    k between ALIAS_K_MIN and ALIAS_K_MAX_900 * 900 / wavelength [c/m], in isotropic directions. One (k, V) gives the arcsine PSD
+    (2 / pi) / sqrt((k V)^2 - f^2), f < k V; the integral over k is done with k = (f / V) cosh u. The three constants are EMPIRICAL: fitted to
+    frozen-flow runs at 0.9 arcsec (N >= 100, 50-500 Hz); there the measured aliasing does not depend on N or n_subap, so neither does this."""
+
+    def __init__(self, layers, wavelength_nm=None, n_f=2000, n_u=100):
+        w, v = np.array(layers, float).T
+        self.layers, self.wavelength_nm = tuple(map(tuple, np.array(layers, float))), wavelength_nm
+        w = w / w.sum()
+        k1, k2, s = ALIAS_K_MIN, ALIAS_K_MAX_900 * 900.0 / (900.0 if wavelength_nm is None else float(wavelength_nm)), ALIAS_SLOPE
+        norm = (k2 ** (s + 1) - k1 ** (s + 1)) / (s + 1)
+        self.f = np.geomspace(1e-3, k2 * v.max(), n_f)
+        self.s = np.zeros(n_f)
+        t = np.linspace(0.0, 1.0, n_u)[None, :]
+        for wl_, vl in zip(w, v):
+            on = self.f < k2 * vl
+            f = self.f[on]
+            u1, u2 = np.arccosh(np.maximum(1.0, k1 * vl / f)), np.arccosh(k2 * vl / f)
+            u = u1[:, None] + (u2 - u1)[:, None] * t
+            k = (f / vl)[:, None] * np.cosh(u)
+            self.s[on] += wl_ * 2.0 / (np.pi * vl) * (u2 - u1) * np.mean(0.5 * (k[:, 1:] ** s + k[:, :-1] ** s), axis=1) / norm
+
+    def key(self):
+        return self.layers, self.wavelength_nm
+
+    def unit_psd(self, f, n=0):
+        f, _ = np.broadcast_arrays(np.asarray(f, float), np.asarray(n))
+        return np.interp(f.ravel(), self.f, self.s, right=0.0).reshape(f.shape)
+
+
+def aliasing_frame_fraction(fs, alias, D=None, n_fold=3, f_min=1e-3, n_f=2000):
     """Variance of the aliasing measured in ONE frame at rate fs, as a fraction of the snapshot variance the calibration gives (A10):
-    integral over [0, fs/2] of the folded, exposure-filtered unit PSD of radial order alias_order (P1 of frame_spectra). This is the
-    open-loop value (K = 1) of the aliasing integral T_a of the loop tables: the budget applies it, and the loop rejection, by itself."""
+    integral over [0, fs/2] of the folded, exposure-filtered AliasSpectrum (P1 of frame_spectra). This is the open-loop value (K = 1) of the
+    aliasing integral T_a of the loop tables: the budget applies it, and the loop rejection, by itself."""
     f = np.geomspace(f_min, 0.5 * fs, n_f)
     w = _trapz_weights(f)
     w[0] += f_min
-    return float(frame_spectra(f, fs, alias_order, wind, D, n_fold, 0.0)[1] @ w)
+    return float(frame_spectra(f, fs, 0, alias, D, n_fold, 0.0)[1] @ w)
 
 
 def gain_margin(l0):
@@ -130,7 +162,7 @@ def _trapz_weights(f):
     return w
 
 
-def _grids(fs, wind, D, orders, alias_order, n_fold, latency, f_min, n_f):
+def _grids(fs, wind, D, orders, alias, n_fold, latency, f_min, n_f):
     """Frequency grid, quadrature weights and the order-dependent spectra shared by the table classes."""
     f = np.geomspace(f_min, 0.5 * fs, n_f)
     w = _trapz_weights(f)
@@ -139,7 +171,7 @@ def _grids(fs, wind, D, orders, alias_order, n_fold, latency, f_min, n_f):
     p0, p1, ww = frame_spectra(f, fs, orders, wind, D, n_fold, latency)
     below = psd_below(orders, wind, D, fs, f_min, n_fold)
     g = dict(f=f, w=w, w_edge=w_edge, base=p0 @ w, below=below, a_re=(ww.real * w).T, a_im=(ww.imag * w).T, a_p1=(p1 * w).T,
-             s_alias=frame_spectra(f, fs, alias_order, wind, D, n_fold, latency)[1] * w_edge)
+             s_alias=frame_spectra(f, fs, 0, alias, D, n_fold, latency)[1] * w_edge)
     g['T0'] = g['base'] + below
     return g
 
@@ -175,13 +207,12 @@ class OptResult:
 class LoopTables:
     """Closed-loop integrals tabulated on a (ff, x) grid; an optimisation is then one matrix product per radial order."""
 
-    def __init__(self, fs, latency, wind, D, orders, alias_order=None, n_fold=3, ff_grid=(1.0,), f_min=1e-3, n_f=600,
+    def __init__(self, fs, latency, wind, D, orders, alias, n_fold=3, ff_grid=(1.0,), f_min=1e-3, n_f=600,
                  n_x=300, u_min=1e-4, max_gain_frac=0.98, max_sensitivity=None):
         self.fs, self.latency = fs, latency
         self.ff_grid = np.asarray(ff_grid, float)
         self.orders = np.unique(np.asarray(orders, int))
-        self.alias_order = int(alias_order if alias_order is not None else self.orders.max() + 1)
-        g = _grids(fs, wind, D, self.orders, self.alias_order, n_fold, latency, f_min, n_f)
+        g = _grids(fs, wind, D, self.orders, alias, n_fold, latency, f_min, n_f)
         f = self.f = g['f']
         self.T0 = g['T0']
         no, nff = len(self.orders), len(self.ff_grid)
@@ -270,7 +301,7 @@ class LoopTables:
         return OptResult(keep(x / og, 0.0), keep(self.ff_grid[jf], 1.0), keep(x, 0.0), keep(res['turb'], turb0),
                          keep(res['noise'], 0.0), keep(res['alias'], 0.0), keep(res['xtalk'], 0.0), keep(res['cross'], turb0), turb0)
 
-def evaluate_controllers(fs, latency, gain, ff, turb_var, noise_var, alias_var, og, order, wind, D, alias_order,
+def evaluate_controllers(fs, latency, gain, ff, turb_var, noise_var, alias_var, og, order, wind, D, alias,
                          n_fold=3, f_min=1e-3, n_f=600):
     """Residuals of fixed integrators / leaky integrators (g, ff per mode); unstable loops give inf."""
     gain, ff, tv, nv, av, og = (np.atleast_1d(np.asarray(a, float)) for a in (gain, ff, turb_var, noise_var, alias_var, og))
@@ -279,7 +310,7 @@ def evaluate_controllers(fs, latency, gain, ff, turb_var, noise_var, alias_var, 
     w = _trapz_weights(f)
     w_edge = w.copy()
     w_edge[0] += f_min
-    s_alias = frame_spectra(f, fs, alias_order, wind, D, n_fold, latency)[1]
+    s_alias = frame_spectra(f, fs, 0, alias, D, n_fold, latency)[1]
     if not np.all(og > 0):
         raise ValueError('optical gains must be positive and finite')
     n_m = len(gain)
@@ -392,7 +423,7 @@ class IirTables:
     Same cost and refinement as LoopTables, but each mode has its own table row (its own shape and radial order); modes that share a
     shape share the loop response. optimize() has the signature of LoopTables.optimize; `orders` must be those of the build."""
 
-    def __init__(self, fs, latency, wind, D, orders, alias_order, controllers, n_fold=3, f_min=1e-3, n_f=600, n_x=300, u_min=1e-4,
+    def __init__(self, fs, latency, wind, D, orders, alias, controllers, n_fold=3, f_min=1e-3, n_f=600, n_x=300, u_min=1e-4,
                  max_gain_frac=0.98, max_sensitivity=None):
         self.fs, self.latency, self.order = float(fs), float(latency), np.atleast_1d(orders)
         self.optimize_gain = controllers.optimize_gain
@@ -403,7 +434,7 @@ class IirTables:
         self.shapes, self.shape = np.unique(rows, axis=0, return_inverse=True)
         self.shape = self.shape.ravel()
         uo, self.oi = np.unique(self.order, return_inverse=True)
-        self.g = g = _grids(fs, wind, D, uo, alias_order, n_fold, latency, f_min, n_f)
+        self.g = g = _grids(fs, wind, D, uo, alias, n_fold, latency, f_min, n_f)
         f, z = g['f'], np.exp(2j * np.pi * g['f'] / fs)
         ns = len(self.shapes)
         self.F, self.x, self.x_crit = np.empty((ns, n_f), complex), np.empty((ns, n_x)), np.empty(ns)
