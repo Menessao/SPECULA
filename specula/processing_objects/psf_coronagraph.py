@@ -218,7 +218,7 @@ class PsfCoronagraph(PSF):
             self._set_radial_profile_output(
                 self.coronagraph_psf.value,
                 self.coronagraph_psf_profile,
-                norm_peak=self.psf.value.max()
+                norm_peak=self.ref.i.max()
             )
 
     def finalize(self):
@@ -232,12 +232,12 @@ class PsfCoronagraph(PSF):
                 self._set_radial_profile_output(
                     self.int_coronagraph_psf.value,
                     self.int_coronagraph_psf_profile,
-                    norm_peak=1.0, # do NOT normalize to 1
+                    norm_peak=self.ref.i.max(),
                 )
                 self._set_radial_profile_output(
                     self.std_coronagraph_psf.value,
                     self.std_coronagraph_psf_profile,
-                    norm_peak=1.0, # do NOT normalize to 1
+                    norm_peak=self.ref.i.max(),
                 )
 
         self.int_coronagraph_psf.generation_time = self.current_time

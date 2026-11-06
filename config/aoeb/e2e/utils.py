@@ -203,8 +203,10 @@ def get_static_modes(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING)
 
 
 def get_pupil_flux(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING):
-    """Flux on the four pupils [e-] per loop step in the saved mean calibration frame
-    (aliasing calibration of main_simul: cameras at the loop rate, magnitudes/QE of ristretto_main.yml).
+    """Flux on the four pupils [e-] per loop step, from the saved mean calibration frame (aliasing calibration of main_simul,
+    magnitudes/QE of ristretto_main.yml), corrected for the exposure of that frame (calibration.avgframe_steps).
     Same definition as PyrSlopec 'out_flux'."""
     frame, pup, _ = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes, seeing)
-    return float(np.sum(frame.ravel()[pup[pup >= 0]]))
+    w0, s0 = _source(rMod, nSubaps, nModes if nCorrModes is None else nCorrModes, wvl, seeing)
+    steps = calibration.avgframe_steps(paths(w0).avgframe(rMod, nSubaps, s0, nModes if nCorrModes is None else nCorrModes))
+    return float(np.sum(frame.ravel()[pup[pup >= 0]])) / steps

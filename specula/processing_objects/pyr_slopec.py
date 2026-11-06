@@ -28,7 +28,7 @@ class PyrSlopec(Slopec):
                  shlike: bool=False,
                  norm_factor: float=None,
                  thr_value: float=0,
-                 clip_negative: bool = True,
+                 clip_negative: bool = False,    # with read-out noise, clipping adds false flux at low light
                  slopes_from_intensity: bool=False,
                  target_device_idx: int=None,
                  precision: int=None,
@@ -105,7 +105,7 @@ class PyrSlopec(Slopec):
     def trigger_code(self):
 
         self.flat_pixels -= self.threshold
-        if self.clip_negative:
+        if self.clip_negative or self.threshold > 0:     # a threshold needs the clipping
             clamp_generic_less(0,0,self.flat_pixels, xp=self.xp)
         A = self.flat_pixels[self.pup_idx0].astype(self.xp.float32)
         B = self.flat_pixels[self.pup_idx1].astype(self.xp.float32)

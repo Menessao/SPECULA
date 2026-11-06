@@ -149,7 +149,7 @@ pyr_slopes_vis:
   # sn_object:            'pyr3.0_48x48_sn'
   inputs:
     in_pixels:        'cred_vis.out_pixels'
-  outputs:           ['out_slopes', 'out_flux']
+  outputs:           ['out_slopes']
 
 pyr_modes_vis:
   class:             'Modalrec'
@@ -195,7 +195,7 @@ pyr_slopes_nir:
   # sn_object:            'pyr3.0_48x48_sn'
   inputs:
     in_pixels:        'cred_nir.out_pixels'
-  outputs:           ['out_slopes', 'out_flux']
+  outputs:           ['out_slopes']
 
 pyr_modes_nir:
   class:             'Modalrec'
@@ -267,19 +267,17 @@ pyr_modes_nir:
 #   VIS, modulated reference, 500 Hz:      y_k = mean over the 4 integrated steps of (phi - d) + n_k
 # It outputs E[phi_{k+1} | k]. kpred inverts the plant: its fractional delay 0.5 plus the one-step DM
 # delay give d_{k+1} = 0.5 c_k + 0.5 c_{k-1}, and its IIR (1 + beta) z / (z + beta) makes d_{k+1} follow
-# the filter output. The noise of each WFS is rescaled with its measured flux. time_step must stay set.
-# If the plant delay, a frame rate or the AR(2) model changes, rebuild both data files (save_kalman_data).
+# the filter output. The noise of each WFS is fixed at its value for the flux of the run, the aliasing is white noise added to it.
+# time_step must stay set. If the plant delay, a frame rate, the flux or the AR(2) model changes, rebuild both data files (save_kalman_data).
 
 kalman:
   class:             'KalmanFilter'
-  kalman_filter_data_object: 'kf_ar2_1300modes_vis_nir'   # built by save_kalman_data
+  kalman_filter_data_object: 'kf_ar2_1300modes_vis3.0_nir1.0'   # built by run_simul (save_kalman_data)
   time_step:         0.0005                  # [s] AR(2) sampling; only matters if a step has no fresh input
   gain_period:       4                       # 500 Hz / 2 kHz schedule: gains frozen once converged
-  flux_update_period: 1000                   # frames of each WFS between noise rescalings
   inputs:
     in_measurements_list: ['pyr_modes_vis.out_modes', 'pyr_modes_nir.out_modes']   # order of the data file
     in_command:      'kpred.out_comm:-1'     # DM command seen by the WFSs at this step
-    in_flux_list:    ['pyr_slopes_vis.out_flux', 'pyr_slopes_nir.out_flux']        # same order
   outputs:           ['out_projected_state', 'out_state', 'out_bias']
 
 # Plant inverse (beta = 0.99) with fractional delay 0.5: total plant delay 1 + 0.5 = 1.5 steps

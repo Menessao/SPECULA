@@ -19,10 +19,12 @@ wavelengths['nir']. Every calibration camera integrates ONE time step (cred_*.dt
 uses cred_vis.dt = 4 steps). Every product carries WVL_NM (and SEEING) in its header.
 """
 import argparse
+import glob
 import logging
 import math
 import os
 import os.path as op
+import re
 import shutil
 import subprocess
 import sys
@@ -217,6 +219,14 @@ def calibrate_pc(cfg, gpu=0, shard=(0, 1)):
             au.set_header(path, wvl_nm=float(cfg.wavelengths[p]), seeing=float(s), n_screen=cfg.n_screens, dm_tag=cfg.dm_tag)
 
 
+def avgframe_steps(frame_path):
+    """Exposure of a saved average frame, in loop steps. The frames renamed from the old e2e (s0.9) are longer exposures than one step
+    (2 ms or 1 ms against 0.5 ms) and nothing in the file says so: measured against the median flux of the same case at all its seeings."""
+    pattern = op.join(op.dirname(frame_path), re.sub(r'_s[0-9.]+_', '_s*_', op.basename(frame_path)))
+    fluxes = [float(au.read_fits(p).sum()) for p in glob.glob(pattern)]
+    return max(1, round(float(au.read_fits(frame_path).sum()) / float(np.median(fluxes))))
+
+
 def compute_ml(cfg, gpu=0, shard=(0, 1), rMods=(0.0,), n_phot=None):
     """ML reconstructors (sx-sy noise covariance, aoeb machine.ensure_rec) of the sensors with rMod in `rMods`; n_phot: detected
     electrons per frame of the noise weights (None: those of the average frame of the aliasing run, as the old e2e `mmse` recs)."""
@@ -230,7 +240,7 @@ def compute_ml(cfg, gpu=0, shard=(0, 1), rMods=(0.0,), n_phot=None):
                 for N in cfg.mode_list(n):
                     frame = P.avgframe(r, n, snap_seeing(s), N)
                     if op.exists(frame):
-                        nph = float(au.read_fits(frame).sum()) if n_phot is None else float(n_phot)
+                        nph = float(au.read_fits(frame).sum()) / avgframe_steps(frame) if n_phot is None else float(n_phot)
                         m.ensure_rec(r, n, N, ('ml', nph), s, wl, overwrite=cfg.overwrite)
 
 
