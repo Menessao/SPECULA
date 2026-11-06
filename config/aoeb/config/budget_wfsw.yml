@@ -1,9 +1,9 @@
 # aoeb study file of the e2e products (calibration.py writes them in the aoeb layout, naming.py): the budget machine reads them as any
-# aoeb root.   from aoeb.config import Config; m = Config.load('budget_e2e.yml', ['paths.specula_dir=<this folder>']).machine()
+# aoeb root.   from aoeb.config import Config; m = Config.load('budget_wfsw.yml', ['paths.specula_dir=<aoeb/e2e>']).machine()
 # (calibration.machine() does exactly that). Keys: aoeb/config/defaults.yml.
 paths:
   root_dir: /raid1/mmenessini/calibration/WFSW
-  specula_dir: null                     # set to this folder by calibration.machine() (atmosphere.from_specula is read from it)
+  specula_dir: null                     # set to aoeb/e2e by calibration.machine() (atmosphere.from_specula is read from it)
   main: ristretto_main.yml
   pupilstop_tag: vlt_pupil_220pixels
   dm_tag: bmc2k_vlt

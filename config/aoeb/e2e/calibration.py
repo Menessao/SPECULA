@@ -1,8 +1,8 @@
 """Calibration of the e2e system (ristretto_main.yml: VIS and NIR pyramids) in the aoeb layout (aoeb/naming.py), so that the budget
-machine reads the products like any aoeb root (budget_e2e.yml, machine()). Used by main_simul.ipynb and runnable offline:
+machine reads the products like any aoeb root (aoeb/config/budget_wfsw.yml, machine()). The sensors, seeings, wavelengths and tags come from that file. Used by main_simul.ipynb and runnable offline:
 
-    bash run_offline.sh pc "0 1"                                          # detached, one shard per listed GPU (run_offline.sh)
-    python calibration.py pc --gpu 0 --shard 0/2                          # one shard in the foreground
+    python calibration.py pc --gpu 0 --shard 0/2                          # one shard of 2 (start one process per shard)
+    setsid nohup python calibration.py pc --gpu 1 --shard 1/2 > pc_1.log 2>&1 < /dev/null &   # detached: survives the session
     python calibration.py all --seeings 0.7 0.9 1.1                       # every step, in order
     python calibration.py --list                                          # the cases of every step and whether they are done
 
@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+import yaml
 
 E2E_DIR = op.dirname(op.abspath(__file__))
 sys.path.insert(0, op.dirname(op.dirname(E2E_DIR)))          # config/: the aoeb package
@@ -40,7 +41,9 @@ from aoeb.naming import Paths, snap_seeing                     # noqa: E402
 from aoeb.reconstructors import compute_reconstructor, save_rec  # noqa: E402
 
 log = logging.getLogger('e2e.calibration')
-BUDGET_YML = op.join(E2E_DIR, 'budget_e2e.yml')
+BUDGET_YML = op.join(op.dirname(E2E_DIR), 'config', 'budget_wfsw.yml')
+with open(BUDGET_YML) as _f:
+    _STUDY = yaml.safe_load(_f)
 _SPECULA = op.join(op.dirname(sys.executable), 'specula')
 SPECULA = _SPECULA if op.exists(_SPECULA) else (shutil.which('specula') or 'specula')
 PYRS = ('vis', 'nir')
@@ -48,20 +51,19 @@ PYRS = ('vis', 'nir')
 
 @dataclass
 class E2EConfig:
-    calib_dir: str = '/raid1/mmenessini/calibration/WFSW'
-    n_subaps: tuple = (10, 14, 24, 36, 48)
-    rMods: tuple = (0.0, 0.5, 1.0, 2.0, 3.0)
-    modes_per_subap: dict = field(default_factory=lambda: {10: [54], 14: [54, 100], 24: [54, 100, 300], 36: [54, 100, 300, 800],
-                                                           48: [54, 100, 300, 800, 1300]})
-    wavelengths: dict = field(default_factory=lambda: {'vis': 900.0, 'nir': 1300.0})
-    seeings: tuple = (0.6, 0.75, 0.9, 1.05)
+    calib_dir: str = _STUDY['paths']['root_dir']
+    n_subaps: tuple = tuple(_STUDY['sensors']['n_subaps'])
+    rMods: tuple = tuple(_STUDY['sensors']['rMods'])
+    modes_per_subap: dict = field(default_factory=lambda: dict(_STUDY['sensors']['modes_per_subap']))
+    wavelengths: dict = field(default_factory=lambda: dict(zip(PYRS, _STUDY['wavelengths']['sensing_nm'])))   # vis, nir
+    seeings: tuple = tuple(_STUDY['scan']['seeings'])
     time_step: float = 5e-4
     alias_time: float = 1.0                  # [s] aliasing run: one independent screen per step (2000 frames)
     n_screens: int = 70                      # PC IM: push-pull cycles, one screen each, averaged
     n_modes_im: int = 1800                   # columns of the diffraction-limited IM
-    pupilstop_tag: str = 'vlt_pupil_220pixels'
-    dm_tag: str = 'bmc2k_vlt'
-    main_yml: str = 'ristretto_main.yml'
+    pupilstop_tag: str = _STUDY['paths']['pupilstop_tag']
+    dm_tag: str = _STUDY['paths']['dm_tag']
+    main_yml: str = _STUDY['paths']['main']
     seed: int = 1
     overwrite: bool = False
 
@@ -237,7 +239,7 @@ STEPS = {'pupdata': calibrate_pupdata, 'im': calibrate_im, 'recs': compute_recs,
 
 
 def machine(cfg=None, **kw):
-    """aoeb ErrorBudgetMachine of the e2e products (budget_e2e.yml, root = cfg.calib_dir)."""
+    """aoeb ErrorBudgetMachine of the e2e products (budget_wfsw.yml, root = cfg.calib_dir)."""
     from aoeb.config import Config
     cfg = cfg or E2EConfig()
     return Config.load(BUDGET_YML, [f'paths.specula_dir={E2E_DIR}', f'paths.root_dir={cfg.calib_dir}']).machine(**kw)

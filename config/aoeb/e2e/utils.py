@@ -23,9 +23,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(E2E_DIR)))   # config/: the a
 from aoeb.naming import Paths, nearest_wavelength, snap_seeing                       # noqa: E402
 from aoeb.filter_optimizers import aliasing_frame_fraction                           # noqa: E402
 
-calib_dir = '/raid1/mmenessini/calibration/WFSW'
+import calibration                                                                    # noqa: E402
+
+_CFG = calibration.E2EConfig()                         # aoeb/config/budget_wfsw.yml
+calib_dir = _CFG.calib_dir
 result_dir = '/raid1/mmenessini/results/WFSW'
-PUPILSTOP_TAG, DM_TAG = 'vlt_pupil_220pixels', 'bmc2k_vlt'
+PUPILSTOP_TAG, DM_TAG = _CFG.pupilstop_tag, _CFG.dm_tag
 SEEING = 0.9          # seeing of the calibration products [arcsec] (the first e2e runs were made at 0.88 and are named s0.9)
 D = 8.2               # [m]
 
@@ -41,7 +44,6 @@ _MACHINES = {}
 def machine():
     """aoeb budget machine of calib_dir (calibration.machine, cached per calib_dir)."""
     if calib_dir not in _MACHINES:
-        import calibration
         _MACHINES[calib_dir] = calibration.machine(calibration.E2EConfig(calib_dir=calib_dir))
     return _MACHINES[calib_dir]
 
@@ -157,13 +159,13 @@ def get_noise_propagation(rMod, nSubaps, nModes, wvl, sigma_e, flux, nCorrModes=
     phot, read = propagated_noise_var(s_phot, s_read, flux=flux, sigma_e=sigma_e)
     return np.sqrt(phot+read)
 
-def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, dt=None, seeing=SEEING, fs=None):
+def get_aliasing_power(rMod, nSubaps, nModes, wvl=900, nCorrModes=None, seeing=SEEING, fs=None):
     """Per-mode aliasing variance in reconstructor units (rec at wvl [nm]).
     fs=None: snapshot variance, as calibrated (independent screens every frame: no frame-rate dependence).
     fs [Hz]: variance of the aliasing averaged over ONE frame of a sensor at fs, the snapshot one times
     aoeb.filter_optimizers.aliasing_frame_fraction (AliasSpectrum, layers of ristretto_main.yml) -- the model of the budget machine.
     A wavelength without products: std(R_wvl @ slopes) of the nearest wavelength at the equivalent seeing (A37),
-    rescaled to `seeing` as seeing^(5/3). dt: old argument (the rate tag of the old files), ignored."""
+    rescaled to `seeing` as seeing^(5/3)."""
     nCorrModes = nModes if nCorrModes is None else nCorrModes
     w0, s0 = _source(rMod, nSubaps, nCorrModes, wvl, seeing)
     P0, k = paths(w0), (w0 / wvl) ** 1.2

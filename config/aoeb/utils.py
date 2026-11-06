@@ -14,6 +14,7 @@ import numpy as np
 import scipy.fft as sfft
 from astropy.io import fits
 
+_trapz = getattr(np, 'trapezoid', None) or np.trapz
 ARCSEC_PER_RAD = 180.0 * 3600.0 / np.pi
 LAM0_NM = 500.0
 RAD2_TO_NM2 = (LAM0_NM / (2 * np.pi)) ** 2          # rad^2 at 500 nm -> nm^2 OPD
@@ -54,7 +55,7 @@ def fitting_variance_tiptop(r0, L0, kc, n=4000):
     """Fitting error variance [nm^2] as TipTop (P3 fittingPSD): the von Karman PSD outside the corrected square |kx|, |ky| <= kc
     (kc = 1 / (2 DM pitch)); exact radial integral (analytic beyond sqrt(2) kc)."""
     k = np.linspace(kc, np.sqrt(2.0) * kc, n)
-    corners = np.trapezoid(von_karman_psd(k, r0, L0) * square_outside_fraction(k, kc) * 2 * np.pi * k, k)
+    corners = _trapz(von_karman_psd(k, r0, L0) * square_outside_fraction(k, kc) * 2 * np.pi * k, k)
     beyond = VK_COEFF * r0 ** (-5 / 3) * RAD2_TO_NM2 * (6 * np.pi / 5) * (2.0 * kc ** 2 + 1 / L0 ** 2) ** (-5 / 6)
     return float(corners + beyond)
 
