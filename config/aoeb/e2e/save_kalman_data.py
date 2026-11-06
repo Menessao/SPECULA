@@ -18,11 +18,13 @@ All variances must be in the squared units of the modal reconstructor outputs
 (pyr_modes_*.out_modes), at the loop sampling time. The noise is fixed: rebuild
 the data if the flux changes.
 
-The filter outputs E[phi[k+1] | k]; an IirFilter with the plant inverse
-(save_plant_inverse_iir) and its own fractional delay 0.5 then makes the DM,
-d[k+1] = 0.5 c[k] + 0.5 c[k-1], follow it.
-TODO: AR(2) + plant inverse is Wiener-optimal only if the turbulence is AR(2);
-option: design the IIR from the true modal PSD.
+Each command c[k] is held on the DM from t_k + tau T to t_k+1 + tau T (fractional delay tau of the IirFilter;
+the frame average seen by the sensor is d[k+1] = (1 - tau) c[k] + tau c[k-1]). The mean of phi over that interval
+is 1 + tau steps ahead of the last measured frame, so the filter outputs E[phi[k + 1 + tau] | k] and the IirFilter
+is the identity (beta = 0): the delay is compensated by the prediction and its lag stays in the residual.
+A plant inverse (beta > 0, horizon 1) would cancel tau only in the frame average, with a command ripple
+inside the frame that a one-sample-per-step simulation does not see.
+TODO: the prediction is Wiener-optimal only if the turbulence is AR(2).
 """
 import os
 
@@ -34,7 +36,7 @@ from specula.data_objects.kalman_filter_data import (
 
 
 def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driving', command_hold_steps=1,
-                     plant_inverse_tag=None, beta=0.99, subdir='filter', overwrite=True):
+                     plant_inverse_tag=None, beta=0.0, subdir='filter', overwrite=True, delay=1.5):
     """
     Build and save a KalmanFilterData FITS file.
 
@@ -75,14 +77,17 @@ def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driv
         For a single sensor slower than the loop, its frame in steps (the
         filter and the command then run at the frame rate).
     plant_inverse_tag : str, optional
-        If given, also save the plant-inverse IirFilterData
-        (save_plant_inverse_iir, with ``beta``) under this tag, in the same folder.
+        If given, also save the IirFilterData of kpred (save_plant_inverse_iir, with
+        ``beta``; default beta = 0: identity) under this tag, in the same folder.
     q_is : 'driving' or 'stationary'
         Whether q is the variance of the AR(2) driving noise w (default) or of
         phi itself.
     subdir : str
         Folder under root_dir where CalibManager looks for KalmanFilterData
         objects ('filter').
+    delay : float
+        Prediction horizon of the filter output, in loop steps: 1 + tau, with tau the
+        fractional delay of the IirFilter (default 1.5: tau = 0.5).
 
     Returns
     -------
@@ -150,7 +155,7 @@ def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driv
             bias_x0.append(None)
 
     data = KalmanFilterData.from_ar2_closed_loop(
-        a1, a2, q, r_list, integration_steps=steps, delay=1.0,      # output: E[phi[k+1] | k]
+        a1, a2, q, r_list, integration_steps=steps, delay=delay,    # output: E[phi[k+delay] | k]
         command_hold_steps=command_hold_steps,
         bias_process_noise_cov=bias_q if any(b is not None for b in bias_q) else None,
         initial_bias=bias_x0 if any(b is not None for b in bias_x0) else None,
@@ -166,17 +171,17 @@ def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driv
     return filename
 
 
-def save_plant_inverse_iir(tag, root_dir, n_modes, beta=0.99, subdir='filter', overwrite=True):
+def save_plant_inverse_iir(tag, root_dir, n_modes, beta=0.0, subdir='filter', overwrite=True):
     """
-    Save, as IirFilterData, the inverse of the plant d[k+1] = 0.5 c[k] + 0.5 c[k-1]
-    (IirFilter delay 0.5 plus the one-step DM delay), for every mode:
+    Save, as IirFilterData, for every mode:
 
         H(z) = (1 + beta) z / (z + beta),   i.e. c[k] = (1 + beta) u[k] - beta c[k-1]
 
-    DC gain 1. beta = 1 is the exact inverse (d[k+1] = u[k]), but its Nyquist
-    component grows without bound; beta = 0.99 keeps it bounded with almost the
-    same residual. Fed with E[phi[k+1] | k] from the Kalman filter.
-    YAML: ``iir_filter_data_object: '<tag>'`` in an IirFilter with ``delay: 0.5``.
+    beta = 0 (default): identity, c[k] = u[k], the Ristretto chain.
+    beta > 0: inverse of the plant d[k+1] = (1 - tau) c[k] + tau c[k-1] for beta = tau / (1 - tau)
+    (beta = 0.99 for tau = 0.5, where the exact inverse is marginally stable), to be fed with E[phi[k+1] | k].
+    It only cancels tau in the frame average: its command ripple inside the frame is not simulated.
+    YAML: ``iir_filter_data_object: '<tag>'`` in an IirFilter with ``delay: tau``.
     """
     iir = IirFilterData(ordnum=np.full(n_modes, 2), ordden=np.full(n_modes, 2),
                         num=np.tile([0.0, 1.0 + beta], (n_modes, 1)),

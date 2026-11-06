@@ -237,6 +237,15 @@ class KalmanFilter(BaseProcessingObj):
                                                          'only if the model has a projection'),
         }
 
+    def check_output_names(self):
+        """The bias and projection outputs exist only if the model has them: check those of this model."""
+        declared = self.output_names()
+        self.output_names = lambda: {k: v for k, v in declared.items() if k in self.outputs}
+        try:
+            super().check_output_names()
+        finally:
+            del self.output_names
+
     # ------------------------------------------------------------------
     # State
     # ------------------------------------------------------------------

@@ -597,6 +597,7 @@ class TestKalmanFilterSensorBias(unittest.TestCase):
         kf0 = KalmanFilter(F, [H, Hv], Q, [R, Rv], **kw)
         self.assertNotIn('out_bias', kf0.outputs)
         self.assertNotIn('out_bias_covariance', kf0.outputs)
+        kf0.check_output_names()      # absent optional outputs must not fail the sanity check
 
         kf1 = KalmanFilter(F, [H, Hv], Q, [R, Rv], bias_process_noise_cov=[None, 1e-6], **kw)
         kf2 = KalmanFilter(F, [H, Hv], Q, [R, Rv], bias_process_noise_cov=[1e-4, 1e-6], **kw)

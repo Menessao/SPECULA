@@ -49,6 +49,8 @@ def get_results_path(tn:str):
 def plot_sr(result_path:str=None):
     if result_path is None:
         result_path,tn = get_latest_path(return_tn=True)
+    else:
+        tn = result_path.split('/')[-1]
     srv = fits.getdata(op.join(result_path,'sr_vis.fits'))
     srn = fits.getdata(op.join(result_path,'sr_nir.fits'))
     plt.figure()
@@ -62,7 +64,9 @@ def plot_sr(result_path:str=None):
 
 def plot_coro_profiles(result_path:str=None):
     if result_path is None:
-        result_path = get_latest_path()
+        result_path,tn = get_latest_path(return_tn=True)
+    else:
+        tn = result_path.split('/')[-1]
     radd, coro_psf_vis_int = load_coro_profile(result_path, 'vis')
     radd, coro_psf_nir_int = load_coro_profile(result_path, 'nir')
     plt.figure()
@@ -72,15 +76,18 @@ def plot_coro_profiles(result_path:str=None):
     plt.semilogy(radp,perf_coro_nir_int,'--',c='C3',label='NIR (fitting only)')
     plt.ylim([1e-7,1e-2])
     plt.xlim([0,30])
+    plt.xticks(np.arange(31))
     plt.xlabel(r'$\lambda/D$')
     plt.ylabel('Raw contrast')
     plt.legend()
-    plt.title('Raw contrast\nperfect coronagraph')
+    plt.title(tn)
     plt.grid(which='both',alpha=0.4)
 
 def modal_plot(result_path:str=None,N:int=100,title=''):
     if result_path is None:
         result_path,tn = get_latest_path(return_tn=True)
+    else:
+        tn = result_path.split('/')[-1]
     # dm_modes = fits.getdata(op.join(result_path,'dm_modes.fits'))
     atmo_modes = fits.getdata(op.join(result_path,'atmo_modes.fits'))
     res_modes = fits.getdata(op.join(result_path,'res_modes.fits'))

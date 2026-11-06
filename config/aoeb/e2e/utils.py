@@ -22,6 +22,7 @@ E2E_DIR = os.path.dirname(os.path.abspath(__file__))   # folder of the YAML file
 sys.path.insert(0, os.path.dirname(os.path.dirname(E2E_DIR)))   # config/: the aoeb package
 from aoeb.naming import Paths, nearest_wavelength, snap_seeing                       # noqa: E402
 from aoeb.filter_optimizers import aliasing_frame_fraction                           # noqa: E402
+from specula.data_objects.slopes import Slopes
 
 import calibration                                                                    # noqa: E402
 
@@ -201,6 +202,9 @@ def get_static_modes(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING)
     frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes, seeing)
     return rec @ pyr_slopes_from_frame(frame, pup)
 
+def get_static_slopes(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING):
+    frame, pup, _ = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes, seeing)
+    return pyr_slopes_from_frame(frame, pup)
 
 def get_pupil_flux(rMod, nSubaps, nModes, wvl, nCorrModes=None, seeing=SEEING):
     """Flux on the four pupils [e-] per loop step, from the saved mean calibration frame (aliasing calibration of main_simul,
