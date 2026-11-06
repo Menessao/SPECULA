@@ -76,7 +76,7 @@ def plot_coro_profiles(result_path:str=None):
     plt.semilogy(radp,perf_coro_nir_int,'--',c='C3',label='NIR (fitting only)')
     plt.ylim([1e-7,1e-2])
     plt.xlim([0,30])
-    plt.xticks(np.array([0,2,5,7,10,12,15,17,20,22,25,27,30]))
+    plt.xticks(np.array([0,2,5,7.5,10,12.5,15,17.5,20,22.5,25,27.5,30]))
     plt.xlabel(r'$\lambda/D$')
     plt.ylabel('Raw contrast')
     plt.legend()
