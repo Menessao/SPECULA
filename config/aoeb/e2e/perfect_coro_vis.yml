@@ -10,7 +10,8 @@ prop_ol:
   simul_params_ref:  'main'
   source_dict_ref:   ['source_vis']
   enable_chromatic_effect: true
-  chromatic_reference_wavelength: 900
+  chromatic_reference_wavelengthInNm: 900
+  telescope_altitude_m: 0
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']
@@ -21,13 +22,14 @@ atmo_modes:
   ifunc_inv_object:  'bmc2k_vlt_kl_inv'
   nmodes:            1300                    # N: number of modes corrected (= Kalman modes)
   inputs:
-    in_ef:           ['prop_ol.out_sourcce_nir_ef']
+    in_ef:           ['prop_ol.out_source_vis_ef']
   outputs:           ['out_modes']
 
 prop_override:
   source_dict_ref:   ['science_vis', 'science_nir']
   enable_chromatic_effect: true
-  chromatic_reference_wavelength: 550
+  chromatic_reference_wavelengthInNm: 550
+  telescope_altitude_m: 0
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer']

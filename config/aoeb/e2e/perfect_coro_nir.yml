@@ -10,7 +10,8 @@ prop_ol:
   simul_params_ref:  'main'
   source_dict_ref:   ['source_nir']
   enable_chromatic_effect: true
-  chromatic_reference_wavelength: 900
+  chromatic_reference_wavelengthInNm: 1300
+  telescope_altitude_m: 0
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']
@@ -27,7 +28,8 @@ atmo_modes:
 prop_override:
   source_dict_ref:   ['science_vis', 'science_nir']
   enable_chromatic_effect: true
-  chromatic_reference_wavelength: 1650
+  chromatic_reference_wavelengthInNm: 1650
+  telescope_altitude_m: 0
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer']
