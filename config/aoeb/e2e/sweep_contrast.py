@@ -1,4 +1,5 @@
-"""Greedy search of the best single-WFS configuration (pyr_vis only). Metric: mean raw contrast in 2-5 lambda/D at 550 nm; SR saved too.
+"""Greedy search of the best single-WFS configuration (pyr_vis only). Metric: mean raw contrast in 2-5 lambda/D at 550 nm, or SR when SR < SR_SWITCH
+(the contrast of an uncorrected loop gets better as the correction collapses); a run above SR_SWITCH always beats one below it.
 
   1. modulation at mag 7, 2 kHz; the best one is kept (--rmod: use this one instead)
   2. mag 8...14: run at the frequency of the previous magnitude, then lower it by 100 Hz until the contrast stops improving
@@ -27,11 +28,15 @@ from specula.data_objects.slopes import Slopes                                  
 
 import calibration                                                                                       # noqa: E402
 from results_analysis import load_coro_profile                                                           # noqa: E402
+from aoeb.noise import slope_noise_cov                                                                   # noqa: E402
+from aoeb.reconstructors import compute_reconstructor, save_rec                                          # noqa: E402
 from save_kalman_data import save_kalman_data, save_plant_inverse_iir                                    # noqa: E402
-from utils import (calib_dir, get_aliasing_power, get_atmo_coeffs, get_noise_propagation, get_pupil_flux, get_rec,  # noqa: E402
-                   get_static_slopes, latest_tn, paths, result_dir, run_specula)
+from utils import (SEEING, _load_calib, calib_dir, get_aliasing_power, get_atmo_coeffs, get_noise_propagation, get_pupil_flux, get_rec,  # noqa: E402
+                   get_static_slopes, latest_tn, machine, noise_sensitivities, paths, propagated_noise_var, result_dir, run_specula)
 
 N_SUBAPS, N_MODES, WVL, SIGMA_E = 48, 1300, 900.0, 0.5
+REC = 'svd'                            # reconstructor: 'svd' or 'ml' (ML at the flux of each run)
+ALIAS_SEEINGS = (0.75, 1.05)           # seeings with a slopes file, for the ML aliasing where the s0.9 frames were renamed from the old e2e and have none
 DT0, ZETA = 5e-4, 0.7                  # AR(2) file: sampling, damping of aoeb/pol_turb/ar2_mode_laws.ar2_model
 DELAY = 250e-6                         # [s]
 RMODS = (0.0, 0.5, 1.0, 2.0, 3.0)
@@ -42,12 +47,62 @@ START_TIME = 0.5                       # [s] coro_psf_*.start_time of ristretto_
 RAD = (2.0, 5.0)                       # [lambda/D]
 FLUX_TOL, SMALL_CHANGE = 0.10, 0.01    # warning thresholds
 IMPROVED = 0.01                        # relative gain of the frequency search that counts for start_magnitude
+SR_SWITCH = 0.10                       # below this SR the runs are compared by SR, not contrast
 FIELDS = ('phase', 'rMod', 'mag', 'fs', 'tau', 'flux_pred', 'flux_ratio', 'contrast_vis', 'peak_vis', 'sr_vis', 'contrast_nir', 'sr_nir', 'notes', 'tn')
 
 
 def unity_tag():
     """Not shared with the notebooks: another process rewriting it mid-sweep changes every later run."""
     return f'sweep_contrast_unity_{N_MODES}modes'
+
+
+def ml_stem(rmod, nph):
+    return f'sweep_contrast_pyr{rmod:1.1f}_{N_SUBAPS}x{N_SUBAPS}_wvl{WVL:g}_{N_MODES}modes_rec_ml_{nph:.4g}ph_s{SEEING}'
+
+
+def frame_electrons(rmod, mag, fs):
+    """Electrons of one frame on the whole detector, the flux of the noise weights of the ML reconstructor."""
+    path = paths(WVL).avgframe(rmod, N_SUBAPS, SEEING, N_MODES)
+    return float(np.sum(fits.getdata(path))) / calibration.avgframe_steps(path) / (fs * DT0) * 10 ** (-0.4 * (mag - MAG_CAL))
+
+
+def ml_rec(rmod, mag, fs):
+    """Stem and matrix of the ML reconstructor at the flux of the run. Written once, under a temporary name first: an interrupted write leaves no partial file."""
+    nph = frame_electrons(rmod, mag, fs)
+    stem = ml_stem(rmod, nph)
+    path = op.join(calib_dir, 'rec', stem + '.fits')
+    if not op.exists(path):
+        m, P = machine(), paths(WVL)
+        frame = fits.getdata(P.avgframe(rmod, N_SUBAPS, SEEING, N_MODES))
+        cn, cxy = slope_noise_cov(frame, m.slope_geometry(rmod, N_SUBAPS, SEEING, N_MODES, WVL, frame), nph, m.detector, m.slopes_from_intensity)
+        rec = compute_reconstructor(fits.getdata(P.im_dl(rmod, N_SUBAPS)), N_MODES, 'ml', cn_diag=cn, cn_xy=cxy)
+        tmp = f'{path[:-5]}_tmp{os.getpid()}.fits'
+        save_rec(tmp, rec, method='ml', n_phot=nph, seeing=SEEING, wvl_nm=WVL)
+        os.replace(tmp, path)
+    return stem, np.asarray(fits.getdata(path))
+
+
+def ml_aliasing(rec, rmod):
+    """Aliasing variance of the ML reconstructor: from the slopes at the seeing of the run or, if there are none, the SVD aliasing times the
+    ML / SVD ratio of each mode on the slopes of the nearby seeings."""
+    P = paths(WVL)
+    if op.exists(P.slopes(rmod, N_SUBAPS, SEEING, N_MODES)):
+        return np.var(rec @ fits.getdata(P.slopes(rmod, N_SUBAPS, SEEING, N_MODES)).astype(float).T, axis=1)
+    svd = get_rec(rmod, N_SUBAPS, N_MODES, WVL)
+    ratios = []
+    for s in ALIAS_SEEINGS:
+        slopes = fits.getdata(P.slopes(rmod, N_SUBAPS, s, N_MODES)).astype(float)
+        ratios.append(np.var(rec @ slopes.T, axis=1) / np.var(svd @ slopes.T, axis=1))
+    return get_aliasing_power(rmod, N_SUBAPS, N_MODES, WVL) * np.mean(ratios, axis=0)
+
+
+def noise_variance(rec, rmod, flux):
+    """Per-mode noise variance of any reconstructor (utils.get_noise_propagation uses the SVD one). flux: on the four pupils, per frame."""
+    frame, pup, _ = _load_calib(rmod, N_SUBAPS, N_MODES, WVL)
+    total = flux * np.sum(frame) / np.sum(frame.ravel()[pup[pup >= 0]])     # pupil flux -> frame flux, the convention of noise_sensitivities
+    s_phot, s_read = noise_sensitivities(rec, frame, pup)
+    phot, read = propagated_noise_var(s_phot, s_read, flux=total, sigma_e=SIGMA_E)
+    return phot + read
 
 
 def read_rows(out):
@@ -61,12 +116,30 @@ def read_rows(out):
     return rows
 
 
+def score(r):
+    """Sort key of a run, best first: contrast at SR >= SR_SWITCH, then SR, then the diverged runs."""
+    if not (np.isfinite(r['contrast_vis']) and np.isfinite(r['sr_vis'])):
+        return (2, 0.0)
+    return (0, r['contrast_vis']) if r['sr_vis'] >= SR_SWITCH else (1, -r['sr_vis'])
+
+
+def better(a, b):
+    return score(a) < score(b)
+
+
+def rel_change(a, b):
+    """Relative difference of the metric of two runs against b; inf if they are not compared on the same metric or both diverged."""
+    (ra, va), (rb, vb) = score(a), score(b)
+    return abs(va - vb) / abs(vb) if ra == rb and ra < 2 else np.inf
+
+
 def start_magnitude(out):
     """First magnitude of a sweep where the frequency search gained at least IMPROVED over the frequency that magnitude started from."""
     rows = [r for r in read_rows(out) if r['phase'] != 'check']
     for mag in sorted({r['mag'] for r in rows}):
-        contrast = [r['contrast_vis'] for r in rows if r['mag'] == mag]
-        if min(contrast) < contrast[0] * (1 - IMPROVED) or (np.isinf(contrast[0]) and np.isfinite(min(contrast))):
+        runs = [r for r in rows if r['mag'] == mag]
+        best = min(runs, key=score)
+        if better(best, runs[0]) and rel_change(best, runs[0]) >= IMPROVED:
             return mag
     print(f'WARNING: the frequency never gained {IMPROVED:.0%} in {out}: starting from mag {MAGS[-1]:g}', flush=True)
     return MAGS[-1]
@@ -95,20 +168,28 @@ def flux_per_frame(rmod, mag, fs):
 
 
 def sn_tag(rmod):
-    """Slope null of the rMod (same tag as run_simul.ipynb), saved where sn_object looks for it."""
-    tag = f'pyr{rmod:1.1f}_{N_SUBAPS}x{N_SUBAPS}_vis_sn'
-    os.makedirs(op.join(calib_dir, 'slopenulls'), exist_ok=True)
-    Slopes(slopes=get_static_slopes(rmod, N_SUBAPS, N_MODES, WVL)).save(op.join(calib_dir, 'slopenulls', tag + '.fits'))
+    """Slope null of the sensor, its own tag, saved where sn_object looks for it. Written once: a run may be reading it."""
+    tag = f'sweep_contrast_pyr{rmod:1.1f}_{N_SUBAPS}x{N_SUBAPS}_wvl{WVL:g}_{N_MODES}modes_sn'
+    path = op.join(calib_dir, 'slopenulls', tag + '.fits')
+    if not op.exists(path):
+        tmp = f'{path[:-5]}_tmp{os.getpid()}.fits'
+        Slopes(slopes=get_static_slopes(rmod, N_SUBAPS, N_MODES, WVL)).save(tmp)
+        os.replace(tmp, path)
     return tag
 
 
 def build_filter(rmod, mag, fs):
     """Kalman data of the case: one sensor, one sample per frame, so the aliasing is the snapshot one."""
-    tag = f'sweep_contrast_n{N_SUBAPS}_N{N_MODES}_r{rmod:1.1f}_m{mag:g}_fs{fs:g}'
+    tag = f'sweep_contrast_{REC}_n{N_SUBAPS}_N{N_MODES}_r{rmod:1.1f}_m{mag:g}_fs{fs:g}'
     a1, a2, q = ar2_at(fs)
     args = (rmod, N_SUBAPS, N_MODES, WVL)
-    sensor = dict(noise_var=get_noise_propagation(*args, SIGMA_E, flux_per_frame(rmod, mag, fs), pupil_flux=True) ** 2,
-                  aliasing=get_aliasing_power(*args), frame_steps=1, biased=False)
+    flux = flux_per_frame(rmod, mag, fs)
+    if REC == 'ml':
+        rec = ml_rec(rmod, mag, fs)[1]
+        sensor = dict(noise_var=noise_variance(rec, rmod, flux), aliasing=ml_aliasing(rec, rmod), frame_steps=1, biased=False)
+    else:
+        sensor = dict(noise_var=get_noise_propagation(*args, SIGMA_E, flux, pupil_flux=True) ** 2,
+                      aliasing=get_aliasing_power(*args), frame_steps=1, biased=False)
     save_kalman_data(tag, calib_dir, a1, a2, q, [sensor], n_modes=N_MODES, delay=1 + DELAY * fs)
     return tag
 
@@ -116,7 +197,7 @@ def build_filter(rmod, mag, fs):
 def overrides(rmod, mag, fs, kf_tag, store_dir, total_time):
     dt = 1 / fs
     get_rec(rmod, N_SUBAPS, N_MODES, WVL)   # computed and saved if missing
-    rec = op.basename(paths(WVL).rec(rmod, N_SUBAPS, N_MODES))[:-5]
+    rec = ml_stem(rmod, frame_electrons(rmod, mag, fs)) if REC == 'ml' else op.basename(paths(WVL).rec(rmod, N_SUBAPS, N_MODES))[:-5]
     return {
         'remove': ['source_nir', 'pyr_nir', 'cred_nir', 'pyr_slopes_nir', 'pyr_modes_nir'],
         'main_override': {'time_step': dt, 'total_time': total_time, 'root_dir': calib_dir},
@@ -215,11 +296,12 @@ class Sweep:
 
     def run(self):
         check_ar2()
-        save_plant_inverse_iir(unity_tag(), calib_dir, N_MODES, beta=0.0)
+        if not op.exists(op.join(calib_dir, 'filter', unity_tag() + '.fits')):     # a parallel sweep may be reading it
+            save_plant_inverse_iir(unity_tag(), calib_dir, N_MODES, beta=0.0)
         fs = FS_START
         if self.mag_start is None:
             rows = [self.evaluate('rMod', r, MAG_START, FS_START) for r in (RMODS if self.rmod is None else (self.rmod,))]
-            rmod = min(rows, key=lambda x: x['contrast_vis'])['rMod']
+            rmod = min(rows, key=score)['rMod']
             selected, mags = [(rmod, MAG_START, fs)], MAGS
         else:
             rmod, selected, mags = self.rmod, [], [m for m in MAGS if m >= self.mag_start]
@@ -229,10 +311,10 @@ class Sweep:
             f = fs - FS_STEP
             while f >= FS_STEP:
                 row = self.evaluate('frequency', rmod, mag, f)
-                change = abs(row['contrast_vis'] - best['contrast_vis']) / best['contrast_vis'] if np.isfinite(best['contrast_vis']) else np.inf
+                change = rel_change(row, best)
                 if change < SMALL_CHANGE:
                     self.note((rmod, mag, f), f'change {change:.2%} against {best["fs"]:.0f} Hz: may be noise')
-                if not row['contrast_vis'] < best['contrast_vis']:
+                if not better(row, best):
                     break
                 best = row
                 f -= FS_STEP
@@ -241,7 +323,7 @@ class Sweep:
                 self.note((rmod, mag, fs), 'no converged frequency found: the search stopped at the first step')
             selected.append((rmod, mag, fs))
         checks = [self.evaluate('check', r, MAGS[-1], fs) for r in RMODS if r != rmod] if self.check else []
-        if any(c['contrast_vis'] < self.rows[selected[-1]]['contrast_vis'] for c in checks):
+        if any(better(c, self.rows[selected[-1]]) for c in checks):
             print(f'WARNING: another modulation beats rMod {rmod} at mag {MAGS[-1]:g}, {fs:.0f} Hz', flush=True)
         self.report(selected)
 
@@ -281,15 +363,16 @@ def final_table(sweeps):
         search = [r for r in rows if r['phase'] != 'check']
         rmod = search[-1]['rMod']       # the fixed or selected modulation: the last run of the search
         for mag in sorted({r['mag'] for r in search if r['rMod'] == rmod}):
-            best.append(line(min((r for r in search if r['rMod'] == rmod and r['mag'] == mag), key=lambda r: r['contrast_vis'])['cells']))
+            best.append(line(min((r for r in search if r['rMod'] == rmod and r['mag'] == mag), key=score)['cells']))
     text = '\n'.join(['## Best frequency per magnitude', '', line(head), line(['---'] * len(head)), *best, '',
                       '## All runs', '', line(head + ['phase', 'notes']), line(['---'] * (len(head) + 2)), *runs]) + '\n'
     return text
 
 
 def main():
-    global N_SUBAPS, N_MODES
+    global N_SUBAPS, N_MODES, REC
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--rec', choices=('svd', 'ml'), default=REC, help='reconstructor; ml: at the flux of each run')
     ap.add_argument('--n-subaps', type=int, default=N_SUBAPS)
     ap.add_argument('--n-modes', type=int, default=N_MODES)
     ap.add_argument('--start-from', help='earlier sweep folder: search only from its start_magnitude, 2 kHz, needs --rmod, no modulation check')
@@ -305,7 +388,7 @@ def main():
         return
     if a.start_from and a.rmod is None:
         ap.error('--start-from needs --rmod')
-    N_SUBAPS, N_MODES = a.n_subaps, a.n_modes
+    N_SUBAPS, N_MODES, REC = a.n_subaps, a.n_modes, a.rec
     os.environ['PATH'] = op.dirname(sys.executable) + os.pathsep + os.environ['PATH']   # the specula CLI of this environment
     Sweep(a.out, a.gpu, a.total_time, a.rmod, start_magnitude(a.start_from) if a.start_from else None, not a.no_check).run()
 

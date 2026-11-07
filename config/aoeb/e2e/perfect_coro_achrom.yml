@@ -1,0 +1,52 @@
+
+main_override:
+  total_time:        6.0
+
+remove: ['kalman', 'kpred', 'dm_modes', 'atmo_modes', 'pyr_modes_vis', 'pyr_modes_nir', 'pyr_slopes_vis', 'pyr_slopes_nir', 
+          'pyr_vis', 'pyr_nir', 'res_modes', 'cred_vis', 'cred_nir']
+
+prop_ol:
+  class:             'AtmoPropagation'
+  simul_params_ref:  'main'
+  source_dict_ref:   ['source_vis']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']
+  outputs:           ['out_source_vis_ef']
+
+atmo_modes:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  nmodes:            1300                    # N: number of modes corrected (= Kalman modes)
+  inputs:
+    in_ef:           ['prop_ol.out_source_vis_ef']
+  outputs:           ['out_modes']
+
+prop_override:
+  source_dict_ref:   ['science_vis', 'science_nir']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop','dm.out_layer']
+  outputs:           ['out_science_vis_ef', 'out_science_nir_ef']
+
+dm_override:
+  inputs:
+    in_command:      'atmo_modes.out_modes'
+
+
+coro_psf_nir_override:
+  start_time:        0.0
+
+coro_psf_vis_override:
+  start_time:        0.0
+
+data_store_override:
+  create_tn: false
+  store_dir:         '/raid1/mmenessini/results/WFSW/perfect_coro/'      # Data result directory: 'store_dir'/TN/
+  inputs:
+    input_list: [
+                  'sr_vis-coro_psf_vis.out_sr',
+                  'coro_psf_vis_int-coro_psf_vis.out_int_coronagraph_psf_profile',
+                  'sr_nir-coro_psf_nir.out_sr',
+                  'coro_psf_nir_int-coro_psf_nir.out_int_coronagraph_psf_profile',
+    ]

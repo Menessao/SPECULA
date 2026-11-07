@@ -190,3 +190,46 @@ class TestPsfCoronagraph(unittest.TestCase):
         self.assertEqual(std_profile_data.shape[0], 2)
         self.assertGreater(float(psf_coro.int_coronagraph_psf.value.max()), 0.0)
         self.assertGreaterEqual(float(psf_coro.std_coronagraph_psf.value.max()), 0.0)
+
+    @cpu_and_gpu
+    def test_profiles_are_raw_contrast(self, target_device_idx, xp):
+        """The profiles are relative to the peak of the AO-corrected PSF, not of the diffraction-limited one."""
+        simul_params, ef, wavelengthInNm = self.get_basic_setup(target_device_idx, pixel_pupil=40)
+
+        psf_coro = PsfCoronagraph(simul_params=simul_params,
+                                  wavelengthInNm=wavelengthInNm,
+                                  nd=2.0,
+                                  start_time=0.0,
+                                  compute_profile_metrics=True,
+                                  compute_metrics_in_trigger=True,
+                                  target_device_idx=target_device_idx)
+
+        psf_coro.inputs['in_ef'].set(ef)
+        psf_coro.setup()
+
+        rng = np.random.default_rng(1)
+        for t in range(1, 4):
+            ef.phaseInNm[:] = xp.asarray(rng.normal(0, 0.15 * wavelengthInNm, ef.size), dtype=ef.phaseInNm.dtype)
+            ef.A[:] = 1.0
+            ef.generation_time = t
+
+            psf_coro.check_ready(t)
+            psf_coro.trigger()
+            psf_coro.post_trigger()
+
+        frame_peak = float(psf_coro.psf.value.max())
+        frame_profile = psf_coro._compute_radial_profile_data(psf_coro.coronagraph_psf.value, peak=frame_peak)[0]
+        np.testing.assert_allclose(cpuArray(psf_coro.coronagraph_psf_profile.value)[1], cpuArray(frame_profile), rtol=1e-5)
+
+        psf_coro.finalize()
+
+        peak = psf_coro.int_psf.value.max()
+        strehl = float(peak) / float(psf_coro.ref.i.max())
+        self.assertLess(strehl, 0.8)
+        for value, output in ((psf_coro.int_coronagraph_psf.value, psf_coro.int_coronagraph_psf_profile),
+                              (psf_coro.std_coronagraph_psf.value, psf_coro.std_coronagraph_psf_profile)):
+            expected = psf_coro._compute_radial_profile_data(value, peak=peak)[0]
+            np.testing.assert_allclose(cpuArray(output.value)[1], cpuArray(expected), rtol=1e-5)
+            # the diffraction-limited normalisation would give a profile lower by the Strehl ratio
+            dl = psf_coro._compute_radial_profile_data(value, peak=psf_coro.ref.i.max())[0]
+            np.testing.assert_allclose(cpuArray(dl), strehl * cpuArray(expected), rtol=1e-5)

@@ -36,7 +36,8 @@ class PsfCoronagraph(PSF):
         Time (in seconds) after which to start integrating PSF and SR. Default is 0.0.
     compute_profile_metrics : bool
         If True, compute coronagraph radial-profile outputs for the instantaneous,
-        integrated and standard-deviation coronagraph PSFs.
+        integrated and standard-deviation coronagraph PSFs, as raw contrast: relative
+        to the peak of the AO-corrected PSF without coronagraph (instantaneous or integrated).
     compute_metrics_in_trigger : bool
         If True, update those metrics after each trigger as well.
     ee_radius_in_lambda_d : float or array-like [lambda/D], optional
@@ -218,7 +219,7 @@ class PsfCoronagraph(PSF):
             self._set_radial_profile_output(
                 self.coronagraph_psf.value,
                 self.coronagraph_psf_profile,
-                norm_peak=self.ref.i.max()
+                norm_peak=self.psf.value.max()
             )
 
     def finalize(self):
@@ -229,15 +230,16 @@ class PsfCoronagraph(PSF):
             variance = self._sum_coronagraph_psf_squared / self.count - self.int_coronagraph_psf.value ** 2
             self.std_coronagraph_psf.value = self.xp.sqrt(self.xp.maximum(variance, 0))
             if self.compute_profile_metrics:
+                # Raw contrast: relative to the peak of the AO-corrected PSF without coronagraph, not of the diffraction-limited one
                 self._set_radial_profile_output(
                     self.int_coronagraph_psf.value,
                     self.int_coronagraph_psf_profile,
-                    norm_peak=self.ref.i.max(),
+                    norm_peak=self.int_psf.value.max(),
                 )
                 self._set_radial_profile_output(
                     self.std_coronagraph_psf.value,
                     self.std_coronagraph_psf_profile,
-                    norm_peak=self.ref.i.max(),
+                    norm_peak=self.int_psf.value.max(),
                 )
 
         self.int_coronagraph_psf.generation_time = self.current_time
