@@ -4,6 +4,7 @@ from astropy.io import fits
 import os.path as op
 import glob
 import yaml
+import time
 
 import matplotlib as mpl
 cmap = mpl.colormaps['hot'] # 1. Choose your colormap (e.g., 'hot', 'jet', 'turbo')
@@ -21,7 +22,7 @@ result_dir = '/raid1/mmenessini/results/WFSW'
 
 # Runs before CORO_NORM_FIX_TN saved the coronagraphic profile per unit of total flux, runs before CORO_AO_NORM_TN relative to the diffraction-limited peak.
 # From CORO_AO_NORM_TN on it is raw contrast, relative to the peak of the integrated AO PSF, and nothing is converted. Folders without a TN (perfect_coro_*)
-# are converted like the oldest runs, so regenerating one with the new code would correct it twice.
+# are dated by the modification time of their profile file instead.
 CORO_NORM_FIX_TN = '20261106_130126'
 CORO_AO_NORM_TN = '20261107_120000'
 pupil = fits.getdata(op.join(calib_dir, 'pupilstop', 'vlt_pupil_220pixels.fits'))
@@ -37,16 +38,29 @@ def mean_sr(result_path:str, band:str):
 def load_coro_profile(result_path:str, band:str):
     """Radial distance [lambda/D] and integrated raw contrast of a run: coronagraphic profile relative to the peak of the integrated AO PSF.
     For the older runs, which did not save that peak, the mean SR stands for it (peak of the integrated PSF / diffraction-limited peak)."""
-    rad, prof = fits.getdata(op.join(result_path, f'coro_psf_{band}_int.fits'))[0]
+    prof_file = op.join(result_path, f'coro_psf_{band}_int.fits')
+    rad, prof = fits.getdata(prof_file)[0]
     tn = op.basename(op.normpath(result_path))
-    if not tn[:8].isdigit() or tn < CORO_NORM_FIX_TN:
+    if not tn[:8].isdigit():
+        tn = time.strftime('%Y%m%d_%H%M%S', time.localtime(op.getmtime(prof_file)))
+    if tn < CORO_NORM_FIX_TN:
         prof = prof / peak_DL
-    if not tn[:8].isdigit() or tn < CORO_AO_NORM_TN:
+    if tn < CORO_AO_NORM_TN:
         prof = prof / mean_sr(result_path, band)
     return rad, prof
 
-radp, perf_coro_vis_int = load_coro_profile(op.join(result_dir, 'perfect_coro_vis'), 'vis')
-radp, perf_coro_nir_int = load_coro_profile(op.join(result_dir, 'perfect_coro_vis'), 'nir')
+# Fitting-only references (perfect coronagraph, perfect 1300-mode correction), achromatic, at the conditions of ristretto_main.yml (z = 30 deg, atmo.fov = 2").
+# The older 'perfect_coro' (z = 0, fov = 0) carries the rotation artifact of pupil-sized layers: ~2.5x (VIS) and ~13x (NIR) worse at 2-4 lambda/D.
+radp, perf_coro_vis_int = load_coro_profile(op.join(result_dir, 'perfect_coro_achrom_z30'), 'vis')
+radp, perf_coro_nir_int = load_coro_profile(op.join(result_dir, 'perfect_coro_achrom_z30'), 'nir')
+
+def load_perfect_coro(case:str='achrom', zenith:int=30):
+    """Fitting-only references at a zenith angle: case 'achrom' (no chromatism), 'vis' (WFS at 900 nm) or 'nir' (WFS at 1300 nm,
+    chromatic anisoplanatism between WFS and science). Returns rad, contrast_vis, contrast_nir."""
+    path = op.join(result_dir, f'perfect_coro_{case}_z{zenith}')
+    rad, cv = load_coro_profile(path, 'vis')
+    rad, cn = load_coro_profile(path, 'nir')
+    return rad, cv, cn
 
 def get_latest_path(return_tn:bool=False):
     result_path = sorted(glob.glob(op.join(result_dir, '20*')))[-1]

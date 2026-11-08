@@ -1,6 +1,10 @@
 
 main_override:
   total_time:        6.0
+  zenithAngleInDeg:  30.0                  # chromatic anisoplanatism is 0 at zenith (shift ~ sec z tan z)
+
+atmo_override:
+  fov:               2.0                   # [arcsec] layers larger than the pupil so the chromatic shift stays inside them
 
 remove: ['kalman', 'kpred', 'dm_modes', 'atmo_modes', 'pyr_modes_vis', 'pyr_modes_nir', 'pyr_slopes_vis', 'pyr_slopes_nir', 
           'pyr_vis', 'pyr_nir', 'source_nir', 'res_modes', 'cred_vis', 'cred_nir']
@@ -11,7 +15,7 @@ prop_ol:
   source_dict_ref:   ['source_vis']
   enable_chromatic_effect: true
   chromatic_reference_wavelengthInNm: 900
-  telescope_altitude_m: 0
+  telescope_altitude_m: 2635
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop']
@@ -28,8 +32,8 @@ atmo_modes:
 prop_override:
   source_dict_ref:   ['science_vis', 'science_nir']
   enable_chromatic_effect: true
-  chromatic_reference_wavelengthInNm: 550
-  telescope_altitude_m: 0
+  chromatic_reference_wavelengthInNm: 900
+  telescope_altitude_m: 2635
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer']
@@ -48,7 +52,7 @@ coro_psf_vis_override:
 
 data_store_override:
   create_tn: false
-  store_dir:         '/raid1/mmenessini/results/WFSW/perfect_coro_nir/'      # Data result directory: 'store_dir'/TN/
+  store_dir:         '/raid1/mmenessini/results/WFSW/perfect_coro_vis_z30/'      # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
                   'sr_vis-coro_psf_vis.out_sr',

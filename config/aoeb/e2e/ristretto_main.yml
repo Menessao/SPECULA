@@ -10,15 +10,15 @@ main:
   root_dir:          '/raid1/mmenessini/calibration/WFSW'  # CalibManager root directory (all the data are in subdirectories); overridden by aoeb
   pixel_pupil:       220                   # Must match influence function computation
   pixel_pitch:       0.03727272727         # [m] 8.2m / 220 pixels = 0.037272 m/pixel (Nyquist sampling of 10cm r0)
-  total_time:        1.000                 # [s]
+  total_time:        2.000                 # [s]
   time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
-  zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
+  zenithAngleInDeg:  30.0                  # [deg] > 0 for the chromatic anisoplanatism of prop (zero at zenith); r0 scales as airmass^-3/5
   display_server:    false                 # Disable for batch runs
 
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          0.88                  # [arcsec]
+  constant:          0.70                  # [arcsec]
   outputs:           ['output']
 
 wind_speed:
@@ -93,7 +93,7 @@ atmo:
   #                        0.0161969, 0.0260951, 0.0155971, 0.0103980, 0.00999811, 0.0119977, 0.00400924, 0.0139974, 0.0129975, 0.00700868,
   #                        0.0159970, 0.0258951, 0.0190964, 0.00986813, 0.00616883, 0.00400924, 0.00246953, 0.00215959, 0.00184965, 0.00135974,
   #                        0.00110979, 0.000616883, 0.000925825, 0.000493907, 0.000431918] # Cn2 weights (total must be eq 1)
-  fov:               0.0                    # [arcsec] Field of view
+  fov:               2.0                    # [arcsec] > 0 so the layers exceed the pupil: the wind-direction rotation (order 1, cval 0) zeroes rim pixels of a pupil-sized layer, and the chromatic shifts need the margin
   inputs:
     seeing:          'seeing.output'
     wind_speed:      'wind_speed.output'
@@ -105,6 +105,9 @@ prop:
   class:             'AtmoPropagation'
   simul_params_ref:  'main'
   source_dict_ref:   ['source_vis', 'source_nir', 'science_vis', 'science_nir']
+  enable_chromatic_effect: true                # chromatic anisoplanatism (layer shifts between wavelengths); zero at zenithAngleInDeg = 0
+  chromatic_reference_wavelengthInNm: 900      # [nm] common to all the sources of this object: only the differential shift matters
+  telescope_altitude_m: 2635                   # [m] Paranal
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer:-1']       # Pupil + DM correction
