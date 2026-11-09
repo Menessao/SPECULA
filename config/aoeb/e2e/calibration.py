@@ -68,6 +68,8 @@ class E2EConfig:
     main_yml: str = _STUDY['paths']['main']
     seed: int = 1
     overwrite: bool = False
+    n_corr: tuple = None                     # corrected-mode counts of the alias / pc cases; None: modes_per_subap (standard). E.g.
+                                             # (1300,) for the multistage products of a small sensor (aliasing of its own recs <= 1300)
 
     def paths(self, wvl):
         return Paths(self.calib_dir, self.pupilstop_tag, self.dm_tag).at(float(wvl))
@@ -83,14 +85,15 @@ class E2EConfig:
 
     def cases(self):
         """(rMod, n, seeing, N corrected) of the aliasing and PC runs, cheapest first."""
-        out = [(r, n, snap_seeing(s), N) for r, n in self.sensors() for s in self.seeings for N in self.mode_list(n)]
+        out = [(r, n, snap_seeing(s), N) for r, n in self.sensors() for s in self.seeings for N in (self.n_corr or self.mode_list(n))]
         return sorted(out, key=lambda c: (c[3], c[1], c[0], c[2]))
 
 
 # ----------------------------------------------------------------------------- SPECULA
 def run_specula(cfg, extra_ymls, overrides, gpu=0, tag='run'):
     """specula main + extra ymls + a unique override file; stdout / stderr -> <calib_dir>/logs/<tag>.log (kept on failure)."""
-    ov = merge({'main': {'root_dir': cfg.calib_dir, 'time_step': cfg.time_step},
+    ov = merge({'main': {'root_dir': cfg.calib_dir, 'time_step': cfg.time_step, 'zenithAngleInDeg': 0.0},   # products are tagged by the
+                                                                             # seeing at zenith (AtmoRandomPhase scales r0 with the airmass)
                 'cred_vis': {'dt': cfg.time_step}, 'cred_nir': {'dt': cfg.time_step}}, overrides)
     logs, scratch = op.join(cfg.calib_dir, 'logs'), op.join(cfg.calib_dir, 'scratch')
     os.makedirs(logs, exist_ok=True)
@@ -201,22 +204,25 @@ def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
 
 
 def calibrate_pc(cfg, gpu=0, shard=(0, 1)):
-    """PC IM of both pyramids: one run of n_screens push-pull cycles, a new screen every cycle (calib_pc.yml)."""
+    """PC IM of both pyramids: one run of n_screens push-pull cycles, a new screen every cycle (calib_pc.yml). N modes are perfectly
+    corrected; the push-pull covers min(N, largest controlled count of the sensor) modes (the budget only reads IM[:, :N_controlled]),
+    so the multistage IMs of a small sensor (N = 1300 corrected, 100 controlled) cost as much as its own standard ones."""
     for r, n, s, N in _shard(cfg.cases(), shard):
         Ps = {p: cfg.paths(cfg.wavelengths[p]) for p in PYRS}
         paths = {p: P.im_pc(r, n, s, N) for p, P in Ps.items()}
         if not _needed(cfg, *paths.values()):
             continue
         vec = _correction_vector(cfg, N)
+        n_pp = min(N, cfg.mode_list(n)[-1])                                  # push-pull modes
         ov = merge(_pyrs(cfg, r, n), {
-            'main': {'total_time': 2 * N * cfg.n_screens * cfg.time_step},
-            'seeing_random': {'constant': float(s)}, 'atmo_random': {'update_interval': 2 * N, 'seed': cfg.seed},
+            'main': {'total_time': 2 * n_pp * cfg.n_screens * cfg.time_step},
+            'seeing_random': {'constant': float(s)}, 'atmo_random': {'update_interval': 2 * n_pp, 'seed': cfg.seed},
             'modal_analysis_random': {'nmodes': N}, 'scale_random': {'constant_mul_data': vec}, 'dm_random': {'nmodes': N},
-            'dm': {'nmodes': N}, 'pushpull': {'nmodes': N, 'ncycles': cfg.n_screens}},
-            {f'pyr_im_calibrator_{p}': {'im_tag': op.basename(path)[:-5], 'nmodes': N} for p, path in paths.items()})
+            'dm': {'nmodes': n_pp}, 'pushpull': {'nmodes': n_pp, 'ncycles': cfg.n_screens}},
+            {f'pyr_im_calibrator_{p}': {'im_tag': op.basename(path)[:-5], 'nmodes': n_pp} for p, path in paths.items()})
         run_specula(cfg, ['calib_pc.yml'], ov, gpu, op.basename(paths['vis'])[:-5])
         for p, path in paths.items():
-            au.set_header(path, wvl_nm=float(cfg.wavelengths[p]), seeing=float(s), n_screen=cfg.n_screens, dm_tag=cfg.dm_tag)
+            au.set_header(path, wvl_nm=float(cfg.wavelengths[p]), seeing=float(s), n_screen=cfg.n_screens, dm_tag=cfg.dm_tag, n_pushpull=n_pp)
 
 
 def avgframe_steps(frame_path):
@@ -275,6 +281,7 @@ def main(argv=None):
     ap.add_argument('--n-subaps', type=int, nargs='+')
     ap.add_argument('--rmods', type=float, nargs='+')
     ap.add_argument('--n-screens', type=int)
+    ap.add_argument('--n-corr', type=int, nargs='+', help='corrected-mode counts of the alias / pc cases (default: modes_per_subap)')
     ap.add_argument('--calib-dir')
     ap.add_argument('--overwrite', action='store_true')
     ap.add_argument('--list', action='store_true', help='print the status of the alias and pc cases and exit')
@@ -282,7 +289,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
     cfg = E2EConfig()
     for k, v in (('seeings', a.seeings), ('n_subaps', a.n_subaps), ('rMods', a.rmods), ('n_screens', a.n_screens),
-                 ('calib_dir', a.calib_dir)):
+                 ('calib_dir', a.calib_dir), ('n_corr', a.n_corr)):
         if v is not None:
             setattr(cfg, k, tuple(v) if isinstance(v, list) else v)
     cfg.overwrite = a.overwrite

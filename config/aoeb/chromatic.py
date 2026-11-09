@@ -3,7 +3,8 @@
   chrom_shear    refractive-path shear (TipTop differentialRefractionPSD), always on, k < k_c
   chrom_mult     multiplicative term (TipTop chromatismPSD), optional, per mode and loop dependent (budget.py)
   chrom_fresnel  optional: chromatic OPD of the Fresnel propagation, Phi sum_l w_l [cos(pi lc h k^2) - cos(pi ls h k^2)]^2, k < k_c
-  scintillation  optional: log-amplitude at the science wavelength, Phi sum_l w_l sin^2(pi lc h k^2), all k < k_max
+  scintillation  optional: log-amplitude at the science wavelength, Phi sum_l w_l sin^2(pi lc h k^2), k < k_c (above k_c the fitting
+                 term already holds the whole Phi = phase Phi cos^2 + amplitude Phi sin^2: adding it there would count it twice)
 Layer profile, zenith and flags come from config/defaults.yml (atmosphere, chromatic). n - 1 comes from TipTop's MatharAirRefraction (`p3.aoSystem.airRefraction` or `airRefraction`) or an `air_model`; no fallback.
 """
 from dataclasses import dataclass
@@ -53,7 +54,7 @@ class ChromaticModel:
     compensation: float = 0.0
     fresnel: bool = False
     scintillation: bool = False
-    k_max: float = None                  # [c/m] upper limit of the scintillation; None: the Nyquist frequency of the pupil grid
+    k_max: float = None                  # [c/m] optional extra upper limit of the scintillation (it always stops at k_c)
     air_model: object = None
     delta_n: float = None                # override of n_sensing - n_science
     heights_are_slant: bool = False      # heights already include the airmass (TipTop's Hs)
@@ -80,7 +81,7 @@ class ChromaticModel:
     def psds(self, k, r0, L0, k_cut, sensing_nm, k_max=None):
         """{name: radial PSD on k} of the enabled terms (the multiplicative term is per mode, see budget.py)."""
         k = np.asarray(k, float)
-        k_max = self.k_max or k_max or float(k.max())
+        k_max = self.k_max or k_max or np.inf
         phi, hs, w, band = utils.von_karman_psd(k, r0, L0), self.slant_heights()[:, None], self.cn2[:, None], k < k_cut
         lc, ls, k2 = self.science_nm * 1e-9, sensing_nm * 1e-9, k[None] ** 2
         out = {'chrom_shear': phi * (w * 2.0 * (1.0 - j0(2 * np.pi * k[None] * self.layer_shifts(sensing_nm)[:, None]))).sum(0) * band}
@@ -88,11 +89,10 @@ class ChromaticModel:
             d = np.cos(np.pi * lc * hs * k2) - np.cos(np.pi * ls * hs * k2)
             out['chrom_fresnel'] = phi * (w * d ** 2).sum(0) * band
         if self.scintillation:
-            out['scintillation'] = phi * (w * np.sin(np.pi * lc * hs * k2) ** 2).sum(0) * (k < k_max)
+            out['scintillation'] = phi * (w * np.sin(np.pi * lc * hs * k2) ** 2).sum(0) * band * (k < k_max)
         return out
 
     def variances(self, r0, L0, k_cut, sensing_nm, k_max=None, n=60000):
-        """{term: variance [nm^2]}; k_max: Nyquist frequency of the pupil grid (scintillation upper limit) unless self.k_max."""
-        kmax = self.k_max or k_max or k_cut
-        k = np.linspace(0.0, max(k_cut, kmax if self.scintillation else 0.0), n)
-        return {name: float(_trapz(p * 2 * np.pi * k, k)) for name, p in self.psds(k, r0, L0, k_cut, sensing_nm, kmax).items()}
+        """{term: variance [nm^2]}; every term stops at k_cut (k_max: optional extra limit of the scintillation)."""
+        k = np.linspace(0.0, k_cut, n)
+        return {name: float(_trapz(p * 2 * np.pi * k, k)) for name, p in self.psds(k, r0, L0, k_cut, sensing_nm, k_max).items()}

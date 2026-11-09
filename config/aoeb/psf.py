@@ -299,8 +299,17 @@ class PsfEngine:
         """PsdSet of a BudgetResult (fitting_scale 'lbt': PSD scaled to the budget's fitting variance, 'psd': pure tail; with
         machine.asm=False the fitting PSD lies outside TipTop's square corrected area)."""
         wl = result.params['wavelength_nm']
-        return residual_psd_terms(self.kernels(), result, float(utils.r0_from_seeing(result.params['seeing'])), self.m.L0,
-                                  int(result.params.get('NmodesUsed', result.params['Nmodes'])), fitting_scale, extra_psd, result.chromatic,
+        r0, chromatic = float(utils.r0_from_seeing(result.params['seeing'])), result.chromatic
+        bands = getattr(result, 'chrom_bands', None)
+        if bands:                                   # fused / multi-stage results: chromatic PSD by spatial-frequency band
+            k, extra_psd, chromatic = self.kernels().k, dict(extra_psd or {}), None
+            for cm, k_lo, k_hi, sensing_nm in bands:
+                hi = cm.psds(k, r0, self.m.L0, k_hi, sensing_nm)
+                lo = cm.psds(k, r0, self.m.L0, k_lo, sensing_nm) if k_lo > 0 else {}
+                for name, p in hi.items():
+                    extra_psd[name] = extra_psd.get(name, 0.0) + p - lo.get(name, 0.0)
+        return residual_psd_terms(self.kernels(), result, r0, self.m.L0,
+                                  int(result.params.get('NmodesUsed', result.params['Nmodes'])), fitting_scale, extra_psd, chromatic,
                                   None if np.isnan(wl) else wl, include_open_loop, split_noise, square=not getattr(self.m, 'asm', True))
 
     def psf_terms(self, result, wavelength_nm, names=None, **kw):

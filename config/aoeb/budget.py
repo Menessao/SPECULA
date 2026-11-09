@@ -108,6 +108,8 @@ class BudgetResult:
     chromatic: object = None
     chrom_mult: np.ndarray = None   # per-mode multiplicative chromatic term [nm^2], signed
     iterations: int = 0
+    chrom_bands: list = None        # [(ChromaticModel, k_lo, k_hi, sensing_nm)]: chromatic PSD by spatial-frequency band (fused and
+                                    # multi-stage results; PsfEngine uses it instead of `chromatic`)
 
     @property
     def noise(self):
@@ -632,3 +634,184 @@ class ErrorBudgetMachine:
                 warnings.warn(f'optimisation: lower frame rate in {nf} and fewer modes in {nm} of {len(tot)} configurations '
                               '(columns freqUsedInHz, NmodesUsed)')
         return (pd.concat(modes, ignore_index=True) if modes else pd.DataFrame()), tot
+
+    # ---- several sensors
+    def noise_crossover(self, rMod, n_subap, seeing, fs, N=None, wavelength_nm=None, N_corr=None):
+        """Flux at which photon and readout noise are equal. Per mode the photon variance is A/n and the readout variance B/n^2 (n detected
+        electrons per frame), so n* = B / A. Returns dict(flux_mode [ph/s] per mode, flux [ph/s] of the sums over the modes,
+        e_frame: detected electrons per frame at that flux)."""
+        N = N or self.max_modes(n_subap)
+        cal = self.calibration(rMod, n_subap, seeing, N, N_corr, wavelength_nm=wavelength_nm)
+        A, B = cal.noise.modal_variance_parts(1.0, self.detector)                 # n_det = 1 electron per frame
+        to_flux = fs / self.detector.qe
+        n_tot = float(np.sum(B) / np.sum(A))
+        return dict(flux_mode=B / np.maximum(A, 1e-300) * to_flux, flux=n_tot * to_flux, e_frame=n_tot)
+
+    def budget_fused(self, sensors, seeing, fs, N=None, latency_s=500e-6, controller='int', n_fold=3, ff_grid=None, rec=('svd',),
+                     crosstalk=False, chromatic=None, alias_correlation='full', optimize_freq=None, optimize_modes=None, warn=True):
+        """Budget of ONE loop fed by several sensors at the same frame rate fs whose measurements of every mode are fused with the optimal
+        (inverse-variance) weights. sensors: [dict(rMod, n_subap, wavelength_nm, flux)], flux in photons/s at that sensor's detector (each
+        sensor has its own detector: the readout noise is paid once per sensor). Per mode, in optical-gain-compensated units
+        (sigma_i^2 = (photon_i + readout_i) / og_i^2):
+            w_i = (1 / sigma_i^2) / sum_j (1 / sigma_j^2),   fused noise = 1 / sum_i (1 / sigma_i^2) = sum_i w_i^2 sigma_i^2,
+        reported as photon = sum w_i^2 photon_i / og_i^2 and readout = sum w_i^2 readout_i / og_i^2 (they add up to the fused noise).
+        Aliasing (both sensors see the same phase above the corrected modes): alias_correlation 'full' (fully correlated, conservative):
+        (sum w_i a_i / og_i)^2, 'none' (independent, optimistic): sum w_i^2 a_i^2 / og_i^2. Crosstalk: the fused leak matrix
+        sum_i diag(w_i / og_i) (R IM_PC)_i (coherent: the same residual leaks into every sensor). Chromatic shear: one effective
+        sensing beam whose refractivity is the turbulence-weighted mean of the sensors' (delta_n override); the multiplicative term is
+        not supported. The gains of the result are the loop gains of the compensated measurement (og = 1).
+        fs and N are maxima as in budget() (common frame-rate grid; mode counts calibrated for every sensor).
+        Optional per-sensor keys (used by budget_dual): 'fs' the sensor frame rate when it differs from the loop rate fs (its noise enters
+        with the same noise PSD at the loop rate: per-frame variance x fs / fs_i; its longer exposure and delay are NOT modelled, which is
+        optimistic for a slower sensor); 'N_rec' the modes of its reconstructor (>= N, the first N are fused); 'N_corr' the corrected modes
+        of its products (default N_rec; n_modes_ho for a 'multistage' LO sensor)."""
+        if chromatic is not None and chromatic.multiplicative:
+            raise NotImplementedError('budget_fused: the multiplicative chromatic term is not supported')
+        if alias_correlation not in ('full', 'none'):
+            raise ValueError("alias_correlation must be 'full' or 'none'")
+        sensors = [dict(s) for s in sensors if s['flux'] > 0]
+        if not sensors:
+            raise ValueError('budget_fused: no sensor with a positive flux')
+        opt_f = self.optimize_freq if optimize_freq is None else optimize_freq
+        opt_m = self.optimize_modes if optimize_modes is None else optimize_modes
+        n_max = min(self.max_modes(s['n_subap']) for s in sensors)
+        N_req = int(N or n_max)
+        common = set.intersection(*(set(self.mode_list(s['n_subap'])) for s in sensors))
+        modes = sorted({n for n in common if n <= N_req} | {N_req}, reverse=True) if opt_m else [N_req]
+        freqs = self.freq_candidates(fs) if opt_f else [float(fs)]
+        kw = dict(latency_s=latency_s, controller=controller, n_fold=n_fold, ff_grid=ff_grid, rec=rec, crosstalk=crosstalk,
+                  chromatic=chromatic, alias_correlation=alias_correlation)
+        best = first = None
+        for n_m in modes:
+            for f in freqs:
+                r = self._budget_fused_at(sensors, seeing, f, n_m, **kw)
+                total = r.variances()['total']
+                first = total if first is None else first
+                if best is None or total < best[0] * (1 - 1e-9):
+                    best = (total, r)
+        r = best[1]
+        r.params.update(freqUsedInHz=r.params['freqInHz'], NmodesUsed=r.params['Nmodes'], freqInHz=float(fs), Nmodes=N_req)
+        if warn and (r.params['freqUsedInHz'] != float(fs) or r.params['NmodesUsed'] != N_req):
+            warnings.warn(f"fused {r.params['sensors']}: best at {r.params['freqUsedInHz']:.0f} Hz and {r.params['NmodesUsed']} modes "
+                          f"(max {float(fs):.0f} Hz, {N_req} modes): total {np.sqrt(best[0]):.1f} nm instead of {np.sqrt(first):.1f} nm")
+        return r
+
+    def _budget_fused_at(self, sensors, seeing, fs, N, latency_s, controller, n_fold, ff_grid, rec, crosstalk, chromatic,
+                         alias_correlation):
+        if controller not in CONTROLLERS:
+            raise ValueError(f'budget_fused: controller must be one of {CONTROLLERS}')
+        turb_cmd, rms, r0 = self.turbulence(seeing, N)
+        if N not in self._orders:
+            self._orders[N] = utils.radial_order(np.arange(N))
+        orders = self._orders[N]
+        cals, phot, ron, alias, og = [], [], [], [], []
+        for s in sensors:
+            n_rec = int(s.get('N_rec') or N)                     # modes of the sensor's reconstructor (>= N; only the first N are fused)
+            cal = self.calibration(s['rMod'], s['n_subap'], seeing, n_rec, int(s.get('N_corr') or n_rec), rec, s['wavelength_nm'])
+            fs_i = float(s.get('fs') or fs)                      # sensor frame rate: equal noise PSD at the loop rate fs
+            g = np.maximum(cal.og[:N], 1e-3)
+            p, rn = cal.noise.modal_variance_parts(self.detector.n_det(s['flux'], fs_i), self.detector)
+            cals.append(cal), og.append(g), phot.append(p[:N] / g ** 2 * fs / fs_i), ron.append(rn[:N] / g ** 2 * fs / fs_i)
+            alias.append(cal.alias_rms[:N] * (seeing / cal.alias_seeing) ** (5 / 6) / g)
+        inv = np.sum([1.0 / np.maximum(p + rn, 1e-300) for p, rn in zip(phot, ron)], axis=0)
+        w = [1.0 / np.maximum(p + rn, 1e-300) / inv for p, rn in zip(phot, ron)]
+        photon = np.sum([wi ** 2 * p for wi, p in zip(w, phot)], axis=0)
+        readout = np.sum([wi ** 2 * rn for wi, rn in zip(w, ron)], axis=0)
+        alias_cmd = (np.sum([wi * a for wi, a in zip(w, alias)], axis=0) ** 2 if alias_correlation == 'full' else
+                     np.sum([(wi * a) ** 2 for wi, a in zip(w, alias)], axis=0))
+        noise_cmd = photon + readout
+        xt = None
+        if crosstalk:
+            M = sum((wi / g)[:, None] * cal.mixing()[:N, :N] for wi, g, cal in zip(w, og, cals))
+            xt = (M ** 2).astype(np.float32)
+            np.fill_diagonal(xt, 0.0)
+        wls = [float(s['wavelength_nm']) for s in sensors]
+        wbar = np.array([float(np.sum(wi * turb_cmd * rms ** 2) / np.sum(turb_cmd * rms ** 2)) for wi in w])    # weight of each sensor
+        wl_eff = float(np.sum(wbar * np.asarray(wls)))
+        extra, bands = {}, None
+        if chromatic is not None:
+            n_eff = float(np.sum(wbar * np.array([chromatic.n_minus_1(x) for x in wls])))
+            cm = _replace(chromatic, delta_n=n_eff - float(chromatic.n_minus_1(chromatic.science_nm)))
+            k_cut = utils.fitting_cutoff(N, self.D)
+            extra.update(cm.variances(r0, self.L0, k_cut, wl_eff, self._k_nyquist()))
+            bands = [(cm, 0.0, k_cut, wl_eff)]
+        ff = tuple(ff_grid if ff_grid is not None else (DEFAULT_FF_GRID if controller == 'leaky' else (1.0,)))
+        tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wls[int(np.argmax(wbar))]), ff, n_fold,
+                                   wiener=controller == 'wiener')
+        opt = self._solve(tables, turb_cmd, noise_cmd, alias_cmd, np.ones(N), orders, xt)
+        desc = ' + '.join(f"{s['n_subap']}x{s['n_subap']} rMod {s['rMod']:g} {s['wavelength_nm']:.0f}nm"
+                          + (f" {float(s['fs']):.0f}Hz" if s.get('fs') else '') for s in sensors)
+        params = dict(scenario='fused', controller=controller, rMod=np.nan, seeing=seeing, Nsubaps=min(s['n_subap'] for s in sensors),
+                      Nmodes=N, freqInHz=fs, photPerMs=sum(s['flux'] for s in sensors) / 1e3, wavelength_nm=wl_eff,
+                      crosstalk=bool(crosstalk), sensors=desc, alias_correlation=alias_correlation,
+                      **{f'weight_{i}': float(x) for i, x in enumerate(wbar)})
+        res = self._result(opt, params, np.ones(N), rms ** 2, photon / np.maximum(noise_cmd, 1e-300), self._fitting(r0, N), extra,
+                           None, None, 1)
+        res.chrom_bands, res.weights = bands, np.stack(w)
+        return res
+
+    def budget_multistage(self, lo, ho, seeing, latency_s=500e-6, controller='int', crosstalk=False, chromatic=None,
+                          optimize_freq=None, optimize_modes=False, warn=True, **kw):
+        """Two sensors in PARALLEL after the DM (ASSUMPTIONS A16), each mode controlled by one of them: the LO sensor controls the first
+        lo['N'] modes (scenario 'multistage': aliasing, frames and optical gains of the run with n_modes_ho modes corrected), the HO
+        sensor the modes lo['N'] ... n_modes_ho - 1 (scenario 'standard' with n_modes_ho modes), with its own frame rate; fitting of
+        n_modes_ho modes. lo, ho: dict(rMod, n_subap, wavelength_nm, flux, fs[, N]) (fs maxima unless optimize_freq=False).
+        Chromatic shear by spatial-frequency band: LO sensing wavelength below the LO cut-off, HO one between the two cut-offs.
+        Returns the spliced BudgetResult; .stages = (lo_result, ho_result). The mode counts are fixed (optimize_modes is ignored: the
+        LO products are those of exactly lo['N'] modes under n_modes_ho corrected)."""
+        if chromatic is not None and chromatic.multiplicative:
+            raise NotImplementedError('budget_multistage: the multiplicative chromatic term is not supported')
+        n_ho = int(ho.get('N') or self.n_modes_ho)
+        if n_ho != self.n_modes_ho:
+            raise ValueError(f'the HO stage must control n_modes_ho = {self.n_modes_ho} modes (the LO products assume them corrected)')
+        run = lambda s, N, scen: self.budget(s['rMod'], s['n_subap'], seeing, s['flux'], s['fs'], N=N, scenario=scen, latency_s=latency_s,
+                                             controller=controller, wavelength_nm=s['wavelength_nm'], crosstalk=crosstalk,
+                                             optimize_freq=optimize_freq, optimize_modes=False, warn=warn, **kw)
+        return self.combine_stages(run(lo, int(lo['N']), 'multistage'), run(ho, n_ho, 'standard'), lo, ho, seeing, chromatic)
+
+    def budget_dual(self, lo, ho, seeing, latency_s=500e-6, controller='int', crosstalk=False, chromatic=None, alias_correlation='full',
+                    rec=('svd',), r_ho=None):
+        """Two sensors with their measurements FUSED: the first lo['N'] modes are controlled by one loop at the LO frame rate lo['fs'] fed by
+        both sensors (per-mode inverse-variance weights, budget_fused; the LO sensor with its 'multistage' products, i.e. n_modes_ho modes
+        corrected, the HO sensor with its own n_modes_ho-mode reconstructor at its frame rate ho['fs'], equal-noise-PSD approximation), the
+        modes lo['N'] ... n_modes_ho - 1 by the HO sensor alone at ho['fs'] (standard). Frame rates are used as given. r_ho: the HO standard
+        budget if already computed. Returns the spliced BudgetResult (.stages = (fused LO-mode result, HO result), .weights of the LO modes)."""
+        n_ho, n_lo = self.n_modes_ho, int(lo['N'])
+        kw = dict(latency_s=latency_s, controller=controller, crosstalk=crosstalk, rec=rec)
+        if r_ho is None:
+            r_ho = self.budget(ho['rMod'], ho['n_subap'], seeing, ho['flux'], ho['fs'], N=n_ho, wavelength_nm=ho['wavelength_nm'],
+                               optimize_freq=False, optimize_modes=False, warn=False, **kw)
+        sensors = [{**lo, 'N_rec': n_lo, 'N_corr': n_ho, 'fs': lo['fs']}, {**ho, 'N_rec': n_ho, 'N_corr': n_ho}]
+        r_low = self._budget_fused_at(sensors, seeing, float(lo['fs']), n_lo, n_fold=3, ff_grid=None, chromatic=None,
+                                      alias_correlation=alias_correlation, **kw)
+        r_low.params['freqUsedInHz'] = float(lo['fs'])
+        res = self.combine_stages(r_low, r_ho, {**lo, 'wavelength_nm': r_low.params['wavelength_nm']}, ho, seeing, chromatic)
+        res.params['scenario'] = 'dual'
+        res.weights = r_low.weights
+        return res
+
+    def combine_stages(self, r_lo, r_ho, lo, ho, seeing, chromatic=None):
+        """Splice of an LO result (scenario 'multistage', its N modes) and an HO result (standard, n_modes_ho modes): modes < N from
+        the LO stage, the others and the fitting from the HO stage, chromatic shear by spatial-frequency band (budget_multistage, which
+        computes the two stage budgets; call this directly to reuse cached stage results). lo, ho: the sensor dicts (wavelength_nm, flux)."""
+        n_ho = len(r_ho.lag)
+        n = len(r_lo.lag)
+        cat = lambda a, b: np.concatenate([a[:n], b[n:]])
+        fields = {f: cat(getattr(r_lo, f), getattr(r_ho, f)) for f in ('gain', 'ff', 'og', 'lag', 'noise_photon', 'noise_ron', 'alias', 'xtalk')}
+        extra, bands = {}, None
+        if chromatic is not None:
+            r0 = float(utils.r0_from_seeing(seeing))
+            k_lo, k_ho = utils.fitting_cutoff(n, self.D), utils.fitting_cutoff(n_ho, self.D)
+            bands = [(chromatic, 0.0, k_lo, float(lo['wavelength_nm'])), (chromatic, k_lo, k_ho, float(ho['wavelength_nm']))]
+            for cm, a, b, wl in bands:
+                hi = cm.variances(r0, self.L0, b, wl, self._k_nyquist())
+                low = cm.variances(r0, self.L0, a, wl, self._k_nyquist()) if a > 0 else {}
+                for name, v in hi.items():
+                    extra[name] = extra.get(name, 0.0) + v - low.get(name, 0.0)
+        tag = lambda s, r: f"{s['n_subap']}x{s['n_subap']} rMod {s['rMod']:g} {s['wavelength_nm']:.0f}nm {r.params['freqUsedInHz']:.0f}Hz"
+        params = {**r_ho.params, 'scenario': 'multistage', 'N_lo': n, 'freqUsedInHz_lo': r_lo.params['freqUsedInHz'],
+                  'photPerMs': (lo['flux'] + ho['flux']) / 1e3, 'wavelength_nm': np.nan,
+                  'sensors': f'LO {n} modes: {tag(lo, r_lo)} | HO: {tag(ho, r_ho)}'}
+        res = _replace(r_ho, params=params, extra=extra, chromatic=None, chrom_mult=None, chrom_bands=bands, **fields)
+        res.stages = (r_lo, r_ho)
+        return res

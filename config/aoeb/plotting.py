@@ -7,7 +7,7 @@ from . import psf as psflib
 from . import utils
 
 COLORS = {'lag': 'C0', 'noise': 'C1', 'noise_photon': 'C1', 'noise_ron': 'goldenrod', 'alias': 'C2', 'fitting': 'C3',
-          'total': 'k', 'xtalk': 'C4', 'chrom_shear': 'C5', 'chrom_mult': 'C6', 'chrom_fresnel': 'C7', 'scintillation': 'teal',
+          'total': 'k', 'xtalk': 'C4', 'chrom_shear': 'C5', 'chrom_mult': 'C6', 'chrom_fresnel': 'olive', 'scintillation': 'teal',
           'turbulence': 'gray'}
 LABELS = {'photPerMs': 'photons / ms at the detector', 'freqInHz': 'frame rate [Hz]', 'seeing': 'seeing [arcsec]',
           'rMod': 'modulation radius [$\\lambda$/D]', 'Nsubaps': 'sub-apertures across the pupil', 'Nmodes': 'controlled modes',
@@ -61,6 +61,11 @@ def _one_per(df, x, by=None):
         raise ValueError(f'several configurations share the same {x}: pin them with filters (still varying: {varying})')
 
 
+def _pretty(name):
+    """Legend text of a term: underscores as spaces ('noise_photon' -> 'noise photon')."""
+    return str(name).replace('_', ' ')
+
+
 def _label(name, h):
     return f'{name}={h:g}' if isinstance(h, (int, float, np.floating)) else f'{name}={h}'
 
@@ -72,7 +77,7 @@ def plot_budget_terms(totals, x='photPerMs', filters=None, terms=('lag', 'noise'
     _one_per(df, x)
     fig, ax = _fig(ax)
     for t in terms:
-        ax.plot(df[x], _value(df, t), '-o' if t == 'total' else '-', ms=3, color=COLORS.get(t), label=t,
+        ax.plot(df[x], _value(df, t), '-o' if t == 'total' else '-', ms=3, color=COLORS.get(t), label=_pretty(t),
                 lw=2 if t == 'total' else 1.5)
     ax.legend()
     return _finish(fig, ax, x, 'error [nm rms]', title, logx, logy, xlim, ylim)
@@ -168,7 +173,7 @@ def plot_psd_terms(psd_set, terms=None, xaxis='lamD', show_open_loop=True, title
             continue
         ok = (psd_set.k > 0) & (t.psd > 0)
         ax.plot(psd_set.k[ok] * sc, t.psd[ok], color=COLORS.get(n), lw=2.2 if n == 'total' else 1.4,
-                ls=':' if n == 'turbulence' else '-', label=n)
+                ls=':' if n == 'turbulence' else '-', label=_pretty(n))
     # if psd_set.meta.get('k_cut'):
     #     ax.axvline(psd_set.meta['k_cut'] * sc, color='k', ls=':', lw=0.8)
     ax.legend(ncol=2, fontsize=8)
@@ -191,7 +196,7 @@ def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, s
         r, p = psf_result.profile(n, kind, binsize, stat, rmax, pa_range)
         ax.plot(r, p, color=COLORS.get(n), lw=1, ls=':' if n == 'turbulence' else '--',
                 # label=f'{n} (S={psf_result.strehl[n]:.3f})' if kind != 'halo' else n)
-                label=f'{n}' if kind != 'halo' else n)
+                label=_pretty(n))
     if show_dl and kind == 'psf':                      # (a perfect coronagraph removes the diffraction-limited PSF entirely)
         r, p = psflib.radial_profile(psf_result.diffraction_limited, psf_result.pixel_scale, binsize, None, stat, rmax, pa_range)
         ax.plot(r, p, color='gray', lw=1, label='diffraction limit')

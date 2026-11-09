@@ -151,3 +151,7 @@ ConvolutionKernel*
 
 # notebook output over GitHub's 100 MB limit (config/analyse_errorbudget.ipynb regenerates it)
 config/results/e2e_scan_modes.csv
+
+# LaTeX sources and PDFs (documents built locally)
+*.tex
+*.pdf

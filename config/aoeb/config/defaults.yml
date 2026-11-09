@@ -60,7 +60,7 @@ chromatic:                              # needs wavelengths.sensing_nm
   compensation: 0.0
   fresnel: false
   scintillation: false
-  k_max: null                           # [c/m] scintillation upper limit; null: Nyquist of the pupil grid
+  k_max: null                           # [c/m] optional extra upper limit of the scintillation (it always stops at k_c)
   delta_n: null                         # override of n_sensing - n_science (skips the refractivity model)
   heights_are_slant: false              # heights already include the airmass (TipTop's Hs)
 
