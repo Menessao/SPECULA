@@ -165,8 +165,26 @@ def score(r):
     return (0, c) if s >= SR_SWITCH else (1, -s)
 
 
+EQUAL_TOL = 0.01      # contrast (or SR) differences within this fraction count as equal
+
+
 def better(a, b):
-    return score(a) < score(b)
+    """Does a replace the current best b? Diverged runs never win, a run above SR_SWITCH beats one below it. Above SR_SWITCH: contrast lower
+    by more than EQUAL_TOL; contrast equal within EQUAL_TOL and SR higher by more than EQUAL_TOL. Below SR_SWITCH: SR higher by more than
+    EQUAL_TOL. Otherwise b is kept (null hypothesis: the previous optimal parameters). All in METRIC_BAND."""
+    (ra, va), (rb, vb) = score(a), score(b)
+    if ra != rb:
+        return ra < rb
+    if ra == 2:
+        return False
+    sa, sb = a[f'sr_{METRIC_BAND}'], b[f'sr_{METRIC_BAND}']
+    if ra == 1:
+        return sa > sb * (1 + EQUAL_TOL)
+    if va < vb * (1 - EQUAL_TOL):
+        return True
+    if va > vb * (1 + EQUAL_TOL):
+        return False
+    return sa > sb * (1 + EQUAL_TOL)
 
 
 def rel_change(a, b):
@@ -499,20 +517,25 @@ class Sweep:
                                   for r in selected])
         print(text, flush=True)
 
-    def replay(self, n_real, seed0, total_time, mags=None):
+    def replay(self, n_real, seed0, total_time, mags=None, extra_mags=(), ref_mag=7.0):
         """The selected configurations again with other atmosphere seeds and wind directions (wind_realizations), total_time [s] each.
-        Rows in replays.csv; finished realizations are skipped."""
+        extra_mags: magnitudes not swept, replayed with the configuration selected at ref_mag (rate, size, rMod, KF model, flux factor; ML weights
+        and KF noise at their own flux). Rows in replays.csv; realizations already replayed with the same configuration are skipped."""
         check_ar2()
         store = op.join(self.out, 'replays')
         os.makedirs(store, exist_ok=True)
-        done = {(r['mag'], int(r['realization'])) for r in read_rows(self.out, 'replays.csv')} if op.exists(op.join(self.out, 'replays.csv')) else set()
-        for s in read_selected(self.out):
-            rmod, mag, fs, n, kf, fc = (list(s['key']) + [1.0])[:6]
+        # realizations already replayed with the configuration selected now (rows of a configuration selected before stay in the file)
+        done = {(r['mag'], int(r['realization']), r['config']) for r in read_rows(self.out, 'replays.csv')} if op.exists(op.join(self.out, 'replays.csv')) else set()
+        sel = read_selected(self.out)
+        ref = [x for x in sel if float(x['mag']) == ref_mag]
+        items = [(x, float(x['mag'])) for x in sel] + [(ref[0], float(m)) for m in extra_mags if ref]
+        for s, mag in items:
+            rmod, _, fs, n, kf, fc = (list(s['key']) + [1.0])[:6]
             if mags and mag not in mags:
                 continue
             N = dict(LADDER).get(int(n), N_MODES)
             for k, (seed, dirs) in enumerate(wind_realizations(n_real, seed0)):
-                if (mag, k) in done:
+                if (mag, k, s['config']) in done:
                     continue
                 ov = self.overrides(rmod, mag, fs, int(n), N, self.build_filter(rmod, mag, fs, int(n), N, kf, fc), fc)
                 ov = replay_overrides(ov, total_time, seed, dirs)
@@ -597,6 +620,7 @@ def main():
     ap.add_argument('--no-check', action='store_true', help='skip the modulation check at the faintest magnitude')
     ap.add_argument('--replay', type=int, metavar='N_REAL', help='rerun the selected configurations N_REAL times with other seeds and wind directions')
     ap.add_argument('--replay-mags', type=float, nargs='+', help='replay these magnitudes only')
+    ap.add_argument('--replay-extra-mags', type=float, nargs='+', default=(), help='also replay these (not swept) magnitudes with the mag 7 configuration')
     ap.add_argument('--replay-seed', type=int, default=20261108, help='seed of the random wind directions of the replays')
     ap.add_argument('--gpu', type=int, default=0)
     ap.add_argument('--total-time', type=float, default=3.0, help='[s] of each run (of each replay with --replay)')
@@ -613,7 +637,7 @@ def main():
     os.environ['PATH'] = op.dirname(sys.executable) + os.pathsep + os.environ['PATH']   # the specula CLI of this environment
     sweep = Sweep(a.out, a.gpu, a.total_time, a.rmod, start_magnitude(a.start_from) if a.start_from else None, not a.no_check, a.ladder)
     if a.replay:
-        sweep.replay(a.replay, a.replay_seed, a.total_time, a.replay_mags)
+        sweep.replay(a.replay, a.replay_seed, a.total_time, a.replay_mags, a.replay_extra_mags)
     else:
         sweep.run()
 

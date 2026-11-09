@@ -33,6 +33,7 @@ REPO = op.abspath(op.join(HERE, '..', '..', '..'))
 RESULT_DIR = '/raid1/mmenessini/results/WFSW'
 OUT = op.join(RESULT_DIR, 'sweep_final_20261108')
 MAGS = (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)   # 13 and 14 dropped on 2026-11-08
+EXTRA_MAGS = (5.0, 6.0)                    # replayed only, with the configuration selected at mag 7 (2026-11-09)
 SWEEP_TIME, REPLAY_TIME, N_REPLAYS, REPLAY_SEED = 3.0, 5.0, 10, 20261108
 RETRIES, RETRY_WAIT = 5, 300           # a crashed sweep is restarted (it resumes from its results.csv)
 
@@ -133,7 +134,7 @@ def sweep_jobs():
 
 
 def replay_jobs(mags=None):
-    extra = ['--replay-mags', *[str(m) for m in (mags or MAGS)]]
+    extra = ['--replay-mags', *[str(m) for m in (mags or EXTRA_MAGS + MAGS)], '--replay-extra-mags', *[str(m) for m in EXTRA_MAGS]]
     return [(f'{name} replay', [script, *args, '--replay', str(N_REPLAYS), '--replay-seed', str(REPLAY_SEED), '--total-time', str(REPLAY_TIME),
                                 '--out', case_dir(name), *extra], op.join(OUT, f'{name}_replay.log'))
             for name, script, args, _, _, replayed in CASES if replayed]
@@ -242,19 +243,22 @@ def replay_table():
         stats = fsr.replays(name)
         sel = {r['mag']: r for r in read_csv(op.join(case_dir(name), 'selected.csv'))}
         rows = read_csv(op.join(case_dir(name), 'replays.csv'))
-        for m in MAGS:
+        for m in EXTRA_MAGS + MAGS:
             rs = [r for r in rows if r['mag'] == m]
             if not rs:
+                continue
+            if m not in stats:
                 continue
             d = stats[m]
 
             def ms(k, fmt):
                 return f'{d[k]:{fmt}} +- {d[k + "_std"]:{fmt}}' if np.isfinite(d[k]) else '-'
             notes = f"{d['n'] - d['n_ok']} ran away: {' '.join(d['runaway_tns'])}" if d['n_ok'] < d['n'] else ''
-            out.append(line([DESCRIPTION[name], f'{m:g}', rs[0]['config'], f"{d['n_ok']}/{d['n']}", ms('contrast_vis', '.3e'), ms('contrast_nir', '.3e'),
+            out.append(line([DESCRIPTION[name], f'{m:g}', sel.get(m, sel.get(7.0, rs[0]))['config'], f"{d['n_ok']}/{d['n']}", ms('contrast_vis', '.3e'), ms('contrast_nir', '.3e'),
                              ms('sr_vis', '.4f'), ms('sr_nir', '.4f'), f"{sel[m][f'contrast_{mb}']:.3e}" if m in sel else '-', notes]))
             runs += [line([DESCRIPTION[name], f'{m:g}', r['realization'], r['seed'], f"{r['contrast_vis']:.3e}", f"{r['contrast_nir']:.3e}",
-                           f"{r['sr_vis']:.4f}", f"{r['sr_nir']:.4f}", r['tn'], 'ran away' if r['tn'] in d['runaway_tns'] else r['notes']]) for r in rs]
+                           f"{r['sr_vis']:.4f}", f"{r['sr_nir']:.4f}", r['tn'], 'ran away' if r['tn'] in d['runaway_tns'] else
+                           ('superseded: ' + r['config'] if sel.get(m, sel.get(7.0)) and r['config'] != sel.get(m, sel.get(7.0))['config'] else r['notes'])]) for r in rs]
     h = ['case', 'mag', 'realization', 'atmo seed', 'contrast 550 nm', 'contrast 1650 nm', 'SR 550 nm', 'SR 1650 nm', 'TN', 'notes']
     out += ['', '## All replay runs', '', line(h), line(['---'] * len(h)), *runs]
     text = '\n'.join(out) + '\n'

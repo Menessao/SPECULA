@@ -372,22 +372,27 @@ class Sweep:
                                   for r in selected])
         print(text, flush=True)
 
-    def replay(self, n_real, seed0, total_time, mags=None):
+    def replay(self, n_real, seed0, total_time, mags=None, extra_mags=(), ref_mag=7.0):
         """The selected configurations again with other atmosphere seeds and wind directions (sweep_contrast.wind_realizations), total_time [s]
-        each, no atmo or DM modes saved; the configuration (and its flux correction) is not searched again. Rows in replays.csv."""
+        each, no atmo or DM modes saved; the configuration (and its flux correction) is not searched again. extra_mags: magnitudes not swept,
+        replayed with the configuration selected at ref_mag (ML weights and KF noise at their own flux). Rows in replays.csv."""
         check_ar2()
         save_plant_inverse_iir(self.unity, calib_dir, N_CORR, beta=0.0)
         store = op.join(self.out, 'replays')
         os.makedirs(store, exist_ok=True)
-        done = {(r['mag'], int(r['realization'])) for r in read_rows(self.out, 'replays.csv')} if op.exists(op.join(self.out, 'replays.csv')) else set()
-        for s in read_selected(self.out):
-            mag, k, n, ku, fv, fn = (list(s['key']) + [1.0, 1.0])[:6]
+        # realizations already replayed with the configuration selected now (rows of a configuration selected before stay in the file)
+        done = {(r['mag'], int(r['realization']), r['config']) for r in read_rows(self.out, 'replays.csv')} if op.exists(op.join(self.out, 'replays.csv')) else set()
+        sel = read_selected(self.out)
+        ref = [x for x in sel if float(x['mag']) == ref_mag]
+        items = [(x, float(x['mag'])) for x in sel] + [(ref[0], float(m)) for m in extra_mags if ref]
+        for s, mag in items:
+            _, k, n, ku, fv, fn = (list(s['key']) + [1.0, 1.0])[:6]
             if mags and mag not in mags:
                 continue
             fc = {'vis': float(fv), 'nir': float(fn)}
             i = [x[0] for x in LADDER].index(int(n))
             for j, (seed, dirs) in enumerate(wind_realizations(n_real, seed0)):
-                if (mag, j) in done:
+                if (mag, j, s['config']) in done:
                     continue
                 ov, flux = self.overrides(mag, int(k), i, int(ku), self.name(mag, int(k), int(n), int(ku), fc), fc)
                 ov = replay_overrides(ov, total_time, seed, dirs)
@@ -423,6 +428,7 @@ def main():
     ap.add_argument('--unmod-frac', type=float, default=0.5, help='with --same-wvl: fraction of the band of the unmodulated pyramid')
     ap.add_argument('--replay', type=int, metavar='N_REAL', help='rerun the selected configurations N_REAL times with other seeds and wind directions')
     ap.add_argument('--replay-mags', type=float, nargs='+', help='replay these magnitudes only')
+    ap.add_argument('--replay-extra-mags', type=float, nargs='+', default=(), help='also replay these (not swept) magnitudes with the mag 7 configuration')
     ap.add_argument('--replay-seed', type=int, default=20261108, help='seed of the random wind directions of the replays')
     ap.add_argument('--total-time', type=float, default=3.0, help='[s] of each run (of each replay with --replay)')
     ap.add_argument('--out')
@@ -437,7 +443,7 @@ def main():
         save_plant_inverse_iir(sweep.unity, calib_dir, N_CORR, beta=0.0)
         sweep.evaluate('test', a.case[0], int(a.case[1]), int(a.case[2]), int(a.case[3]))
     elif a.replay:
-        sweep.replay(a.replay, a.replay_seed, a.total_time, a.replay_mags)
+        sweep.replay(a.replay, a.replay_seed, a.total_time, a.replay_mags, a.replay_extra_mags)
     else:
         sweep.run()
 

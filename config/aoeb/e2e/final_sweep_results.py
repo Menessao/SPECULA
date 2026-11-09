@@ -1,9 +1,11 @@
 """Results of the final e2e sweep (sweep_final.py, results/WFSW/sweep_final_20261108): replay statistics and the comparison figures.
 
-Each point of the single-stage and fusion curves is the mean over the replays (REPLAY_TIME s, other atmosphere seed and random wind direction per
+Magnitudes 5 and 6 were not swept: they are replays of the configuration selected at magnitude 7. Each point of the single-stage and fusion
+curves is the mean over the replays (REPLAY_TIME s, other atmosphere seed and random wind direction per
 layer) of the configuration the sweep selected at that magnitude; error bars: standard deviation over the converged replays. A replay that ran
 away is excluded and counted (`n/N` next to the point): non-finite, or 550 nm SR of its last 0.5 s below RUNAWAY x that of the 0.5 s after
-START_TIME, or 550 nm SR below RUNAWAY_MEDIAN x the median of the other realizations. The equal-flux dual cases were not replayed: their points
+START_TIME, or 550 nm SR below RUNAWAY_MEDIAN x the median of the other realizations. Only the replays of the configuration selected now count
+(replays of a configuration selected before stay in replays.csv). The equal-flux dual cases were not replayed: their points
 are the sweep values (one realization, the one the search was optimised on), without error bars, and so are their reference curves.
 Contrast: mean raw contrast in 2-5 lambda/D, relative to the integrated AO peak. Ratio panels: each curve over the best single-stage curve
 (lowest mean contrast / highest mean SR of the rMods at that magnitude).
@@ -18,7 +20,9 @@ from astropy.io import fits
 from results_analysis import load_coro_profile, load_perfect_coro
 
 OUT = '/raid1/mmenessini/results/WFSW/sweep_final_20261108'
-MAGS = (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+MAGS = (5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0)    # 5 and 6: replays of the mag 7 configuration (not swept)
+SWEPT_MAGS = MAGS[2:]
+REF_MAG = 7.0
 START_TIME, WINDOW, RUNAWAY, RUNAWAY_MEDIAN = 0.5, 0.5, 0.7, 0.5
 SR_MASK = 0.25            # contrast points with the science SR below this are drawn hollow
 WL = {'vis': '550 nm', 'nir': '1650 nm'}
@@ -82,8 +86,11 @@ def replays(case):
     rows = list(csv.DictReader(open(path)))
     out = {}
     for mag in sorted({float(r['mag']) for r in rows}):
-        rs = [r for r in rows if float(r['mag']) == mag]
-        fs = _fs_of(case, sel[mag]['key']) if mag in sel else 2000.0
+        cur = sel.get(mag, sel.get(REF_MAG))          # current selection (mags 5, 6: that of mag 7)
+        rs = [r for r in rows if float(r['mag']) == mag and (cur is None or r['config'] == cur['config'])]
+        if not rs:
+            continue
+        fs = _fs_of(case, cur['key']) if cur else 2000.0
         sr550 = np.array([_float(r, 'sr_vis') for r in rs])
         med = np.nanmedian(sr550)
         ok, bad = [], []
@@ -151,7 +158,7 @@ def _floor_lines(ax, chrom, band, fl):
                     ha='right', va='top' if below else 'bottom', fontsize=8, color=MUTED)
 
 
-def _style(ax, logy):
+def _style(ax, logy, mags=MAGS):
     ax.grid(True, color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     for s in ('top', 'right'):
@@ -161,7 +168,7 @@ def _style(ax, logy):
     ax.tick_params(colors=MUTED, labelcolor=INK, labelsize=9)
     if logy:
         ax.set_yscale('log')
-    ax.set_xticks(MAGS)
+    ax.set_xticks(mags)
 
 
 def _curve(ax, x, y, err, color, marker, label, hollow=None, counts=None):
@@ -311,8 +318,8 @@ def plot_equal_flux(quantity='contrast'):
             ax.plot(fm, [st[m][k] for m in fm], color=INK, lw=1.5, ls='-.', zorder=2, label=T('fusion: unmod 900 + rMod 2 at 1300 nm'))
         if fl:
             _floor_lines(ax, chrom, band, fl)
-        _style(ax, quantity == 'contrast')
-        _style(rx, False)
+        _style(ax, quantity == 'contrast', SWEPT_MAGS)
+        _style(rx, False, SWEPT_MAGS)
         _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, both pyramids at {w} nm, {WL[band]}")
         ax.set_ylim(*lim)
         ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
