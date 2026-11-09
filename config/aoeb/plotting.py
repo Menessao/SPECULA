@@ -183,13 +183,17 @@ def plot_psd_terms(psd_set, terms=None, xaxis='lamD', show_open_loop=True, title
 
 
 def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, stat='mean', pa_range=None, show_dl=True,
-                   show_open_loop=False, title=None, ax=None, ymin=None, ymax=None, logx=False, xlim=None, ylim=None):
+                   show_open_loop=False, title=None, ax=None, ymin=None, ymax=None, logx=False, xlim=None, ylim=None,
+                   shade=None):
     """Radial raw-contrast profile of every term alone and of the total. kind: 'psf' (long-exposure PSF, Airy pattern included),
     'coro' (after a perfect coronagraph, Cavarroc et al. 2006 eq. 1: the coherent part S * PSF_DL removed, so no Airy-ring spikes) or
     'halo' (first order, the terms add up).
     The image of a term alone is NOT its contribution to the total: inside the total its halo is attenuated by the Strehl of the other
-    terms, so the total can lie below a single term where that term dominates."""
+    terms, so the total can lie below a single term where that term dominates. shade: (r1, r2) separations [lambda/D] drawn as a gray
+    band (e.g. where the contrast is to be maximised)."""
     fig, ax = _fig(ax, (7, 4.8))
+    if shade is not None:
+        ax.axvspan(*shade, color='gray', alpha=0.15, lw=0)
     for n in {'psf': psf_result.psf, 'coro': psf_result.coro, 'halo': psf_result.halo}[kind]:
         if (terms is not None and n not in terms and n != 'total') or (n == 'turbulence' and not show_open_loop):
             continue
@@ -224,3 +228,107 @@ def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=Non
     ax.set_title(title or f'Strehl {psf_result.strehl[name]:.3f}, name')
     fig.tight_layout()
     return fig
+
+
+# ----------------------------------------------------------------------------- multi-sensor comparisons (aoeb.multiwfs sweeps)
+def _contrast_line(ax, x, y, ok, color, label=None):
+    """Contrast curve: solid where `ok`, faded dashed elsewhere."""
+    ax.plot(x, y, '--', color=color, alpha=0.4)
+    ax.plot(x, np.where(ok, y, np.nan), '-', color=color, label=label)
+
+
+def plot_comparison(curves, title, ref, sci_nm, terms=(('noise_photon', 'photon'), ('noise_ron', 'readout')), sr_min=0.25,
+                    zone=(2, 5)):
+    """Three figures of two panels against the magnitude, one colour per curve ({label: sweep DataFrame}): total residual | total
+    relative to curve `ref`; the two `terms`; contrast | contrast relative to `ref` (faded and dashed where the science Strehl < sr_min)."""
+    from matplotlib.lines import Line2D
+    figs = [plt.subplots(1, 2, figsize=(13, 4.2)) for _ in range(3)]
+    (f1, a1), (f2, a2), (f3, a3) = figs
+    for i, (name, df) in enumerate(curves.items()):
+        c, ok = f'C{i}', df['SR'] >= sr_min
+        a1[0].semilogy(df.index, df['total'], '-', color=c, label=name)
+        a1[1].plot(df.index, df['total'] / curves[ref]['total'], '-', color=c, label=name)
+        for a, (t, _) in zip(a2, terms):
+            a.semilogy(df.index, df[t], '-', color=c, label=name)
+        _contrast_line(a3[0], df.index, df['contrast'], ok, c, label=name)
+        _contrast_line(a3[1], df.index, df['contrast'] / curves[ref]['contrast'], ok & (curves[ref]['SR'] >= sr_min), c, label=name)
+    a3[0].set_yscale('log')
+    labels = ('total residual [nm rms]', f'total / {ref}', *(f'{lab} [nm rms]' for _, lab in terms),
+              f'raw contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D ({sci_nm:.0f} nm)', f'contrast / {ref}')
+    for a, yl in zip([*a1, *a2, *a3], labels):
+        a.set_xlabel('magnitude at 900 nm'); a.set_ylabel(yl); a.grid(alpha=0.3, which='both')
+    for a in (a1[1], a3[1]):
+        a.axhline(1.0, color='gray', lw=0.8)
+    for f, a, sub in ((f1, a1, 'total residual'), (f2, a2, ', '.join(lab for _, lab in terms)), (f3, a3, 'contrast')):
+        a[0].legend(fontsize=8)
+        f.suptitle(f'{title}: {sub}'); f.tight_layout(w_pad=3)
+    a3[1].legend([Line2D([], [], color='k', ls='--', alpha=0.4)], [f'science Strehl $<$ {sr_min:g}'], fontsize=8)
+    return [f for f, _ in figs]
+
+
+def plot_noise_frame_rate(panels, ticks=(125, 250, 500, 1000, 2000)):
+    """Photon, readout and total residual against the magnitude, with the frame rate on the right axis; panels: {title: DataFrame with
+    noise_photon, noise_ron, total, fs (index: magnitude)}, two per row."""
+    n = len(panels)
+    fig, ax = plt.subplots((n + 1) // 2, min(n, 2), figsize=(13, 4.2 * ((n + 1) // 2)), squeeze=False)
+    for a, (title, df) in zip(ax.flat, panels.items()):
+        a.semilogy(df.index, df['noise_photon'], '-', label='photon')
+        a.semilogy(df.index, df['noise_ron'], '-', label='readout')
+        a.semilogy(df.index, df['total'], 'k-', label='total')
+        tw = a.twinx()
+        tw.semilogy(df.index, df['fs'], '-.', color='C3', label='optimal frame rate (right axis)')
+        tw.set_yticks(list(ticks), [f'{t:g}' for t in ticks]); tw.minorticks_off(); tw.set_ylim(0.8 * min(ticks), 1.25 * max(ticks))
+        tw.set_ylabel('optimal frame rate [Hz]', color='C3'); tw.tick_params(axis='y', colors='C3')
+        a.set_xlabel('magnitude at 900 nm'); a.set_ylabel('residual [nm rms]'); a.grid(alpha=0.3); a.set_title(title)
+    fig.legend(*[sum(x, []) for x in zip(a.get_legend_handles_labels(), tw.get_legend_handles_labels())], loc='lower center', ncol=4,
+               fontsize=8)
+    fig.tight_layout(w_pad=3, rect=(0, 0.07 / ((n + 1) // 2), 1, 1))
+    return fig
+
+
+def plot_controller(results, title, extra_og=None, mark=None):
+    """Integrator gain, forgetting factor and optical gain per mode of BudgetResults {label: result} (two figures: gain | forgetting
+    factor, optical gain); extra_og: {label: per-mode optical gains} drawn dashed; mark: mode index of a dotted vertical line."""
+    f1, a = plt.subplots(1, 2, figsize=(13, 4.2))
+    f2, b = plt.subplots(1, 1, figsize=(6.5, 4.2))
+    for i, (name, r) in enumerate(results.items()):
+        x = np.arange(1, len(r.gain) + 1)
+        a[0].semilogx(x, r.gain, '-', lw=1, color=f'C{i}', label=name)
+        a[1].semilogx(x, r.ff, '-', lw=1, color=f'C{i}', label=name)
+        b.semilogx(x, r.og, '-', lw=1, color=f'C{i}', label=name)
+    for j, (name, og) in enumerate((extra_og or {}).items()):
+        b.semilogx(np.arange(1, len(og) + 1), og, ['--', ':'][j % 2], lw=1, color='k', label=name)
+    a[1].set_ylim(0.6, 1.02); b.set_ylim(0, 1.1)
+    for ax_, yl in zip((*a, b), ('integrator gain', 'forgetting factor', 'optical gain')):
+        ax_.set_xlabel('mode index'); ax_.set_ylabel(yl); ax_.grid(alpha=0.3, which='both'); ax_.legend(fontsize=8)
+        if mark:
+            ax_.axvline(mark, color='gray', ls=':', lw=1)
+    f1.suptitle(title); f1.tight_layout(w_pad=3)
+    f2.suptitle(title); f2.tight_layout()
+    return f1, f2
+
+
+def plot_chromatic_limit(band, mags, ao_contrast, ao_label, chrom_now, zenith_now, wl, cc, floors, req, wfs_nm, sci_nm):
+    """Chromatic limit of one band, two figures: [AO-only contrast against the magnitude with the chromatic term alone at zenith_now |
+    chromatic term alone against the WFS wavelength wl, a curve per zenith angle (cc: {z: contrasts}), AO floors {mag: contrast}];
+    [limit WFS wavelength against the zenith angle (req: DataFrame, index z, a column per floor)]."""
+    f1, a = plt.subplots(1, 2, figsize=(13, 4.4))
+    a[0].semilogy(mags, ao_contrast, '-', color='C0', label=f'AO only, {ao_label}')
+    a[0].axhline(chrom_now, color='C1', ls='--', label=f'chromatic alone, z = {zenith_now:g} deg')
+    zs = list(cc)
+    for j, z in enumerate(zs):
+        a[1].semilogy(wl, cc[z], '-', color=plt.cm.viridis(j / max(len(zs) - 1, 1)), label=f'z = {z} deg')
+    for i, (mg, fl) in enumerate(floors.items()):
+        a[1].axhline(fl, color='gray', ls=['-', '--', ':'][i % 3], lw=1, label=f'AO floor, mag {mg:g}')
+    a[0].set_xlabel('magnitude at 900 nm'); a[0].set_ylabel(f'raw contrast 2-5 $\\lambda$/D ({sci_nm:.0f} nm)')
+    a[1].set_xlabel('WFS wavelength [nm]'); a[1].set_ylabel(f'chromatic alone ({sci_nm:.0f} nm)')
+    a[0].set_title(f'{band}: z = {zenith_now:g} deg'); a[1].set_title(f'{band}: science {sci_nm:.0f} nm')
+    f2, b = plt.subplots(1, 1, figsize=(6.5, 4.4))
+    for i, c in enumerate(req.columns):
+        b.plot(req.index, req[c], marker='o', color='k', ls=['-', '--', ':'][i % 3], label=c)
+    b.axhline(wfs_nm, color='C0', lw=0.8, label=f'WFS of the band ({wfs_nm:.0f} nm)')
+    b.set_xlabel('zenith angle [deg]'); b.set_ylabel('limit WFS wavelength [nm]'); b.set_title(f'{band}: chromatic term below the AO floor')
+    for ax_ in (*a, b):
+        ax_.grid(alpha=0.3, which='both'); ax_.legend(fontsize=7)
+    f1.tight_layout(w_pad=3); f2.tight_layout()
+    return f1, f2

@@ -155,3 +155,6 @@ config/results/e2e_scan_modes.csv
 # LaTeX sources and PDFs (documents built locally)
 *.tex
 *.pdf
+
+# cache of the multi-WFS sweeps of analyse_errorbudget.ipynb (aoeb.multiwfs)
+config/results/multiwfs_cache/
