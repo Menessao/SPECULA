@@ -49,15 +49,19 @@ def load_coro_profile(result_path:str, band:str):
         prof = prof / mean_sr(result_path, band)
     return rad, prof
 
-# Fitting-only references (perfect coronagraph, perfect 1300-mode correction), achromatic, at the conditions of ristretto_main.yml (z = 30 deg, atmo.fov = 2").
+# Fitting-only references (perfect coronagraph, perfect 1300-mode correction), achromatic, at the conditions of the e2e sweeps (z = 30 deg, atmo.fov = 2",
+# seeing 0.9" along the line of sight = 0.826" in the yml, the seeing of the s0.9 calibration products). The '_z30' folders without the seeing tag were
+# run at 0.88" in the yml (0.96" along the line of sight): 2-5 lambda/D contrast 1.24x (achromatic) higher; inside the control radius the halo of an
+# exact correction is second order, so it scales as seeing^(10/3), beyond it as seeing^(5/3).
 # The older 'perfect_coro' (z = 0, fov = 0) carries the rotation artifact of pupil-sized layers: ~2.5x (VIS) and ~13x (NIR) worse at 2-4 lambda/D.
-radp, perf_coro_vis_int = load_coro_profile(op.join(result_dir, 'perfect_coro_achrom_z30'), 'vis')
-radp, perf_coro_nir_int = load_coro_profile(op.join(result_dir, 'perfect_coro_achrom_z30'), 'nir')
+radp, perf_coro_vis_int = load_coro_profile(op.join(result_dir, 'perfect_coro_achrom_z30_s0.9'), 'vis')
+radp, perf_coro_nir_int = load_coro_profile(op.join(result_dir, 'perfect_coro_achrom_z30_s0.9'), 'nir')
 
-def load_perfect_coro(case:str='achrom', zenith:int=30):
+def load_perfect_coro(case:str='achrom', zenith:int=30, seeing:str='0.9'):
     """Fitting-only references at a zenith angle: case 'achrom' (no chromatism), 'vis' (WFS at 900 nm) or 'nir' (WFS at 1300 nm,
-    chromatic anisoplanatism between WFS and science). Returns rad, contrast_vis, contrast_nir."""
-    path = op.join(result_dir, f'perfect_coro_{case}_z{zenith}')
+    chromatic anisoplanatism between WFS and science); seeing along the line of sight ('0.9'; None: the untagged 0.88"-in-yml runs).
+    Returns rad, contrast_vis, contrast_nir."""
+    path = op.join(result_dir, f'perfect_coro_{case}_z{zenith}' + (f'_s{seeing}' if seeing else ''))
     rad, cv = load_coro_profile(path, 'vis')
     rad, cn = load_coro_profile(path, 'nir')
     return rad, cv, cn

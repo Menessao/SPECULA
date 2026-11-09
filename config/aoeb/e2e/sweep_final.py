@@ -67,7 +67,7 @@ for _w, _c in SETTINGS:
         DESCRIPTION[f'single_wfs{_w}_{_c}_r{_r}'] = f'single: {_w} nm, rMod {_r}, {_t}'
     for _u in SPLITS:
         DESCRIPTION[f'dual_eq{_w}_{_c}_u{_u}'] = f'dual equal flux: {_w} nm, unmod {_u}% / rMod 2 {100 - _u}% of the band, {_t}'
-# sanity check: tolerance of the "fainter is not better" test, minimum ratio to the perfect-coronagraph floor (references at 0.70", runs at 0.9")
+# sanity check: tolerance of the "fainter is not better" test, minimum ratio to the perfect-coronagraph floor (references at the sweep seeing and zenith)
 MONOTONE_TOL, FLOOR_RATIO = 1.2, 0.9
 
 
