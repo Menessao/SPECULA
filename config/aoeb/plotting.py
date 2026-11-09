@@ -39,7 +39,7 @@ def _finish(fig, ax, xlabel, ylabel, title=None, logx=False, logy=False, xlim=No
         ax.set_xlim(xlim)                              # (lo, hi); None for one side keeps it automatic
     if ylim is not None:
         ax.set_ylim(ylim)
-    ax.grid(True, which='both', alpha=0.3)
+    ax.grid(True, which='both', alpha=0.4)
     fig.tight_layout()
     return fig
 
@@ -102,7 +102,7 @@ def plot_per_mode(modes, y='residual', hue=None, filters=None, logy=True, title=
     fig, ax = _fig(None)
     for i, (h, g) in enumerate([(None, df)] if hue is None else df.groupby(hue)):
         g = g.sort_values('modeId')
-        ax.plot(g['modeId'], _value(g, y), '.', ms=3, color=f'C{i % 10}', label=None if h is None else _label(hue, h))
+        ax.plot(g['modeId'], _value(g, y), '-', lw=1, color=f'C{i % 10}', label=None if h is None else _label(hue, h))
     if hue is not None:
         ax.legend(fontsize=8)
     return _finish(fig, ax, 'modeId', f'{y} [nm rms]' if y in ERRORS else y, title, logx, logy, xlim, ylim)
@@ -130,7 +130,7 @@ def plot_calibration(machine, product, hue=None, values=None, rMod=3.0, n_subap=
         y = {'alias': lambda: cal.alias_rms, 'og': lambda: cal.og, 'ct': lambda: cal.ct,
              'noise': lambda: np.sqrt(cal.noise.modal_variance(m.detector.n_det(cfg['flux'], cfg['fs']), m.detector)),
              'turb': lambda: np.sqrt(m.turbulence(cfg['seeing'], N_i)[0])}[product]()
-        ax.plot(np.arange(len(y)), y, '.', ms=3, color=f'C{i % 10}', label=None if hue is None else _label(hue, v))
+        ax.plot(np.arange(len(y))+1, y, '-', lw=1, color=f'C{i % 10}', label=None if hue is None else _label(hue, v))
     if product == 'thrp':
         ax.plot(xs, ys, '-o')
         return _finish(fig, ax, hue or 'rMod', 'throughput (fraction of counts in the pupils)', title, logx, False, xlim, ylim)
@@ -173,12 +173,12 @@ def plot_psd_terms(psd_set, terms=None, xaxis='lamD', show_open_loop=True, title
     #     ax.axvline(psd_set.meta['k_cut'] * sc, color='k', ls=':', lw=0.8)
     ax.legend(ncol=2, fontsize=8)
     ax.set_xlim([np.min(psd_set.k[ok] * sc)/2,np.max(psd_set.k[ok] * sc)])
-    return _finish(fig, ax, 'separation [$\\lambda$/D]  (= k D)' if xaxis == 'lamD' else 'spatial frequency [cycles/m]',
-                   'PSD [nm$^2$ m$^2$]', title, True, True, xlim, ylim)
+    return _finish(fig, ax, 'separation [$\\lambda$/D]' if xaxis == 'lamD' else 'spatial frequency [cycles/m]',
+                   'PSD [nm$^2$ m$^2$]', title, logx=False, logy=True, xlim=xlim, ylim=ylim)
 
 
 def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, stat='mean', pa_range=None, show_dl=True,
-                   show_open_loop=False, title=None, ax=None, ymin=1e-6, logx=False, xlim=None, ylim=None):
+                   show_open_loop=False, title=None, ax=None, ymin=None, ymax=None, logx=False, xlim=None, ylim=None):
     """Radial raw-contrast profile of every term alone and of the total. kind: 'psf' (long-exposure PSF, Airy pattern included),
     'coro' (after a perfect coronagraph, Cavarroc et al. 2006 eq. 1: the coherent part S * PSF_DL removed, so no Airy-ring spikes) or
     'halo' (first order, the terms add up).
@@ -189,25 +189,30 @@ def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, s
         if (terms is not None and n not in terms and n != 'total') or (n == 'turbulence' and not show_open_loop):
             continue
         r, p = psf_result.profile(n, kind, binsize, stat, rmax, pa_range)
-        ax.plot(r, p, color=COLORS.get(n), lw=2.2 if n == 'total' else 1.4, ls=':' if n == 'turbulence' else '-',
-                label=f'{n} (S={psf_result.strehl[n]:.2f})' if kind != 'halo' else n)
+        ax.plot(r, p, color=COLORS.get(n), lw=1, ls=':' if n == 'turbulence' else '--',
+                # label=f'{n} (S={psf_result.strehl[n]:.3f})' if kind != 'halo' else n)
+                label=f'{n}' if kind != 'halo' else n)
     if show_dl and kind == 'psf':                      # (a perfect coronagraph removes the diffraction-limited PSF entirely)
         r, p = psflib.radial_profile(psf_result.diffraction_limited, psf_result.pixel_scale, binsize, None, stat, rmax, pa_range)
         ax.plot(r, p, color='gray', lw=1, label='diffraction limit')
     ax.legend(fontsize=8)
-    ax.set_ylim(bottom=max(ax.get_ylim()[0], ymin))
+    if ymin is None:
+        ymin = ax.get_ylim()[0]
+    if ymax is None:
+        ymax = ax.get_ylim()[1]
+    ax.set_ylim(bottom=ymin,top=ymax)
     ax.set_xlim(right=ax.get_xlim()[1])
     what = {'coro': ', perfect coronagraph', 'psf': '', 'halo': ', first-order halo'}[kind]
     return _finish(fig, ax, 'separation [$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm{what})', title, logx, True, xlim, ylim)
 
 
-def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=None, ax=None, kind='psf'):
+def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=None, ax=None, kind='psf', vmax=1.0):
     """2-D long-exposure image (log colour scale), field +-half_fov lambda/D; kind 'psf', 'coro' (perfect coronagraph) or 'halo'."""
     img = psf_result.image(name, kind)
     M, h = img.shape[0], int(half_fov / psf_result.pixel_scale)
     fig, ax = _fig(ax, (5.5, 5))
     im = ax.imshow(np.log10(np.maximum(img[M // 2 - h:M // 2 + h + 1, M // 2 - h:M // 2 + h + 1], vmin)), origin='lower',
-                   extent=[-half_fov, half_fov, -half_fov, half_fov], vmin=np.log10(vmin), vmax=0, cmap='inferno')
+                   extent=[-half_fov, half_fov, -half_fov, half_fov], vmin=np.log10(vmin), vmax=np.log10(vmax), cmap='inferno')
     fig.colorbar(im, ax=ax, label='log10 contrast',shrink=0.8)
     ax.set_xlabel('$\\lambda$/D')
     ax.set_ylabel('$\\lambda$/D')
