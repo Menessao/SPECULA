@@ -12,7 +12,7 @@ pushpull:
 pyr_im_calibrator:
   class:     'ImCalibrator'
   nmodes:    500                         # Number of modes to calibrate
-  im_tag:    'pyr4.0_dm820_im'            # Output IM filename
+  im_tag:    'pyr1.0_dm820_im'            # Output IM filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
@@ -21,7 +21,7 @@ pyr_im_calibrator:
 rec_calibrator:
   class:     'RecCalibrator'
   nmodes:    500                          # Number of modes (reduced to keep noise propagation low and avoid numerical issues)
-  rec_tag:   'pyr4.0_dm820_rec'               # Output REC filename
+  rec_tag:   'pyr1.0_dm820_rec'               # Output REC filename
   overwrite: false                         # Overwrite existing files
   inputs:
     in_intmat:   'pyr_im_calibrator.out_intmat'  # Connect to IM output
@@ -47,7 +47,7 @@ dm_override:
     in_command: 'pushpull.output'     
 
 pyr_override:
-  mod_amp: 4.0
+  mod_amp: 1.0
   inputs: 
     in_ef: 'prop.out_source_ngs_ef'
 

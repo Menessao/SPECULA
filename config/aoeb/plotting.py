@@ -178,7 +178,7 @@ def plot_psd_terms(psd_set, terms=None, xaxis='lamD', show_open_loop=True, title
     #     ax.axvline(psd_set.meta['k_cut'] * sc, color='k', ls=':', lw=0.8)
     ax.legend(ncol=2, fontsize=8)
     ax.set_xlim([np.min(psd_set.k[ok] * sc)/2,np.max(psd_set.k[ok] * sc)])
-    return _finish(fig, ax, 'separation [$\\lambda$/D]' if xaxis == 'lamD' else 'spatial frequency [cycles/m]',
+    return _finish(fig, ax, '[$\\lambda$/D]' if xaxis == 'lamD' else 'spatial frequency [cycles/m]',
                    'PSD [nm$^2$ m$^2$]', title, logx=False, logy=True, xlim=xlim, ylim=ylim)
 
 
@@ -208,7 +208,7 @@ def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, s
     ax.set_ylim(bottom=ymin,top=ymax)
     ax.set_xlim(right=ax.get_xlim()[1])
     what = {'coro': ', perfect coronagraph', 'psf': '', 'halo': ', first-order halo'}[kind]
-    return _finish(fig, ax, 'separation [$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm{what})', title, logx, True, xlim, ylim)
+    return _finish(fig, ax, '[$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm{what})', title, logx, True, xlim, ylim)
 
 
 def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=None, ax=None, kind='psf', vmax=1.0):
@@ -221,6 +221,6 @@ def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=Non
     fig.colorbar(im, ax=ax, label='log10 contrast',shrink=0.8)
     ax.set_xlabel('$\\lambda$/D')
     ax.set_ylabel('$\\lambda$/D')
-    ax.set_title(title or f'{name}, Strehl {psf_result.strehl[name]:.3f}')
+    ax.set_title(title or f'Strehl {psf_result.strehl[name]:.3f}, name')
     fig.tight_layout()
     return fig
