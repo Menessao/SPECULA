@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
 
-from results_analysis import load_perfect_coro
+from results_analysis import load_coro_profile, load_perfect_coro
 
 OUT = '/raid1/mmenessini/results/WFSW/sweep_final_20261108'
 MAGS = (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
@@ -343,3 +343,71 @@ def table(quantity='contrast'):
                 out.append(dict(chromatic=chrom, band=WL[band], curve=label, case=case, mag=m, mean=d[k], std=d[k + '_std'], n_ok=d['n_ok'], n=d['n'],
                                 runaways=' '.join(d['runaway_tns'])))
     return out
+
+
+# ----------------------------------------------------------------------------- radial profiles
+def profile(case, mag, band):
+    """(rad, mean, std, label suffix) of the coronagraphic profile of the configuration selected at `mag`: mean and std over the converged
+    replays or, while there are none, the sweep run (std None)."""
+    st = replays(case).get(mag)
+    if st and st['tns']:
+        profs = [load_coro_profile(op.join(OUT, case, 'replays', tn), band) for tn in st['tns']]
+        rad = profs[0][0]
+        p = np.array([q for _, q in profs])
+        return rad, p.mean(axis=0), (p.std(axis=0, ddof=1) if len(p) > 1 else None), f"{st['n_ok']}/{st['n']} replays"
+    sel = selected(case).get(mag)
+    if sel is None:
+        return None
+    rad, p = load_coro_profile(op.join(OUT, case, 'runs', sel['tn']), band)
+    return rad, p, None, 'sweep run'
+
+
+def plot_profiles(mag=7.0, rmax=30.0):
+    """Radial raw-contrast profiles at one magnitude, achromatic (top) and chromatic (bottom), 550 / 1650 nm: single stage (rMod 0 and 2), fusion,
+    fusion swapped, mean over the converged replays (band: +- std), with the perfect-coronagraph bounds: fitting (achromatic) and fitting +
+    chromatism (WFS at 900 nm, WFS at 1300 nm). Same y range in every panel; shaded: the 2-5 lambda/D of the metric."""
+    refs = {c: load_perfect_coro(c) for c in ('achrom', 'vis', 'nir')}
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9.5), constrained_layout=True, sharex=True)
+    fig.suptitle(T(f'Raw contrast profiles at magnitude {mag:g} (900 nm): replay mean ± std'), fontsize=13, color=INK)
+    lo, hi, notes = np.inf, 0.0, set()
+    for (chrom, band), curves in main_panels().items():
+        ax = axes[int(chrom), 0 if band == 'vis' else 1]
+        bi = 1 if band == 'vis' else 2
+        rad = refs['achrom'][0]
+        sel = rad <= rmax
+        ax.axvspan(2, 5, color=GRID, alpha=0.6, lw=0, zorder=0)
+        bounds = [('achrom', 'fitting', '--')] + ([('vis', 'fitting + chromatism, WFS 900 nm', ':'), ('nir', 'fitting + chromatism, WFS 1300 nm', '-.')]
+                                                  if chrom else [])
+        for c, label, ls in bounds:
+            ax.plot(rad[sel], refs[c][bi][sel], color=MUTED, lw=1.5, ls=ls, zorder=2, label=T(label))
+            lo = min(lo, np.min(refs[c][bi][sel & (rad >= 1)]))
+        for e, label, case in curves:
+            pr = profile(case, mag, band)
+            if pr is None:
+                notes.add(case)
+                continue
+            r, m, sd, how = pr
+            k = r <= rmax
+            ax.plot(r[k], m[k], color=COLOR[e], lw=2, zorder=4, label=T(f'{label} ({how})'))
+            if sd is not None:
+                ax.fill_between(r[k], np.maximum(m[k] - sd[k], 1e-12), m[k] + sd[k], color=COLOR[e], alpha=0.2, lw=0, zorder=3)
+            if how == 'sweep run':
+                notes.add(f'{case} (no replays yet)')
+            hi = max(hi, np.max(m[k & (r >= 1)]))
+            lo = min(lo, np.min(m[k & (r >= 1)]))
+        _style(ax, True)
+        ax.set_xticks(np.arange(0, rmax + 0.1, 5))
+        ax.set_xlim(0, rmax)
+        ax.set_title(T(f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}" + (' (single: WFS 900 nm)' if band == 'nir' and not chrom else '')),
+                     fontsize=11, color=INK, loc='left')
+        ax.set_ylabel(T(f'raw contrast, {WL[band]}'), color=INK)
+        if chrom:
+            ax.set_xlabel(T('separation [λ/D]'), color=INK)
+        ax.legend(fontsize=8, loc='lower right', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+    for ax in axes.ravel():
+        ax.set_ylim(lo / 60, hi * 1.5)     # room below the curves for the legend
+    note = 'shaded column: 2-5 λ/D (metric); bands: ± std over the converged replays'
+    if notes:
+        note += '; incomplete: ' + ', '.join(sorted(notes))
+    fig.text(0.01, -0.01, T(note), fontsize=8, color=MUTED, ha='left', va='top')
+    return fig
