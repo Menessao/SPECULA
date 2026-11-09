@@ -22,7 +22,7 @@ MAGS = (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
 START_TIME, WINDOW, RUNAWAY, RUNAWAY_MEDIAN = 0.5, 0.5, 0.7, 0.5
 SR_MASK = 0.25            # contrast points with the science SR below this are drawn hollow
 WL = {'vis': '550 nm', 'nir': '1650 nm'}
-RMODS = (0, 1, 2)
+RMODS = (0, 2)            # single-stage modulations shown (rMod 1 was swept and replayed too)
 SPLITS = (10, 30, 50, 70, 90)        # % of the band on the unmodulated pyramid
 
 # Colors follow the entity (reference categorical palette, fixed order); splits: ordinal blue ramp, light = little unmodulated flux
@@ -145,9 +145,10 @@ def _floor_lines(ax, chrom, band, fl):
     else:
         refs = [('vis', 'floor, WFS 900 nm', '--'), ('nir', 'floor, WFS 1300 nm', ':')]
     for c, label, ls in refs:
+        below = c == 'vis' and chrom        # the two chromatic floors are close: one label under its line, one above
         ax.axhline(fl[c][band], color=MUTED, lw=1.2, ls=ls, zorder=1)
-        ax.annotate(T(label), (1.0, fl[c][band]), xycoords=('axes fraction', 'data'), xytext=(-4, 3), textcoords='offset points',
-                    ha='right', va='bottom', fontsize=8, color=MUTED)
+        ax.annotate(T(label), (1.0, fl[c][band]), xycoords=('axes fraction', 'data'), xytext=(-4, -3 if below else 3), textcoords='offset points',
+                    ha='right', va='top' if below else 'bottom', fontsize=8, color=MUTED)
 
 
 def _style(ax, logy):
@@ -199,6 +200,27 @@ def _labels(ax, rx, quantity, chrom, band, ref_label, top_title):
     rx.axhline(1.0, color=MUTED, lw=1, zorder=1)
 
 
+def ylim(quantity):
+    """Common y range of every contrast (or SR) panel of both figures: all replay means +- std, sweep values and, for the contrast, the floors."""
+    import glob
+    vals = []
+    for d in glob.glob(op.join(OUT, '*', 'selected.csv')):
+        case = op.basename(op.dirname(d))
+        for b in ('vis', 'nir'):
+            k = f'contrast_{b}' if quantity == 'contrast' else f'sr_{b}'
+            vals += [float(r[k]) for r in selected(case).values()]
+            for st in replays(case).values():
+                if np.isfinite(st[k]):
+                    e = st[k + '_std'] if np.isfinite(st[k + '_std']) else 0.0
+                    vals += [st[k] - e, st[k] + e]
+    if quantity == 'contrast':
+        vals += [v for f in floors().values() for v in f.values()]
+        vals = [v for v in vals if np.isfinite(v) and v > 0]
+        return min(vals) / 1.3, max(vals) * 1.3
+    vals = [v for v in vals if np.isfinite(v)]
+    return max(0.0, min(vals) - 0.02), min(1.0, max(vals) + 0.02)
+
+
 def _best_single(stats, cases, band, quantity, mags):
     """Best single-stage value per magnitude (lowest contrast / highest SR among the rMods)."""
     k = f'{quantity}_{band}' if quantity == 'contrast' else f'sr_{band}'
@@ -217,7 +239,7 @@ def plot_main(quantity='contrast'):
     panels = main_panels()
     stats = {c: replays(c) for curves in panels.values() for _, _, c in curves}
     fig, gs = _figure(f"{'Contrast' if quantity == 'contrast' else 'Strehl ratio'}: replay mean ± std of the selected configurations")
-    missing = set()
+    missing, lim = set(), ylim(quantity)
     for (chrom, band), curves in panels.items():
         ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
         k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
@@ -243,7 +265,8 @@ def plot_main(quantity='contrast'):
         _style(rx, False)
         _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"
                 + (' (single: WFS 900 nm)' if band == 'nir' and not chrom else ''))
-        ax.legend(fontsize=8, frameon=False, loc='upper left' if quantity == 'contrast' else 'lower left')
+        ax.set_ylim(*lim)
+        ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     _footnote(fig, quantity, missing)
     return fig
 
@@ -262,7 +285,7 @@ def plot_equal_flux(quantity='contrast'):
     +10 % in the chromatic cases, so mixing the two would bias the ratios); ratio panels over the best single stage."""
     fl = floors() if quantity == 'contrast' else None
     fig, gs = _figure(f"Equal-flux dual: {'contrast' if quantity == 'contrast' else 'Strehl ratio'} of each band split (sweep values)")
-    missing = set()
+    missing, lim = set(), ylim(quantity)
     for (chrom, band), (w, stem, singles, fusion) in equal_flux_panels().items():
         ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
         k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
@@ -291,7 +314,8 @@ def plot_equal_flux(quantity='contrast'):
         _style(ax, quantity == 'contrast')
         _style(rx, False)
         _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, both pyramids at {w} nm, {WL[band]}")
-        ax.legend(fontsize=8, frameon=False, loc='upper left' if quantity == 'contrast' else 'lower left')
+        ax.set_ylim(*lim)
+        ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     _footnote(fig, quantity, missing, equal_flux=True)
     return fig
 
