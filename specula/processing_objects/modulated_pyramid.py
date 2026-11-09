@@ -133,6 +133,8 @@ class ModulatedPyramid(BaseProcessingObj):
                  pyr_edge_def_ld: float = 0.0,
                  pyr_tip_def_ld: float = 0.0,
                  pyr_tip_maya_ld: float = 0.0,
+                 pyr_max_side_ld: float = 0.0,
+                 pyr_roof_ld: float = 0.0,
                  min_pup_dist: float = None,
                  rotAnglePhInDeg: float = 0.0,
                  xShiftPhInPixel: float = 0.0,
@@ -191,6 +193,8 @@ class ModulatedPyramid(BaseProcessingObj):
         self.pyr_edge_def_ld = pyr_edge_def_ld
         self.pyr_tip_def_ld = pyr_tip_def_ld
         self.pyr_tip_maya_ld = pyr_tip_maya_ld
+        self.pyr_max_side_ld = pyr_max_side_ld
+        self.pyr_roof_ld = pyr_roof_ld
         self.rotAnglePhInDeg = rotAnglePhInDeg
         self.xShiftPhInPixel = xShiftPhInPixel
         self.yShiftPhInPixel = yShiftPhInPixel
@@ -379,28 +383,57 @@ class ModulatedPyramid(BaseProcessingObj):
         )
         
         return result
-
+    
     def get_pyr_tlt(self, p, c):
         A = int(round((p + c) / 2.0))
         pyr_tlt = self.xp.zeros((2 * A, 2 * A), dtype=self.dtype)
-        y, x = self.xp.mgrid[0:A,0:A]
+        
+        # 1. Generate coordinates over the FULL grid instead of strict quadrants
+        Y, X = self.xp.mgrid[0:2*A, 0:2*A]
+        X_rev = 2 * A - 1 - X
+        Y_rev = 2 * A - 1 - Y
+
+        # 2. Extract roof magnitude safely without using getattr
+        roof_ld = self.pyr_roof_ld if hasattr(self, 'pyr_roof_ld') else 0.0
+        roof_shift = roof_ld * self.fft_res / 2.0
+
+        # 3. Define geometric planes to determine boundaries. 
+        # Shifting TR and BL up (positive) expands TL and BR, causing them to 
+        # touch along the bottom-left to top-right diagonal, forming the roof.
+        G_TL = X + Y
+        G_TR = X_rev + Y + roof_shift
+        G_BL = X + Y_rev + roof_shift
+        G_BR = X_rev + Y_rev
+
+        # The geometric minimum resolves the face boundaries
+        G_min = self.xp.minimum(self.xp.minimum(G_TL, G_TR), self.xp.minimum(G_BL, G_BR))
 
         if self.pyr_tlt_coeff is not None:
             k = self.pyr_tlt_coeff
-            pyr_tlt[:A, :A] = k[0,0] * x + k[1,0] * y
-            pyr_tlt[:A, A:] = k[0,1] * x[:,::-1] + k[1,1] * y
-            pyr_tlt[A:, :A] = k[0,2] * x + k[1,2] * y[::-1]
-            pyr_tlt[A:, A:] = k[0,3] * x[:,::-1] + k[1,3] * y[::-1]
+            # Calculate phase for each quadrant extending over the full domain
+            P_TL = k[0,0] * X + k[1,0] * Y
+            P_TR = k[0,1] * X_rev + k[1,1] * Y + roof_shift
+            P_BL = k[0,2] * X + k[1,2] * Y_rev + roof_shift
+            P_BR = k[0,3] * X_rev + k[1,3] * Y_rev
 
+            # Map the exact geometric intersections to the phase arrays
+            mask_TL = (G_min == G_TL)
+            mask_TR = (G_min == G_TR) & ~mask_TL
+            mask_BL = (G_min == G_BL) & ~mask_TL & ~mask_TR
+            mask_BR = (G_min == G_BR) & ~mask_TL & ~mask_TR & ~mask_BL
+
+            pyr_tlt[mask_TL] = P_TL[mask_TL]
+            pyr_tlt[mask_TR] = P_TR[mask_TR]
+            pyr_tlt[mask_BL] = P_BL[mask_BL]
+            pyr_tlt[mask_BR] = P_BR[mask_BR]
         else:
-            #pyr_tlt[0:A, 0:A] = tlt_basis + tlt_basis.T
-            #pyr_tlt[A:2*A, 0:A] = A - 1 - tlt_basis + tlt_basis.T
-            #pyr_tlt[A:2*A, A:2*A] = 2 * A - 2 - tlt_basis - tlt_basis.T
-            #pyr_tlt[0:A, A:2*A] = A - 1 + tlt_basis - tlt_basis.T
-            pyr_tlt[:A, :A] = x + y
-            pyr_tlt[:A, A:] = x[:,::-1] + y
-            pyr_tlt[A:, :A] = x + y[::-1]
-            pyr_tlt[A:, A:] = x[:,::-1] + y[::-1]
+            # Without coefficients, the geometric minimum perfectly defines the phase mask
+            pyr_tlt = G_min
+
+        if max(self.pyr_edge_def_ld, self.pyr_tip_def_ld,
+               self.pyr_tip_maya_ld, self.pyr_max_side_ld) <= 0:
+            # No defects: skip the full-frame distance maps
+            return pyr_tlt / self.tilt_scale
 
         xx, yy = make_xy(A * 2, A, xp=self.xp)
 
@@ -420,11 +453,22 @@ class ModulatedPyramid(BaseProcessingObj):
             pyr_tlt[idx_tip] = self.xp.max(pyr_tlt) * self.xp.random.rand(len(idx_tip[0]))
             self.logger.info(f'get_pyr_tlt: {len(idx_tip[0])} pixels set to 0 to consider pyramid imperfect tip')
 
-        # distance from tip
+        # distance from tip (maya)
         idx_tip_m = self.xp.where(d <= self.pyr_tip_maya_ld * self.fft_res / 2)
         if len(idx_tip_m[0]) > 0:
             pyr_tlt[idx_tip_m] = self.xp.min(pyr_tlt[idx_tip_m])
             self.logger.info(f'get_pyr_tlt: {len(idx_tip_m[0])} pixels set to 0 to consider pyramid imperfect tip')
+
+        # limit the pyramid support to a finite radial extent from the tip
+        if self.pyr_max_side_ld > 0:
+            max_side = self.pyr_max_side_ld * self.fft_res / 2
+            idx_max = self.xp.where(d > max_side)
+            if len(idx_max[0]) > 0:
+                pyr_tlt[idx_max] = 0.0
+                self.logger.info(
+                    f'get_pyr_tlt: {len(idx_max[0])} pixels outside the support radius '
+                    f'({self.pyr_max_side_ld} lambda/D) set to 0'
+                )
 
         return pyr_tlt / self.tilt_scale
 
