@@ -230,28 +230,31 @@ def replay_table():
     out = ['# Final sweep: repeatability', '',
            f'{N_REPLAYS} realizations of every selected configuration, {REPLAY_TIME:g} s each: atmosphere seed 100 k + 1 and an independent uniform '
            f'random wind direction per layer (seed {REPLAY_SEED}), the same for every case; wind speeds and Kalman model unchanged. '
-           'Values: mean +- std over the realizations (diverged runs excluded and counted in the notes). TN folders: <case>/replays/<TN>.', '',
+           'Values: mean +- std over the converged realizations; runaways (final_sweep_results.replays: non-finite, 550 nm SR falling by > 30 % '
+           'during the run, or below half the median of the other realizations) are excluded and listed. TN folders: <case>/replays/<TN>.', '',
            line(head + ['notes']), line(['---'] * (len(head) + 1))]
+    sys.path.insert(0, HERE)
+    import final_sweep_results as fsr
     runs = []
     for name, _, _, mb, _, replayed in CASES:
         if not replayed:
             continue
+        stats = fsr.replays(name)
         sel = {r['mag']: r for r in read_csv(op.join(case_dir(name), 'selected.csv'))}
         rows = read_csv(op.join(case_dir(name), 'replays.csv'))
         for m in MAGS:
             rs = [r for r in rows if r['mag'] == m]
             if not rs:
                 continue
-            ok = [r for r in rs if np.isfinite(r['contrast_vis']) and np.isfinite(r['sr_vis'])]
+            d = stats[m]
 
             def ms(k, fmt):
-                v = np.array([r[k] for r in ok])
-                return f'{np.mean(v):{fmt}} +- {np.std(v, ddof=1) if len(v) > 1 else 0:{fmt}}' if len(v) else '-'
-            notes = f'{len(rs) - len(ok)} diverged' if len(ok) < len(rs) else ''
-            out.append(line([DESCRIPTION[name], f'{m:g}', rs[0]['config'], len(ok), ms('contrast_vis', '.3e'), ms('contrast_nir', '.3e'),
+                return f'{d[k]:{fmt}} +- {d[k + "_std"]:{fmt}}' if np.isfinite(d[k]) else '-'
+            notes = f"{d['n'] - d['n_ok']} ran away: {' '.join(d['runaway_tns'])}" if d['n_ok'] < d['n'] else ''
+            out.append(line([DESCRIPTION[name], f'{m:g}', rs[0]['config'], f"{d['n_ok']}/{d['n']}", ms('contrast_vis', '.3e'), ms('contrast_nir', '.3e'),
                              ms('sr_vis', '.4f'), ms('sr_nir', '.4f'), f"{sel[m][f'contrast_{mb}']:.3e}" if m in sel else '-', notes]))
             runs += [line([DESCRIPTION[name], f'{m:g}', r['realization'], r['seed'], f"{r['contrast_vis']:.3e}", f"{r['contrast_nir']:.3e}",
-                           f"{r['sr_vis']:.4f}", f"{r['sr_nir']:.4f}", r['tn'], r['notes']]) for r in rs]
+                           f"{r['sr_vis']:.4f}", f"{r['sr_nir']:.4f}", r['tn'], 'ran away' if r['tn'] in d['runaway_tns'] else r['notes']]) for r in rs]
     h = ['case', 'mag', 'realization', 'atmo seed', 'contrast 550 nm', 'contrast 1650 nm', 'SR 550 nm', 'SR 1650 nm', 'TN', 'notes']
     out += ['', '## All replay runs', '', line(h), line(['---'] * len(h)), *runs]
     text = '\n'.join(out) + '\n'
