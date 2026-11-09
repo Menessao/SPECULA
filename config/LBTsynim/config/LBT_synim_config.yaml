@@ -78,16 +78,15 @@ systems:
     xsign: -1
     ysign: 1
     misreg_guess: {rotation: -147.94, shift_x: -0.53, shift_y: -0.79, magnification: 0.995}
-    # misreg_guess: {rotation: -147.94, shift_x: -0.53, shift_y: -0.79, magnification: 0.995}
 
 
 registration:
-  nmodes: 400
+  nmodes: 300
   delta_rotation: 0.5        # [deg]
   delta_shift: 0.01          # [pix]
   delta_magnification: 0.001
   tolerance: 1.0e-2
-  max_iterations: 10
+  max_iterations: 15
   main_simul_yaml: './config/syn_soul_im.yml'
   slopes_mode_check: 30
 
