@@ -2,8 +2,8 @@
 
 Magnitudes 5 and 6 were not swept: they are replays of the configuration selected at magnitude 7. Each point of the single-stage and fusion
 curves is the mean over the replays (REPLAY_TIME s, other atmosphere seed and random wind direction per
-layer) of the configuration the sweep selected at that magnitude; error bars: standard deviation over the converged replays. A replay that ran
-away is excluded and counted (`n/N` next to the point): non-finite, or 550 nm SR of its last 0.5 s below RUNAWAY x that of the 0.5 s after
+layer) of the configuration the sweep selected at that magnitude; error bars: standard deviation over the replays. Only magnitudes where every replay
+converged are plotted (the others are listed under the figure); a replay ran away if it is non-finite, or 550 nm SR of its last 0.5 s below RUNAWAY x that of the 0.5 s after
 START_TIME, or 550 nm SR below RUNAWAY_MEDIAN x the median of the other realizations (or of the converged replays of the next fainter
 magnitude, when it uses the same configuration: a brighter star cannot do worse). Only the replays of the configuration selected now count
 (replays of a configuration selected before stay in replays.csv). The equal-flux dual cases were not replayed: their points
@@ -31,8 +31,8 @@ RMODS = (0, 2)            # single-stage modulations shown (rMod 1 was swept and
 SPLITS = (10, 30, 50, 70, 90)        # % of the band on the unmodulated pyramid
 
 # Colors follow the entity (reference categorical palette, fixed order); splits: ordinal blue ramp, light = little unmodulated flux
-COLOR = {'fusion': '#2a78d6', 'swapped': '#eb6834', 'r0': '#1baf7a', 'r1': '#eda100', 'r2': '#e87ba4', 'r0svd': '#008300'}
-MARKER = {'fusion': 'o', 'swapped': 's', 'r0': '^', 'r1': 'v', 'r2': 'D', 'r0svd': 'P'}
+COLOR = {'fusion': '#2a78d6', 'swapped': '#eb6834', 'r0': '#1baf7a', 'r1': '#eda100', 'r2': '#e87ba4'}
+MARKER = {'fusion': 'o', 'swapped': 's', 'r0': '^', 'r1': 'v', 'r2': 'D'}
 SPLIT_COLOR = dict(zip(SPLITS, ('#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281')))
 INK, MUTED, GRID = '#1a1a19', '#6b6a63', '#e4e3dd'
 
@@ -112,6 +112,12 @@ def replays(case):
     return dict(sorted(out.items()))
 
 
+def complete(st, m, k=None):
+    """Is magnitude m of a replay (or sweep) statistics dict plotted: all its replays converged (and the value k finite)?"""
+    d = st.get(m)
+    return d is not None and d.get('n_ok', 1) == d.get('n', 1) and (k is None or np.isfinite(d[k]))
+
+
 def floors():
     """Mean 2-5 lambda/D contrast of the perfect-coronagraph references (0.9" line of sight, z = 30): {case: {band: value}}."""
     out = {}
@@ -132,8 +138,6 @@ def main_panels():
         for band in ('vis', 'nir'):
             w = 1300 if (band == 'nir' and chrom) else 900
             curves = [(f'r{r}', f'single, WFS {w} nm, rMod {r}', f'single_wfs{w}_{t}_r{r}') for r in RMODS]
-            # full ML runs away at bright magnitudes: rMod 0 with the SVD reconstructor and Kalman model, replays at mags 5-7 only
-            curves.append(('r0svd', f'single, WFS {w} nm, rMod 0, SVD rec + KF (mags 5-7)', f'single_wfs{w}_{t}_r0_svd'))
             curves.append(('fusion', 'fusion: unmod 900 nm + rMod 2 at 1300 nm', f'dual_unmod900_{t}'))
             if chrom:
                 curves.append(('swapped', 'fusion swapped: unmod 1300 nm + rMod 2 at 900 nm', 'dual_unmod1300_chrom'))
@@ -219,11 +223,13 @@ def ylim(quantity):
     vals = []
     for d in glob.glob(op.join(OUT, '*', 'selected.csv')):
         case = op.basename(op.dirname(d))
+        if case.endswith('_svd'):         # plain-SVD rMod 0 replays: stopped, not plotted (2026-11-10)
+            continue
         for b in ('vis', 'nir'):
             k = f'contrast_{b}' if quantity == 'contrast' else f'sr_{b}'
             vals += [float(r[k]) for r in selected(case).values()]
             for st in replays(case).values():
-                if np.isfinite(st[k]):
+                if st['n_ok'] == st['n'] and np.isfinite(st[k]):
                     e = st[k + '_std'] if np.isfinite(st[k + '_std']) else 0.0
                     vals += [st[k] - e, st[k] + e]
     if quantity == 'contrast':
@@ -240,7 +246,7 @@ def _best_single(stats, cases, band, quantity, mags):
     pick = min if quantity == 'contrast' else max
     out = {}
     for m in mags:
-        v = [stats[c][m][k] for c in cases if m in stats[c] and np.isfinite(stats[c][m][k])]
+        v = [stats[c][m][k] for c in cases if complete(stats[c], m, k)]
         if v:
             out[m] = pick(v)
     return out
@@ -252,7 +258,7 @@ def plot_main(quantity='contrast'):
     panels = main_panels()
     stats = {c: replays(c) for curves in panels.values() for _, _, c in curves}
     fig, gs = _figure(f"{'Contrast' if quantity == 'contrast' else 'Strehl ratio'}: replay mean ± std of the selected configurations")
-    missing, lim = set(), ylim(quantity)
+    missing, dropped, lim = set(), set(), ylim(quantity)
     for (chrom, band), curves in panels.items():
         ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
         k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
@@ -260,16 +266,16 @@ def plot_main(quantity='contrast'):
         ref = _best_single(stats, singles, band, quantity, MAGS)
         for e, label, case in curves:
             st = stats[case]
-            mags = [m for m in MAGS if m in st and np.isfinite(st[m][k])]
-            if len(mags) < (3 if e == 'r0svd' else len(MAGS)):     # the SVD curve has mags 5-7 only
+            dropped |= {f"{case} mag {m:g} ({st[m]['n_ok']}/{st[m]['n']})" for m in MAGS if m in st and st[m]['n_ok'] < st[m]['n']}
+            if any(m not in st for m in MAGS):
                 missing.add(case)
+            mags = [m for m in MAGS if complete(st, m, k)]     # only magnitudes where every replay converged
             if not mags:
                 continue
             y = [st[m][k] for m in mags]
             err = [st[m][k + '_std'] if np.isfinite(st[m][k + '_std']) else 0.0 for m in mags]
             hollow = [st[m][f'sr_{band}'] < SR_MASK for m in mags] if quantity == 'contrast' else None
-            counts = [f"{st[m]['n_ok']}/{st[m]['n']}" if st[m]['n_ok'] < st[m]['n'] else '' for m in mags]
-            _curve(ax, mags, y, err, COLOR[e], MARKER[e], label, hollow, counts)
+            _curve(ax, mags, y, err, COLOR[e], MARKER[e], label, hollow)
             rm = [m for m in mags if m in ref]
             _curve(rx, rm, [st[m][k] / ref[m] for m in rm], None, COLOR[e], MARKER[e], None)
         if fl:
@@ -280,7 +286,7 @@ def plot_main(quantity='contrast'):
                 + (' (single: WFS 900 nm)' if band == 'nir' and not chrom else ''))
         ax.set_ylim(*lim)
         ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
-    _footnote(fig, quantity, missing)
+    _footnote(fig, quantity, missing, dropped=dropped)
     return fig
 
 
@@ -333,14 +339,16 @@ def plot_equal_flux(quantity='contrast'):
     return fig
 
 
-def _footnote(fig, quantity, missing, equal_flux=False):
+def _footnote(fig, quantity, missing, equal_flux=False, dropped=()):
     notes = []
     if quantity == 'contrast':
         notes.append(f'hollow markers: science SR < {SR_MASK}')
     if equal_flux:
         notes.append('all curves: sweep values on the nominal realization (splits not replayed), no error bars')
     else:
-        notes.append('n/N: converged replays (runaways excluded)')
+        notes.append('points only where every replay converged')
+        if dropped:
+            notes.append('dropped (replays ran away): ' + ', '.join(sorted(dropped)))
     if missing:
         notes.append('incomplete: ' + ', '.join(sorted(missing)))
     fig.text(0.01, -0.01, T('; '.join(notes)), fontsize=8, color=MUTED, ha='left', va='top')
@@ -363,6 +371,8 @@ def profile(case, mag, band):
     """(rad, mean, std, label suffix) of the coronagraphic profile of the configuration selected at `mag`: mean and std over the converged
     replays or, while there are none, the sweep run (std None)."""
     st = replays(case).get(mag)
+    if st and st['n_ok'] < st['n']:           # some replays ran away: not plotted
+        return 'dropped'
     if st and st['tns']:
         profs = [load_coro_profile(op.join(OUT, case, 'replays', tn), band) for tn in st['tns']]
         rad = profs[0][0]
@@ -396,8 +406,8 @@ def plot_profiles(mag=7.0, rmax=30.0):
             lo = min(lo, np.min(refs[c][bi][sel & (rad >= 1)]))
         for e, label, case in curves:
             pr = profile(case, mag, band)
-            if pr is None:
-                notes.add(case)
+            if pr is None or pr == 'dropped':
+                notes.add(case + (' (replays ran away: not plotted)' if pr == 'dropped' else ''))
                 continue
             r, m, sd, how = pr
             k = r <= rmax
@@ -419,7 +429,7 @@ def plot_profiles(mag=7.0, rmax=30.0):
         ax.legend(fontsize=8, loc='lower right', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     for ax in axes.ravel():
         ax.set_ylim(lo / 60, hi * 1.5)     # room below the curves for the legend
-    note = 'shaded column: 2-5 λ/D (metric); bands: ± std over the converged replays'
+    note = 'shaded column: 2-5 λ/D (metric); bands: ± std over the replays (curves only where every replay converged)'
     if notes:
         note += '; incomplete: ' + ', '.join(sorted(notes))
     fig.text(0.01, -0.01, T(note), fontsize=8, color=MUTED, ha='left', va='top')
