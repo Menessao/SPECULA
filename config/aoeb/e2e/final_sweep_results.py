@@ -32,8 +32,8 @@ WL = {'vis': '550 nm', 'nir': '1650 nm'}
 RMODS = (0, 2)            # single-stage modulations shown (rMod 1 was swept and replayed too)
 SPLITS = (10, 30, 50, 70, 90)        # % of the band on the unmodulated pyramid
 
-# Colors follow the entity (reference categorical palette, fixed order); splits: ordinal blue ramp, light = little unmodulated flux
-COLOR = {'fusion': '#2a78d6', 'swapped': '#eb6834', 'r0': '#1baf7a', 'r1': '#eda100', 'r2': '#e87ba4'}
+# Colors follow the entity; splits: ordinal blue ramp, light = little unmodulated flux
+COLOR = {'fusion': '#4477AA', 'swapped': '#EE6677', 'r0': '#228833', 'r1': '#CCBB44', 'r2': '#AA3377'}   # Paul Tol 'bright' (colour-blind safe)
 MARKER = {'fusion': 'o', 'swapped': 's', 'r0': '^', 'r1': 'v', 'r2': 'D'}
 SPLIT_COLOR = dict(zip(SPLITS, ('#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281')))
 INK, MUTED, GRID = '#1a1a19', '#6b6a63', '#e4e3dd'
@@ -287,7 +287,7 @@ def plot_main(quantity='contrast'):
         _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"
                 )
         ax.set_ylim(*lim)
-        ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+        ax.legend(fontsize=8, loc='best', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     _footnote(fig, quantity, missing, dropped=dropped)
     return fig
 
@@ -336,7 +336,7 @@ def plot_equal_flux(quantity='contrast'):
         _style(rx, False, SWEPT_MAGS)
         _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, both pyramids at {w} nm, {WL[band]}")
         ax.set_ylim(*lim)
-        ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+        ax.legend(fontsize=8, loc='best', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     _footnote(fig, quantity, missing, equal_flux=True)
     return fig
 
@@ -433,7 +433,7 @@ def plot_profiles(mag=7.0, rmax=30.0):
         ax.set_ylabel(T(f'raw contrast, {WL[band]}'), color=INK)
         if chrom:
             ax.set_xlabel(T('separation [λ/D]'), color=INK)
-        ax.legend(fontsize=8, loc='upper center', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+        ax.legend(fontsize=8, loc='best', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     for ax in axes.ravel():
         ax.set_ylim(*PROFILE_YLIM)
     note = 'shaded column: 2-5 λ/D (metric); bands: ± std over the replays (curves only where every replay converged)'
