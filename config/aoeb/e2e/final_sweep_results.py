@@ -13,6 +13,7 @@ Contrast: mean raw contrast in 2-5 lambda/D, relative to the integrated AO peak.
 """
 import csv
 import os.path as op
+import textwrap
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -339,6 +340,11 @@ def plot_equal_flux(quantity='contrast'):
     return fig
 
 
+def _wrap(text, width=190):
+    """Footnote wrapped to the figure width (a long single line widens the saved figure with bbox_inches='tight')."""
+    return '\n'.join(textwrap.wrap(text, width, break_long_words=False, break_on_hyphens=False))
+
+
 def _footnote(fig, quantity, missing, equal_flux=False, dropped=()):
     notes = []
     if quantity == 'contrast':
@@ -351,7 +357,7 @@ def _footnote(fig, quantity, missing, equal_flux=False, dropped=()):
             notes.append('dropped (replays ran away): ' + ', '.join(sorted(dropped)))
     if missing:
         notes.append('incomplete: ' + ', '.join(sorted(missing)))
-    fig.text(0.01, -0.01, T('; '.join(notes)), fontsize=8, color=MUTED, ha='left', va='top')
+    fig.text(0.01, -0.01, T(_wrap('; '.join(notes))), fontsize=8, color=MUTED, ha='left', va='top')
 
 
 def table(quantity='contrast'):
@@ -432,5 +438,5 @@ def plot_profiles(mag=7.0, rmax=30.0):
     note = 'shaded column: 2-5 λ/D (metric); bands: ± std over the replays (curves only where every replay converged)'
     if notes:
         note += '; incomplete: ' + ', '.join(sorted(notes))
-    fig.text(0.01, -0.01, T(note), fontsize=8, color=MUTED, ha='left', va='top')
+    fig.text(0.01, -0.01, T(_wrap(note)), fontsize=8, color=MUTED, ha='left', va='top')
     return fig
