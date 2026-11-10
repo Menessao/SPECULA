@@ -62,11 +62,6 @@ BANDW = 400.0                           # [nm] cred_vis / cred_nir bandw: split 
 FIELDS = ('phase', 'mag', 'k', 'fs_mod', 'k_unmod', 'fs_unmod', 'n_unmod', 'N_unmod', 'fc_vis', 'fc_nir', 'contrast_vis', 'peak_vis', 'sr_vis', 'contrast_nir', 'sr_nir', 'flux_ratio_vis', 'flux_ratio_nir', 'notes', 'tn')
 
 
-def flux_per_frame(rmod, n, N, wvl, mag, exposure):
-    """Pupil flux of one frame of `exposure` [s] [e-], at the magnitude of that band for the 900 nm magnitude `mag`."""
-    return get_pupil_flux(rmod, n, N, wvl, nCorrModes=N_CORR) * exposure * FS * 10 ** (-0.4 * (mag - MAG_CAL[900.0]))
-
-
 def frame_alias_fraction(wvl, steps, fs):
     """Aliasing of a frame of `steps` loop steps against one step (the run has one sample per step: 1 at steps = 1)."""
     spectrum = machine().alias_spectrum(wvl)
@@ -120,17 +115,30 @@ def sn_tag(rmod, n, N, wvl):
 
 
 class Sweep:
-    def __init__(self, out, gpu, total_time, unmod_wvl, chromatic=True, same_wvl=None, unmod_frac=1.0):
+    def __init__(self, out, gpu, total_time, unmod_wvl, chromatic=True, same_wvl=None, unmod_frac=1.0, bands=None):
+        """bands: (unmod nm, unmod bandw nm, mod nm, mod bandw nm): each pyramid at its own wavelength and camera band (unmodulated on the vis
+        chain, products calibrated on that chain: MAG_CAL of the chain), the star magnitude at that wavelength from the colour of MAG_CAL,
+        linear in the wavelength, as the 1300 nm source of the other cases."""
         self.out, self.gpu, self.total_time, self.chromatic = out, gpu, total_time, chromatic
-        if same_wvl:      # both sensors at one wavelength, band split: unmodulated on the vis chain
+        colour = MAG_CAL[900.0] - MAG_CAL[1300.0]
+        if bands:
+            uw, ubw, mw, mbw = (float(x) for x in bands)
+            self.wvl, self.unmod_chain = {'vis': uw, 'nir': mw}, 'vis'
+            self.frac = {'vis': ubw / BANDW, 'nir': mbw / BANDW}
+            MAG_CAL.setdefault(uw, MAG_CAL[900.0])          # calibration.py: vis chain at uw, nir chain at mw, sources of ristretto_main.yml
+            MAG_CAL.setdefault(mw, MAG_CAL[1300.0])
+            self.mag_offset = {c: -colour * (w - 900.0) / 400.0 for c, w in self.wvl.items()}
+        elif same_wvl:      # both sensors at one wavelength, band split: unmodulated on the vis chain
             self.wvl, self.unmod_chain = {'vis': float(same_wvl), 'nir': float(same_wvl)}, 'vis'
             self.frac = {'vis': float(unmod_frac), 'nir': 1.0 - float(unmod_frac)}
         else:
             self.wvl, self.unmod_chain = {b: w for w, b in BANDS.items()}, BANDS[unmod_wvl]
             self.frac = {'vis': 1.0, 'nir': 1.0}
+        if not bands:                                       # source magnitude of a chain = 900 nm magnitude + offset
+            self.mag_offset = {c: MAG_CAL[w] - MAG_CAL[900.0] for c, w in self.wvl.items()}
         self.mod_chain = next(c for c in CHAINS if c != self.unmod_chain)
         self.unmod_wvl, self.mod_wvl = self.wvl[self.unmod_chain], self.wvl[self.mod_chain]
-        sc.METRIC_BAND = BANDS[self.unmod_wvl]       # metric in the science band nearest to the unmodulated sensor
+        sc.METRIC_BAND = BANDS.get(self.unmod_wvl, 'vis')  # metric in the science band nearest to the unmodulated sensor (bands: 550 nm)
         self.tag = op.basename(op.normpath(out))
         self.store = op.join(out, 'runs')
         self.csv = op.join(out, 'results.csv')
@@ -163,7 +171,10 @@ class Sweep:
         return (float(mag), int(k), int(n), int(ku), round(float(fc['vis']), 3), round(float(fc['nir']), 3))
 
     def model_flux(self, chain, rmod, n, N, mag, exposure):
-        return flux_per_frame(rmod, n, N, self.wvl[chain], mag, exposure) * self.frac[chain]
+        """Pupil flux of one frame [e-]: calibration frame flux scaled to the chain's source magnitude and camera band."""
+        wvl = self.wvl[chain]
+        return (get_pupil_flux(rmod, n, N, wvl, nCorrModes=N_CORR) * exposure * FS * 10 ** (-0.4 * (mag + self.mag_offset[chain] - MAG_CAL[wvl]))
+                * self.frac[chain])
 
     def sensor(self, chain, mag, steps, n, N, fs, fc=1.0):
         """(overrides, sensor of the filter, model flux per frame) of the pyramid of a chain, frame of `steps` steps of the loop at fs;
@@ -176,7 +187,8 @@ class Sweep:
         if unmod:
             P = paths(wvl)
             path = P.avgframe(rmod, n, SEEING, N_CORR)
-            frame_flux = (float(np.sum(fits.getdata(path))) / calibration.avgframe_steps(path) * exposure * FS * 10 ** (-0.4 * (mag - MAG_CAL[900.0]))
+            frame_flux = (float(np.sum(fits.getdata(path))) / calibration.avgframe_steps(path) * exposure * FS
+                          * 10 ** (-0.4 * (mag + self.mag_offset[chain] - MAG_CAL[wvl]))
                           * self.frac[chain] * fc)
             rec_tag, rec = ml_rec(n, N, wvl, frame_flux)
             alias = ml_aliasing(rec, n, N, wvl) * frame_alias_fraction(wvl, steps, fs)
@@ -188,7 +200,7 @@ class Sweep:
         pad = R_PAD * ar2_stationary_variance(a1, a2, q)[N:N_CORR]
         sensor = dict(noise_var=np.concatenate([noise_var(rec, rmod, n, N, wvl, flux * fc), pad]), aliasing=np.concatenate([alias, np.zeros(N_CORR - N)]),
                       frame_steps=steps, biased=False)
-        ov = {f'source_{chain}_override': {'magnitude': MAG_CAL[wvl] + mag - MAG_CAL[900.0], 'wavelengthInNm': wvl},
+        ov = {f'source_{chain}_override': {'magnitude': mag + self.mag_offset[chain], 'wavelengthInNm': wvl},
               f'pyr_{chain}_override': {'pup_diam': n, 'pup_dist': calibration.E2EConfig().pup_dist(n), 'mod_amp': rmod, 'wavelengthInNm': wvl},
               f'cred_{chain}_override': {'dt': exposure, 'readout_level': SIGMA_E, 'bandw': BANDW * self.frac[chain]},
               f'pyr_slopes_{chain}_override': {'pupdata_object': f'pyr_pupdata_{n}x{n}', 'sn_object': sn_tag(rmod, n, N, wvl), 'outputs': ['out_slopes', 'out_flux']},
@@ -424,6 +436,8 @@ def main():
     ap.add_argument('--case', nargs=4, type=float, metavar=('MAG', 'K', 'RUNG', 'KU'), help='one run only (test): magnitude, modulated frame in loop steps, LADDER index, loop rate = 2000 / KU')
     ap.add_argument('--gpu', type=int, default=0)
     ap.add_argument('--achromatic', action='store_true', help='prop.enable_chromatic_effect = false')
+    ap.add_argument('--bands', type=float, nargs=4, metavar=('UNMOD_NM', 'UNMOD_BANDW', 'MOD_NM', 'MOD_BANDW'),
+                    help='each pyramid at its own wavelength and camera band [nm] (unmodulated first); products must exist at both')
     ap.add_argument('--same-wvl', type=float, choices=sorted(BANDS), help='[nm] equal flux: both pyramids at this wavelength, band split by --unmod-frac')
     ap.add_argument('--unmod-frac', type=float, default=0.5, help='with --same-wvl: fraction of the band of the unmodulated pyramid')
     ap.add_argument('--replay', type=int, metavar='N_REAL', help='rerun the selected configurations N_REAL times with other seeds and wind directions')
@@ -437,7 +451,7 @@ def main():
     if a.calibrate:
         calibrate(a.gpu)
         return
-    sweep = Sweep(a.out or op.join(result_dir, f'sweep_dual_unmod{a.unmod_wvl:g}_20261106'), a.gpu, a.total_time, a.unmod_wvl, not a.achromatic, a.same_wvl, a.unmod_frac)
+    sweep = Sweep(a.out or op.join(result_dir, f'sweep_dual_unmod{a.unmod_wvl:g}_20261106'), a.gpu, a.total_time, a.unmod_wvl, not a.achromatic, a.same_wvl, a.unmod_frac, a.bands)
     if a.case:
         check_ar2()
         save_plant_inverse_iir(sweep.unity, calib_dir, N_CORR, beta=0.0)
