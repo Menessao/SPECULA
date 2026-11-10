@@ -4,7 +4,8 @@ Magnitudes 5 and 6 were not swept: they are replays of the configuration selecte
 curves is the mean over the replays (REPLAY_TIME s, other atmosphere seed and random wind direction per
 layer) of the configuration the sweep selected at that magnitude; error bars: standard deviation over the converged replays. A replay that ran
 away is excluded and counted (`n/N` next to the point): non-finite, or 550 nm SR of its last 0.5 s below RUNAWAY x that of the 0.5 s after
-START_TIME, or 550 nm SR below RUNAWAY_MEDIAN x the median of the other realizations. Only the replays of the configuration selected now count
+START_TIME, or 550 nm SR below RUNAWAY_MEDIAN x the median of the other realizations (or of the converged replays of the next fainter
+magnitude, when it uses the same configuration: a brighter star cannot do worse). Only the replays of the configuration selected now count
 (replays of a configuration selected before stay in replays.csv). The equal-flux dual cases were not replayed: their points
 are the sweep values (one realization, the one the search was optimised on), without error bars, and so are their reference curves.
 Contrast: mean raw contrast in 2-5 lambda/D, relative to the integrated AO peak. Ratio panels: each curve over the best single-stage curve
@@ -84,8 +85,8 @@ def replays(case):
     if not op.exists(path):
         return {}
     rows = list(csv.DictReader(open(path)))
-    out = {}
-    for mag in sorted({float(r['mag']) for r in rows}):
+    out, fainter = {}, None        # fainter: (config, converged median 550 nm SR) of the next fainter magnitude
+    for mag in sorted({float(r['mag']) for r in rows}, reverse=True):
         cur = sel.get(mag, sel.get(REF_MAG))          # current selection (mags 5, 6: that of mag 7)
         rs = [r for r in rows if float(r['mag']) == mag and (cur is None or r['config'] == cur['config'])]
         if not rs:
@@ -93,6 +94,8 @@ def replays(case):
         fs = _fs_of(case, cur['key']) if cur else 2000.0
         sr550 = np.array([_float(r, 'sr_vis') for r in rs])
         med = np.nanmedian(sr550)
+        if fainter and cur and fainter[0] == cur['config']:
+            med = max(med, fainter[1])   # same configuration, brighter star: SR cannot be lower (catches runs that collapse before START_TIME)
         ok, bad = [], []
         for r, s in zip(rs, sr550):
             finite = all(np.isfinite(_float(r, k)) for k in ('contrast_vis', 'contrast_nir', 'sr_vis', 'sr_nir'))
@@ -105,7 +108,8 @@ def replays(case):
             d[k] = float(np.mean(v)) if len(v) else np.nan
             d[k + '_std'] = float(np.std(v, ddof=1)) if len(v) > 1 else np.nan
         out[mag] = d
-    return out
+        fainter = (cur['config'], float(np.median([_float(r, 'sr_vis') for r in ok]))) if cur and ok else None
+    return dict(sorted(out.items()))
 
 
 def floors():
