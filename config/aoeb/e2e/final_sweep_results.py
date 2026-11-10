@@ -26,6 +26,7 @@ MAGS = (5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0)    # 5 and 6: replays of the 
 SWEPT_MAGS = MAGS[2:]
 REF_MAG = 7.0
 START_TIME, WINDOW, RUNAWAY, RUNAWAY_MEDIAN = 0.5, 0.5, 0.7, 0.5
+PROFILE_YLIM = (1e-7, 1e-3)    # raw contrast range of the radial-profile panels
 SR_MASK = 0.25            # contrast points with the science SR below this are drawn hollow
 WL = {'vis': '550 nm', 'nir': '1650 nm'}
 RMODS = (0, 2)            # single-stage modulations shown (rMod 1 was swept and replayed too)
@@ -284,7 +285,7 @@ def plot_main(quantity='contrast'):
         _style(ax, quantity == 'contrast')
         _style(rx, False)
         _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"
-                + (' (single: WFS 900 nm)' if band == 'nir' and not chrom else ''))
+                )
         ax.set_ylim(*lim)
         ax.legend(fontsize=8, loc='lower left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     _footnote(fig, quantity, missing, dropped=dropped)
@@ -417,7 +418,7 @@ def plot_profiles(mag=7.0, rmax=30.0):
                 continue
             r, m, sd, how = pr
             k = r <= rmax
-            ax.plot(r[k], m[k], color=COLOR[e], lw=2, zorder=4, label=T(f'{label} ({how})'))
+            ax.plot(r[k], m[k], color=COLOR[e], lw=2, zorder=4, label=T(label))
             if sd is not None:
                 ax.fill_between(r[k], np.maximum(m[k] - sd[k], 1e-12), m[k] + sd[k], color=COLOR[e], alpha=0.2, lw=0, zorder=3)
             if how == 'sweep run':
@@ -427,14 +428,14 @@ def plot_profiles(mag=7.0, rmax=30.0):
         _style(ax, True)
         ax.set_xticks(np.arange(0, rmax + 0.1, 5))
         ax.set_xlim(0, rmax)
-        ax.set_title(T(f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}" + (' (single: WFS 900 nm)' if band == 'nir' and not chrom else '')),
+        ax.set_title(T(f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"),
                      fontsize=11, color=INK, loc='left')
         ax.set_ylabel(T(f'raw contrast, {WL[band]}'), color=INK)
         if chrom:
             ax.set_xlabel(T('separation [λ/D]'), color=INK)
-        ax.legend(fontsize=8, loc='lower right', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+        ax.legend(fontsize=8, loc='upper center', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     for ax in axes.ravel():
-        ax.set_ylim(lo / 60, hi * 1.5)     # room below the curves for the legend
+        ax.set_ylim(*PROFILE_YLIM)
     note = 'shaded column: 2-5 λ/D (metric); bands: ± std over the replays (curves only where every replay converged)'
     if notes:
         note += '; incomplete: ' + ', '.join(sorted(notes))
