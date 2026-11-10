@@ -648,7 +648,8 @@ class ErrorBudgetMachine:
         return dict(flux_mode=B / np.maximum(A, 1e-300) * to_flux, flux=n_tot * to_flux, e_frame=n_tot)
 
     def budget_fused(self, sensors, seeing, fs, N=None, latency_s=500e-6, controller='int', n_fold=3, ff_grid=None, rec=('svd',),
-                     crosstalk=False, chromatic=None, alias_correlation='full', optimize_freq=None, optimize_modes=None, warn=True):
+                     crosstalk=False, chromatic=None, alias_correlation='full', optimize_freq=None, optimize_modes=None, warn=True,
+                     weight_shift=0.0):
         """Budget of ONE loop fed by several sensors at the same frame rate fs whose measurements of every mode are fused with the optimal
         (inverse-variance) weights. sensors: [dict(rMod, n_subap, wavelength_nm, flux)], flux in photons/s at that sensor's detector (each
         sensor has its own detector: the readout noise is paid once per sensor). Per mode, in optical-gain-compensated units
@@ -664,7 +665,12 @@ class ErrorBudgetMachine:
         Optional per-sensor keys (used by budget_dual): 'fs' the sensor frame rate when it differs from the loop rate fs (its noise enters
         with the same noise PSD at the loop rate: per-frame variance x fs / fs_i; its longer exposure and delay are NOT modelled, which is
         optimistic for a slower sensor); 'N_rec' the modes of its reconstructor (>= N, the first N are fused); 'N_corr' the corrected modes
-        of its products (default N_rec; n_modes_ho for a 'multistage' LO sensor)."""
+        of its products (default N_rec; n_modes_ho for a 'multistage' LO sensor).
+        weight_shift (two sensors only): d added to the weight of the first sensor and taken from the second, the same for every mode
+        (or an array with one d per mode)
+        (the weights still sum to 1 and may leave [0, 1]): no longer the minimum-noise estimate, but it moves the effective refractivity
+        of the fused beam, so that two bands can be EXTRAPOLATED to the science one (chromatic shear cancelled to first order in the
+        shear, the noise amplified by sum w_i^2 sigma_i^2)."""
         if chromatic is not None and chromatic.multiplicative:
             raise NotImplementedError('budget_fused: the multiplicative chromatic term is not supported')
         if alias_correlation not in ('full', 'none'):
@@ -680,7 +686,7 @@ class ErrorBudgetMachine:
         modes = sorted({n for n in common if n <= N_req} | {N_req}, reverse=True) if opt_m else [N_req]
         freqs = self.freq_candidates(fs) if opt_f else [float(fs)]
         kw = dict(latency_s=latency_s, controller=controller, n_fold=n_fold, ff_grid=ff_grid, rec=rec, crosstalk=crosstalk,
-                  chromatic=chromatic, alias_correlation=alias_correlation)
+                  chromatic=chromatic, alias_correlation=alias_correlation, weight_shift=weight_shift)
         best = first = None
         for n_m in modes:
             for f in freqs:
@@ -697,7 +703,7 @@ class ErrorBudgetMachine:
         return r
 
     def _budget_fused_at(self, sensors, seeing, fs, N, latency_s, controller, n_fold, ff_grid, rec, crosstalk, chromatic,
-                         alias_correlation):
+                         alias_correlation, weight_shift=0.0):
         if controller not in CONTROLLERS:
             raise ValueError(f'budget_fused: controller must be one of {CONTROLLERS}')
         turb_cmd, rms, r0 = self.turbulence(seeing, N)
@@ -715,7 +721,11 @@ class ErrorBudgetMachine:
             alias.append(cal.alias_rms[:N] * (seeing / cal.alias_seeing) ** (5 / 6) / g)
         inv = np.sum([1.0 / np.maximum(p + rn, 1e-300) for p, rn in zip(phot, ron)], axis=0)
         w = [1.0 / np.maximum(p + rn, 1e-300) / inv for p, rn in zip(phot, ron)]
-        photon = np.sum([wi ** 2 * p for wi, p in zip(w, phot)], axis=0)
+        if np.any(weight_shift):                                # scalar, or one value per mode (bandsplit.py)
+            if len(w) != 2:
+                raise ValueError('weight_shift needs exactly two sensors')
+            w = [w[0] + weight_shift, w[1] - weight_shift]
+        photon =np.sum([wi ** 2 * p for wi, p in zip(w, phot)], axis=0)
         readout = np.sum([wi ** 2 * rn for wi, rn in zip(w, ron)], axis=0)
         alias_cmd = (np.sum([wi * a for wi, a in zip(w, alias)], axis=0) ** 2 if alias_correlation == 'full' else
                      np.sum([(wi * a) ** 2 for wi, a in zip(w, alias)], axis=0))
@@ -730,7 +740,8 @@ class ErrorBudgetMachine:
         wl_eff = float(np.sum(wbar * np.asarray(wls)))
         extra, bands = {}, None
         if chromatic is not None:
-            n_eff = float(np.sum(wbar * np.array([chromatic.n_minus_1(x) for x in wls])))
+            # a sensor may carry the photon-weighted n - 1 of its band ('n_minus_1', bandsplit.py) instead of that of its wavelength
+            n_eff = float(np.sum(wbar * np.array([s.get('n_minus_1') or chromatic.n_minus_1(x) for s, x in zip(sensors, wls)])))
             cm = _replace(chromatic, delta_n=n_eff - float(chromatic.n_minus_1(chromatic.science_nm)))
             k_cut = utils.fitting_cutoff(N, self.D)
             extra.update(cm.variances(r0, self.L0, k_cut, wl_eff, self._k_nyquist()))
@@ -770,12 +781,14 @@ class ErrorBudgetMachine:
         return self.combine_stages(run(lo, int(lo['N']), 'multistage'), run(ho, n_ho, 'standard'), lo, ho, seeing, chromatic)
 
     def budget_dual(self, lo, ho, seeing, latency_s=500e-6, controller='int', crosstalk=False, chromatic=None, alias_correlation='full',
-                    rec=('svd',), r_ho=None):
+                    rec=('svd',), r_ho=None, weight_shift=0.0):
         """Two sensors with their measurements FUSED: the first lo['N'] modes are controlled by one loop at the LO frame rate lo['fs'] fed by
         both sensors (per-mode inverse-variance weights, budget_fused; the LO sensor with its 'multistage' products, i.e. n_modes_ho modes
         corrected, the HO sensor with its own n_modes_ho-mode reconstructor at its frame rate ho['fs'], equal-noise-PSD approximation), the
         modes lo['N'] ... n_modes_ho - 1 by the HO sensor alone at ho['fs'] (standard). Frame rates are used as given. r_ho: the HO standard
-        budget if already computed. Returns the spliced BudgetResult (.stages = (fused LO-mode result, HO result), .weights of the LO modes)."""
+        budget if already computed. Returns the spliced BudgetResult (.stages = (fused LO-mode result, HO result), .weights of the LO modes).
+        Chromatic shear of the LO band: the effective refractivity of the fused beam (as budget_fused), not that of its mean wavelength.
+        weight_shift: see budget_fused (+d to the LO sensor, -d to the HO one, on the LO modes)."""
         n_ho, n_lo = self.n_modes_ho, int(lo['N'])
         kw = dict(latency_s=latency_s, controller=controller, crosstalk=crosstalk, rec=rec)
         if r_ho is None:
@@ -783,17 +796,23 @@ class ErrorBudgetMachine:
                                optimize_freq=False, optimize_modes=False, warn=False, **kw)
         sensors = [{**lo, 'N_rec': n_lo, 'N_corr': n_ho, 'fs': lo['fs']}, {**ho, 'N_rec': n_ho, 'N_corr': n_ho}]
         r_low = self._budget_fused_at(sensors, seeing, float(lo['fs']), n_lo, n_fold=3, ff_grid=None, chromatic=None,
-                                      alias_correlation=alias_correlation, **kw)
+                                      alias_correlation=alias_correlation, weight_shift=weight_shift, **kw)
         r_low.params['freqUsedInHz'] = float(lo['fs'])
-        res = self.combine_stages(r_low, r_ho, {**lo, 'wavelength_nm': r_low.params['wavelength_nm']}, ho, seeing, chromatic)
+        cm_lo = None
+        if chromatic is not None:
+            n_eff = sum(r_low.params[f'weight_{i}'] * chromatic.n_minus_1(s['wavelength_nm']) for i, s in enumerate(sensors))
+            cm_lo = _replace(chromatic, delta_n=float(n_eff - chromatic.n_minus_1(chromatic.science_nm)))
+        res = self.combine_stages(r_low, r_ho, {**lo, 'wavelength_nm': r_low.params['wavelength_nm']}, ho, seeing, chromatic,
+                                  chromatic_lo=cm_lo)
         res.params['scenario'] = 'dual'
         res.weights = r_low.weights
         return res
 
-    def combine_stages(self, r_lo, r_ho, lo, ho, seeing, chromatic=None):
+    def combine_stages(self, r_lo, r_ho, lo, ho, seeing, chromatic=None, chromatic_lo=None):
         """Splice of an LO result (scenario 'multistage', its N modes) and an HO result (standard, n_modes_ho modes): modes < N from
         the LO stage, the others and the fitting from the HO stage, chromatic shear by spatial-frequency band (budget_multistage, which
-        computes the two stage budgets; call this directly to reuse cached stage results). lo, ho: the sensor dicts (wavelength_nm, flux)."""
+        computes the two stage budgets; call this directly to reuse cached stage results). lo, ho: the sensor dicts (wavelength_nm, flux).
+        chromatic_lo: model of the LO band (default chromatic), e.g. with the delta_n of a fused beam."""
         n_ho = len(r_ho.lag)
         n = len(r_lo.lag)
         cat = lambda a, b: np.concatenate([a[:n], b[n:]])
@@ -802,7 +821,7 @@ class ErrorBudgetMachine:
         if chromatic is not None:
             r0 = float(utils.r0_from_seeing(seeing))
             k_lo, k_ho = utils.fitting_cutoff(n, self.D), utils.fitting_cutoff(n_ho, self.D)
-            bands = [(chromatic, 0.0, k_lo, float(lo['wavelength_nm'])), (chromatic, k_lo, k_ho, float(ho['wavelength_nm']))]
+            bands = [(chromatic_lo or chromatic, 0.0, k_lo, float(lo['wavelength_nm'])), (chromatic, k_lo, k_ho, float(ho['wavelength_nm']))]
             for cm, a, b, wl in bands:
                 hi = cm.variances(r0, self.L0, b, wl, self._k_nyquist())
                 low = cm.variances(r0, self.L0, a, wl, self._k_nyquist()) if a > 0 else {}

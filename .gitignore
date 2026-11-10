@@ -158,3 +158,9 @@ config/results/e2e_scan_modes.csv
 
 # cache of the multi-WFS sweeps of analyse_errorbudget.ipynb (aoeb.multiwfs)
 config/results/multiwfs_cache/
+
+# cache of chromatic_band_split.ipynb (aoeb.bandsplit)
+config/results/bandsplit_cache/
+
+# logs and schedulers of calibration runs
+config/aoeb/e2e/logs_*/

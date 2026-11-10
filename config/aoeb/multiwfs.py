@@ -8,6 +8,7 @@ chosen from budgets alone (milliseconds each); the exact contrast is computed on
 
 Cache: Study.sweep / Study.cached store their results in cache_dir under a hash of (name, band, every setting of the Study). A change of
 a setting recomputes; a change of the code does NOT: bump VERSION, or pass recompute=True."""
+import contextlib
 import dataclasses
 import hashlib
 import os
@@ -36,6 +37,7 @@ class Study:
         self.w_zone = k.K[:, ann].astype(float) @ k.count[ann] / k.count[ann].sum()
         self._stages = {}
         self.sci_nm, self.chromatic = None, None
+        self._wind0 = machine.wind
 
     # ---- band, photometry, sensors
     def set_band(self, sci_nm, chromatic):
@@ -107,6 +109,73 @@ class Study:
         f_lo = min(self.fs_grid, key=lambda f: float(np.sum(dual(f, None).residual[:lo['N']])))
         return var_ho, dual(f_lo, self._chrom(chromatic))
 
+    def dual_at(self, r, lo, ho, chromatic=True, weight_shift=0.0):
+        """The dual system of result r (best_dual / best_sampling: its frame rates and HO stage kept) with another chromatic model and / or
+        a weight shift (budget_fused). lo, ho: its sensor dicts (the LO one of the chosen sampling)."""
+        p = r.params
+        out = self.m.budget_dual({**lo, 'fs': p['freqUsedInHz_lo']}, {**ho, 'fs': p['freqUsedInHz']}, self.seeing,
+                                 latency_s=self.kw['latency_s'], controller=self.kw['controller'], chromatic=self._chrom(chromatic),
+                                 r_ho=r.stages[1], weight_shift=weight_shift)
+        out.params.update({k: p[k] for k in ('n_unmod', 'f_LO') if k in p}, weight_shift=float(weight_shift))
+        return out
+
+    def best_weight_shift(self, r, lo, ho, chromatic=True, bounds=(-4.0, 4.0), criterion='contrast'):
+        """dual_at with the weight shift minimising the zone contrast (criterion 'contrast') or the total residual ('total'), the
+        chromatic term INCLUDED: the fused LO modes are no longer the minimum-noise estimate but extrapolate the two bands towards the
+        science wavelength (params['weight_shift']: added to the LO sensor's weight, taken from the HO one)."""
+        from scipy.optimize import minimize_scalar
+        cost = {'contrast': lambda x: self.contrast(x), 'total': lambda x: x.variances()['total']}[criterion]
+        res = minimize_scalar(lambda d: cost(self.dual_at(r, lo, ho, chromatic, d)), bounds=bounds, method='bounded',
+                              options=dict(xatol=0.01))
+        return self.dual_at(r, lo, ho, chromatic, float(res.x))
+
+    @contextlib.contextmanager
+    def conditions(self, wind=None, ron=None):
+        """Temporarily another effective wind [m/s] (Conan temporal spectra and the aliasing layers scaled with it) and / or another
+        detector readout noise [e- rms]. Clears the stage and aliasing-spectrum memory caches (keyed on neither); the disk cache keys
+        hold both (the detector always, the wind when not the default)."""
+        m = self.m
+        if wind is not None and m.temporal is not None:
+            raise ValueError('conditions(wind=...) needs the Conan spectra of the effective wind (machine.temporal is set)')
+        old = m.wind, m.alias_layers, m.detector
+
+        def clear():
+            self._stages.clear()
+            m._alias.clear()
+        try:
+            if wind is not None:
+                m.wind = float(wind)
+                m.alias_layers = tuple((c, v * float(wind) / old[0]) for c, v in old[1])
+            if ron is not None:
+                m.detector = dataclasses.replace(m.detector, ron_e=float(ron))
+            clear()
+            yield self
+        finally:
+            m.wind, m.alias_layers, m.detector = old
+            clear()
+
+    @contextlib.contextmanager
+    def zenith(self, zenith_deg):
+        """Temporarily the chromatic model of the band at another zenith angle (the loop and its seeing along the line of sight unchanged)."""
+        cm = self.chromatic
+        self.chromatic = dataclasses.replace(cm, zenith_deg=float(zenith_deg))
+        try:
+            yield self
+        finally:
+            self.chromatic = cm
+
+    def scan(self, name, values, context, configs, mags):
+        """Configurations {label: make(mag900) -> BudgetResult} over `values` of a parameter (context(v): its context manager) and
+        magnitudes -> long DataFrame (x, mag, config, the row of each result). Each (value, magnitude) is cached under name (it must
+        describe the configurations) + the value."""
+        rows = []
+        for v in values:
+            with context(v):
+                for mg in mags:
+                    out = self.cached(f'{name} x{v:g} mag{mg:g}', lambda: {k: self.row(make(mg)) for k, make in configs.items()})
+                    rows += [dict(x=v, mag=mg, config=k, **row) for k, row in out.items()]
+        return pd.DataFrame(rows)
+
     def best_split(self, lo, ho, fracs, tol, chromatic=True):
         """lo(share), ho(share) -> sensor dicts. Share f of the light to the LO sensor minimising the contrast zone, with the HO-mode
         residual rms within (1 + tol) of the HO sensor with all the light (smallest share if never met); result.params['f_LO']."""
@@ -137,6 +206,8 @@ class Study:
     def _key(self, name, extra=()):
         settings = (VERSION, name, self.sci_nm, repr(self.chromatic), self.seeing, self.kw, self.m.max_sensitivity, tuple(self.fs_grid),
                     self.zone, self.colour, self.area, self.bandw, repr(self.m.detector), self.m.paths.root, tuple(extra))
+        if self.m.wind != self._wind0:                   # (only then: the keys of the default wind are unchanged)
+            settings += (('wind', float(self.m.wind)),)
         h = hashlib.md5(repr(settings).encode()).hexdigest()[:12]
         slug = ''.join(c if c.isalnum() else '_' for c in name)[:60]
         return op.join(self.cache_dir, f'{slug}_{h}.pkl')
@@ -155,7 +226,8 @@ class Study:
     def row(self, r):
         p = r.params
         return {**r.totals(), 'contrast': self.contrast(r), 'SR': r.strehl(self.sci_nm), 'fs': p['freqUsedInHz'],
-                'fs_lo': p.get('freqUsedInHz_lo', np.nan), 'f_LO': p.get('f_LO', np.nan), 'n_unmod': p.get('n_unmod', np.nan)}
+                'fs_lo': p.get('freqUsedInHz_lo', np.nan), 'f_LO': p.get('f_LO', np.nan), 'n_unmod': p.get('n_unmod', np.nan),
+                'weight_shift': p.get('weight_shift', np.nan)}
 
     def sweep(self, name, make, mags):
         """make(mag900) -> BudgetResult; one row per magnitude (totals in nm rms, contrast, science Strehl, frame rates, chosen split /
