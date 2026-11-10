@@ -8,8 +8,8 @@ START_TIME, or 550 nm SR below RUNAWAY_MEDIAN x the median of the other realizat
 magnitude, when it uses the same configuration: a brighter star cannot do worse). Only the replays of the configuration selected now count
 (replays of a configuration selected before stay in replays.csv). The equal-flux dual cases were not replayed: their points
 are the sweep values (one realization, the one the search was optimised on), without error bars, and so are their reference curves.
-Contrast: mean raw contrast in 2-5 lambda/D, relative to the integrated AO peak. Ratio panels: each curve over the best single-stage curve
-(lowest mean contrast / highest mean SR of the rMods at that magnitude).
+Contrast: mean raw contrast in 2-5 lambda/D, relative to the integrated AO peak. Ratio panels: each curve over the single stage with rMod 2
+(same WFS wavelength and chromatic setting).
 """
 import csv
 import os.path as op
@@ -33,7 +33,8 @@ RMODS = (0, 2)            # single-stage modulations shown (rMod 1 was swept and
 SPLITS = (10, 30, 50, 70, 90)        # % of the band on the unmodulated pyramid
 
 # Colors follow the entity; splits: ordinal blue ramp, light = little unmodulated flux
-COLOR = {'fusion': '#4477AA', 'swapped': '#EE6677', 'r0': '#228833', 'r1': '#CCBB44', 'r2': '#AA3377'}   # Paul Tol 'bright' (colour-blind safe)
+COLOR = {'fusion': '#2a78d6', 'swapped': '#eb6834', 'r0': '#1baf7a', 'r1': '#eda100', 'r2': '#e87ba4'}
+PROFILE_COLOR = {'single': 'C0', 'fusion': 'C1'}      # radial profiles: best single and best fusion
 MARKER = {'fusion': 'o', 'swapped': 's', 'r0': '^', 'r1': 'v', 'r2': 'D'}
 SPLIT_COLOR = dict(zip(SPLITS, ('#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281')))
 INK, MUTED, GRID = '#1a1a19', '#6b6a63', '#e4e3dd'
@@ -242,18 +243,6 @@ def ylim(quantity):
     return max(0.0, min(vals) - 0.02), min(1.0, max(vals) + 0.02)
 
 
-def _best_single(stats, cases, band, quantity, mags):
-    """Best single-stage value per magnitude (lowest contrast / highest SR among the rMods)."""
-    k = f'{quantity}_{band}' if quantity == 'contrast' else f'sr_{band}'
-    pick = min if quantity == 'contrast' else max
-    out = {}
-    for m in mags:
-        v = [stats[c][m][k] for c in cases if complete(stats[c], m, k)]
-        if v:
-            out[m] = pick(v)
-    return out
-
-
 def plot_main(quantity='contrast'):
     """Single (one curve per rMod), fusion and fusion swapped: replay mean +- std, achromatic (top) and chromatic (bottom), 550 / 1650 nm."""
     fl = floors() if quantity == 'contrast' else None
@@ -265,7 +254,8 @@ def plot_main(quantity='contrast'):
         ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
         k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
         singles = [c for e, _, c in curves if e.startswith('r')]
-        ref = _best_single(stats, singles, band, quantity, MAGS)
+        r2 = next(c for e, _, c in curves if e == 'r2')          # ratios: over the single stage with rMod 2
+        ref = {m: stats[r2][m][k] for m in MAGS if complete(stats[r2], m, k)}
         for e, label, case in curves:
             st = stats[case]
             dropped |= {f"{case} mag {m:g} ({st[m]['n_ok']}/{st[m]['n']})" for m in MAGS if m in st and st[m]['n_ok'] < st[m]['n']}
@@ -284,7 +274,7 @@ def plot_main(quantity='contrast'):
             _floor_lines(ax, chrom, band, fl)
         _style(ax, quantity == 'contrast')
         _style(rx, False)
-        _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"
+        _labels(ax, rx, quantity, chrom, band, 'single rMod 2', f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"
                 )
         ax.set_ylim(*lim)
         ax.legend(fontsize=8, loc='best', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
@@ -311,7 +301,8 @@ def plot_equal_flux(quantity='contrast'):
         ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
         k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
         stats = {c: _sweep_stats(c, band) for c in singles + [fusion]}
-        ref = _best_single(stats, singles, band, quantity, MAGS)
+        r2 = next(c for c in singles if c.endswith('_r2'))      # reference and ratios: the single stage with rMod 2
+        ref = {m: stats[r2][m][k] for m in MAGS if complete(stats[r2], m, k)}
         for u in SPLITS:
             sel = selected(f'{stem}_u{u}')
             mags = [m for m in MAGS if m in sel]
@@ -325,7 +316,7 @@ def plot_equal_flux(quantity='contrast'):
             _curve(rx, rm, [float(sel[m][k]) / ref[m] for m in rm], None, SPLIT_COLOR[u], 'o', None)
         rm = sorted(ref)
         if rm:
-            ax.plot(rm, [ref[m] for m in rm], color=MUTED, lw=2, ls='--', zorder=2, label=T(f'best single, WFS {w} nm'))
+            ax.plot(rm, [ref[m] for m in rm], color=MUTED, lw=2, ls='--', zorder=2, label=T(f'single, WFS {w} nm, rMod 2'))
         st = stats[fusion]
         fm = [m for m in MAGS if m in st and np.isfinite(st[m][k])]
         if fm and w == 900:
@@ -334,7 +325,7 @@ def plot_equal_flux(quantity='contrast'):
             _floor_lines(ax, chrom, band, fl)
         _style(ax, quantity == 'contrast', SWEPT_MAGS)
         _style(rx, False, SWEPT_MAGS)
-        _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, both pyramids at {w} nm, {WL[band]}")
+        _labels(ax, rx, quantity, chrom, band, 'single rMod 2', f"{'chromatic' if chrom else 'achromatic'}, both pyramids at {w} nm, {WL[band]}")
         ax.set_ylim(*lim)
         ax.legend(fontsize=8, loc='best', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
     _footnote(fig, quantity, missing, equal_flux=True)
@@ -392,9 +383,31 @@ def profile(case, mag, band):
     return rad, p, None, 'sweep run'
 
 
+def _best_case(cands, mag, band, notes):
+    """(label, case) with the lowest mean 2-5 lambda/D contrast at `mag` in `band`: replays where every one converged or, for a case with no
+    replays at that magnitude yet, its sweep run. Cases left out are added to notes."""
+    vals = []
+    for label, case in cands:
+        st = replays(case).get(mag)
+        if st is not None:
+            if st['n_ok'] < st['n']:
+                notes.add(f'{case} (replays ran away: not considered)')
+                continue
+            vals.append((st[f'contrast_{band}'], label, case))
+            continue
+        sel = selected(case).get(mag)
+        if sel is not None and sel.get('tn'):
+            notes.add(f'{case} (no replays yet: sweep run)')
+            vals.append((float(sel[f'contrast_{band}']), label, case))
+        else:
+            notes.add(f'{case} (no data)')
+    vals = [v for v in vals if np.isfinite(v[0])]
+    return min(vals)[1:] if vals else None
+
+
 def plot_profiles(mag=7.0, rmax=30.0):
-    """Radial raw-contrast profiles at one magnitude, achromatic (top) and chromatic (bottom), 550 / 1650 nm: single stage (rMod 0 and 2), fusion,
-    fusion swapped, mean over the converged replays (band: +- std), with the perfect-coronagraph bounds: fitting (achromatic) and fitting +
+    """Radial raw-contrast profiles at one magnitude, achromatic (top) and chromatic (bottom), 550 / 1650 nm: the best single stage (C0) and the
+    best fusion (C1, fusion or fusion swapped) at that magnitude and band (lowest mean 2-5 lambda/D contrast), replay mean (band: +- std), with the perfect-coronagraph bounds: fitting (achromatic) and fitting +
     chromatism (WFS at 900 nm, WFS at 1300 nm). Same y range in every panel; shaded: the 2-5 lambda/D of the metric."""
     refs = {c: load_perfect_coro(c) for c in ('achrom', 'vis', 'nir')}
     fig, axes = plt.subplots(2, 2, figsize=(13, 9.5), constrained_layout=True, sharex=True)
@@ -411,18 +424,19 @@ def plot_profiles(mag=7.0, rmax=30.0):
         for c, label, ls in bounds:
             ax.plot(rad[sel], refs[c][bi][sel], color=MUTED, lw=1.5, ls=ls, zorder=2, label=T(label))
             lo = min(lo, np.min(refs[c][bi][sel & (rad >= 1)]))
-        for e, label, case in curves:
-            pr = profile(case, mag, band)
-            if pr is None or pr == 'dropped':
-                notes.add(case + (' (replays ran away: not plotted)' if pr == 'dropped' else ''))
+        for group in ('single', 'fusion'):
+            best = _best_case([(lab, c) for e, lab, c in curves if (e.startswith('r') if group == 'single' else e in ('fusion', 'swapped'))],
+                              mag, band, notes)
+            if best is None:
                 continue
+            label, case = best
+            pr = profile(case, mag, band)
             r, m, sd, how = pr
             k = r <= rmax
-            ax.plot(r[k], m[k], color=COLOR[e], lw=2, zorder=4, label=T(label))
+            col = PROFILE_COLOR[group]
+            ax.plot(r[k], m[k], color=col, lw=2, zorder=4, label=T(f'best {label}'))
             if sd is not None:
-                ax.fill_between(r[k], np.maximum(m[k] - sd[k], 1e-12), m[k] + sd[k], color=COLOR[e], alpha=0.2, lw=0, zorder=3)
-            if how == 'sweep run':
-                notes.add(f'{case} (no replays yet)')
+                ax.fill_between(r[k], np.maximum(m[k] - sd[k], 1e-12), m[k] + sd[k], color=col, alpha=0.2, lw=0, zorder=3)
             hi = max(hi, np.max(m[k & (r >= 1)]))
             lo = min(lo, np.min(m[k & (r >= 1)]))
         _style(ax, True)
