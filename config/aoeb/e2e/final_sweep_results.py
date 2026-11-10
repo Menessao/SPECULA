@@ -31,8 +31,8 @@ RMODS = (0, 2)            # single-stage modulations shown (rMod 1 was swept and
 SPLITS = (10, 30, 50, 70, 90)        # % of the band on the unmodulated pyramid
 
 # Colors follow the entity (reference categorical palette, fixed order); splits: ordinal blue ramp, light = little unmodulated flux
-COLOR = {'fusion': '#2a78d6', 'swapped': '#eb6834', 'r0': '#1baf7a', 'r1': '#eda100', 'r2': '#e87ba4'}
-MARKER = {'fusion': 'o', 'swapped': 's', 'r0': '^', 'r1': 'v', 'r2': 'D'}
+COLOR = {'fusion': '#2a78d6', 'swapped': '#eb6834', 'r0': '#1baf7a', 'r1': '#eda100', 'r2': '#e87ba4', 'r0svd': '#008300'}
+MARKER = {'fusion': 'o', 'swapped': 's', 'r0': '^', 'r1': 'v', 'r2': 'D', 'r0svd': 'P'}
 SPLIT_COLOR = dict(zip(SPLITS, ('#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281')))
 INK, MUTED, GRID = '#1a1a19', '#6b6a63', '#e4e3dd'
 
@@ -132,6 +132,8 @@ def main_panels():
         for band in ('vis', 'nir'):
             w = 1300 if (band == 'nir' and chrom) else 900
             curves = [(f'r{r}', f'single, WFS {w} nm, rMod {r}', f'single_wfs{w}_{t}_r{r}') for r in RMODS]
+            # full ML runs away at bright magnitudes: rMod 0 with the SVD reconstructor and Kalman model, replays at mags 5-7 only
+            curves.append(('r0svd', f'single, WFS {w} nm, rMod 0, SVD rec + KF (mags 5-7)', f'single_wfs{w}_{t}_r0_svd'))
             curves.append(('fusion', 'fusion: unmod 900 nm + rMod 2 at 1300 nm', f'dual_unmod900_{t}'))
             if chrom:
                 curves.append(('swapped', 'fusion swapped: unmod 1300 nm + rMod 2 at 900 nm', 'dual_unmod1300_chrom'))
@@ -259,7 +261,7 @@ def plot_main(quantity='contrast'):
         for e, label, case in curves:
             st = stats[case]
             mags = [m for m in MAGS if m in st and np.isfinite(st[m][k])]
-            if len(mags) < len(MAGS):
+            if len(mags) < (3 if e == 'r0svd' else len(MAGS)):     # the SVD curve has mags 5-7 only
                 missing.add(case)
             if not mags:
                 continue
@@ -367,7 +369,7 @@ def profile(case, mag, band):
         p = np.array([q for _, q in profs])
         return rad, p.mean(axis=0), (p.std(axis=0, ddof=1) if len(p) > 1 else None), f"{st['n_ok']}/{st['n']} replays"
     sel = selected(case).get(mag)
-    if sel is None:
+    if sel is None or not sel.get('tn'):     # replay-only cases have no sweep run
         return None
     rad, p = load_coro_profile(op.join(OUT, case, 'runs', sel['tn']), band)
     return rad, p, None, 'sweep run'
