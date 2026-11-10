@@ -191,7 +191,7 @@ def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, s
     The image of a term alone is NOT its contribution to the total: inside the total its halo is attenuated by the Strehl of the other
     terms, so the total can lie below a single term where that term dominates. shade: (r1, r2) separations [lambda/D] drawn as a gray
     band (e.g. where the contrast is to be maximised)."""
-    fig, ax = _fig(ax, (7, 4.8))
+    fig, ax = _fig(ax, (8,5))
     if shade is not None:
         ax.axvspan(*shade, color='gray', alpha=0.15, lw=0)
     for n in {'psf': psf_result.psf, 'coro': psf_result.coro, 'halo': psf_result.halo}[kind]:
@@ -212,7 +212,8 @@ def plot_psf_terms(psf_result, kind='psf', terms=None, binsize=0.5, rmax=None, s
     ax.set_ylim(bottom=ymin,top=ymax)
     ax.set_xlim(right=ax.get_xlim()[1])
     what = {'coro': ', perfect coronagraph', 'psf': '', 'halo': ', first-order halo'}[kind]
-    return _finish(fig, ax, '[$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm{what})', title, logx, True, xlim, ylim)
+    return _finish(fig, ax, '[$\\lambda$/D]', f'Raw contrast ({psf_result.wavelength_nm:.0f}nm)', title, logx, True, xlim, ylim)
+                   #{what})', title, logx, True, xlim, ylim)
 
 
 def plot_psf_image(psf_result, name='total', half_fov=20.0, vmin=1e-7, title=None, ax=None, kind='psf', vmax=1.0):
