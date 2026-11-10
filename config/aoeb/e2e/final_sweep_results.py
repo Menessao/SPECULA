@@ -140,10 +140,10 @@ def main_panels():
         t = 'chrom' if chrom else 'achrom'
         for band in ('vis', 'nir'):
             w = 1300 if (band == 'nir' and chrom) else 900
-            curves = [(f'r{r}', f'single, WFS {w} nm, rMod {r}', f'single_wfs{w}_{t}_r{r}') for r in RMODS]
+            curves = [(f'r{r}', f'single: WFS {w} nm, rMod {r}', f'single_wfs{w}_{t}_r{r}') for r in RMODS]
             curves.append(('fusion', 'fusion: unmod 900 nm + rMod 2 at 1300 nm', f'dual_unmod900_{t}'))
             if chrom:
-                curves.append(('swapped', 'fusion swapped: unmod 1300 nm + rMod 2 at 900 nm', 'dual_unmod1300_chrom'))
+                curves.append(('swapped', 'fusion: unmod 1300 nm + rMod 2 at 900 nm', 'dual_unmod1300_chrom'))
             p[(chrom, band)] = curves
     return p
 
@@ -316,7 +316,7 @@ def plot_equal_flux(quantity='contrast'):
             _curve(rx, rm, [float(sel[m][k]) / ref[m] for m in rm], None, SPLIT_COLOR[u], 'o', None)
         rm = sorted(ref)
         if rm:
-            ax.plot(rm, [ref[m] for m in rm], color=MUTED, lw=2, ls='--', zorder=2, label=T(f'single, WFS {w} nm, rMod 2'))
+            ax.plot(rm, [ref[m] for m in rm], color=MUTED, lw=2, ls='--', zorder=2, label=T(f'single: WFS {w} nm, rMod 2'))
         st = stats[fusion]
         fm = [m for m in MAGS if m in st and np.isfinite(st[m][k])]
         if fm and w == 900:
@@ -405,6 +405,46 @@ def _best_case(cands, mag, band, notes):
     return min(vals)[1:] if vals else None
 
 
+def _values(case, mag):
+    """Mean contrast and SR (both bands) of a case at mag: its replays (every one converged) or, without replays, its sweep run."""
+    st = replays(case).get(mag)
+    if st is not None:
+        return {k: st[k] for k in ('contrast_vis', 'contrast_nir', 'sr_vis', 'sr_nir')}, f"{st['n']} replays"
+    sel = selected(case)[mag]
+    return {k: float(sel[k]) for k in ('contrast_vis', 'contrast_nir', 'sr_vis', 'sr_nir')}, 'sweep run'
+
+
+def best_pair_ratios(mag=7.0):
+    """Best single stage vs best fusion of every panel of plot_profiles (same selection): mean 2-5 lambda/D contrast and SR in the panel's band,
+    and the ratios single / fusion (contrast ratio > 1 and SR ratio < 1: the fusion is better)."""
+    rows = []
+    for (chrom, band), curves in main_panels().items():
+        notes = set()
+        pick = {g: _best_case([(lab, c) for e, lab, c in curves if (e.startswith('r') if g == 'single' else e in ('fusion', 'swapped'))], mag, band, notes)
+                for g in ('single', 'fusion')}
+        if None in pick.values():
+            continue
+        (vs, hs), (vf, hf) = _values(pick['single'][1], mag), _values(pick['fusion'][1], mag)
+        cs, cf, ss, sf = vs[f'contrast_{band}'], vf[f'contrast_{band}'], vs[f'sr_{band}'], vf[f'sr_{band}']
+        rows.append({'chromatic': chrom, 'band': WL[band], 'single': pick['single'][0], 'fusion': pick['fusion'][0],
+                     'contrast single': cs, 'contrast fusion': cf, 'contrast single/fusion': cs / cf,
+                     'SR single': ss, 'SR fusion': sf, 'SR single/fusion': ss / sf, 'data': f'{hs} / {hf}'})
+    return rows
+
+
+def best_pair_table(mag=7.0):
+    """best_pair_ratios as a formatted pandas DataFrame (contrasts in scientific notation)."""
+    import pandas as pd
+    df = pd.DataFrame(best_pair_ratios(mag))
+    for c in ('contrast single', 'contrast fusion'):
+        df[c] = df[c].map('{:.3e}'.format)
+    for c in ('SR single', 'SR fusion'):
+        df[c] = df[c].map('{:.4f}'.format)
+    for c in ('contrast single/fusion', 'SR single/fusion'):
+        df[c] = df[c].map('{:.3f}'.format)
+    return df
+
+
 def plot_profiles(mag=7.0, rmax=30.0):
     """Radial raw-contrast profiles at one magnitude, achromatic (top) and chromatic (bottom), 550 / 1650 nm: the best single stage (C0) and the
     best fusion (C1, fusion or fusion swapped) at that magnitude and band (lowest mean 2-5 lambda/D contrast), replay mean (band: +- std), with the perfect-coronagraph bounds: fitting (achromatic) and fitting +
@@ -434,7 +474,7 @@ def plot_profiles(mag=7.0, rmax=30.0):
             r, m, sd, how = pr
             k = r <= rmax
             col = PROFILE_COLOR[group]
-            ax.plot(r[k], m[k], color=col, lw=2, zorder=4, label=T(f'best {label}'))
+            ax.plot(r[k], m[k], color=col, lw=2, zorder=4, label=T(label))
             if sd is not None:
                 ax.fill_between(r[k], np.maximum(m[k] - sd[k], 1e-12), m[k] + sd[k], color=col, alpha=0.2, lw=0, zorder=3)
             hi = max(hi, np.max(m[k & (r >= 1)]))
