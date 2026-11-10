@@ -238,29 +238,31 @@ def _contrast_line(ax, x, y, ok, color, label=None):
     ax.plot(x, np.where(ok, y, np.nan), '-', color=color, label=label)
 
 
-def plot_comparison(curves, title, ref, sci_nm, terms=(('noise_photon', 'photon'), ('noise_ron', 'readout')), sr_min=0.25,
-                    zone=(2, 5)):
-    """Three figures of two panels against the magnitude, one colour per curve ({label: sweep DataFrame}): total residual | total
-    relative to curve `ref`; the two `terms`; contrast | contrast relative to `ref` (faded and dashed where the science Strehl < sr_min)."""
+def plot_comparison(curves, title, ref, sci_nm, terms=None, sr_min=0.25, zone=(2, 5)):
+    """Two figures of two panels against the magnitude, one colour per curve ({label: sweep DataFrame}): total residual | total relative
+    to curve `ref`; contrast | contrast relative to `ref` (faded and dashed where the science Strehl < sr_min). terms: optional pairs
+    (column, label) of two error terms, plotted in a third figure."""
     from matplotlib.lines import Line2D
-    figs = [plt.subplots(1, 2, figsize=(13, 4.2)) for _ in range(3)]
-    (f1, a1), (f2, a2), (f3, a3) = figs
+    figs = [plt.subplots(1, 2, figsize=(13, 4.2)) for _ in range(3 if terms else 2)]
+    (f1, a1), (f3, a3) = figs[0], figs[-1]
     for i, (name, df) in enumerate(curves.items()):
         c, ok = f'C{i}', df['SR'] >= sr_min
         a1[0].semilogy(df.index, df['total'], '-', color=c, label=name)
         a1[1].plot(df.index, df['total'] / curves[ref]['total'], '-', color=c, label=name)
-        for a, (t, _) in zip(a2, terms):
-            a.semilogy(df.index, df[t], '-', color=c, label=name)
+        if terms:
+            for a, (t, _) in zip(figs[1][1], terms):
+                a.semilogy(df.index, df[t], '-', color=c, label=name)
         _contrast_line(a3[0], df.index, df['contrast'], ok, c, label=name)
         _contrast_line(a3[1], df.index, df['contrast'] / curves[ref]['contrast'], ok & (curves[ref]['SR'] >= sr_min), c, label=name)
     a3[0].set_yscale('log')
-    labels = ('total residual [nm rms]', f'total / {ref}', *(f'{lab} [nm rms]' for _, lab in terms),
-              f'raw contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D ({sci_nm:.0f} nm)', f'contrast / {ref}')
-    for a, yl in zip([*a1, *a2, *a3], labels):
+    labels = ['total residual [nm rms]', f'total / {ref}', *(f'{lab} [nm rms]' for _, lab in (terms or ())),
+              f'raw contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D ({sci_nm:.0f} nm)', f'contrast / {ref}']
+    for a, yl in zip([ax for _, axs in figs for ax in axs], labels):
         a.set_xlabel('magnitude at 900 nm'); a.set_ylabel(yl); a.grid(alpha=0.3, which='both')
     for a in (a1[1], a3[1]):
         a.axhline(1.0, color='gray', lw=0.8)
-    for f, a, sub in ((f1, a1, 'total residual'), (f2, a2, ', '.join(lab for _, lab in terms)), (f3, a3, 'contrast')):
+    subs = ['total residual', *([', '.join(lab for _, lab in terms)] if terms else []), 'contrast']
+    for (f, a), sub in zip(figs, subs):
         a[0].legend(fontsize=8)
         f.suptitle(f'{title}: {sub}'); f.tight_layout(w_pad=3)
     a3[1].legend([Line2D([], [], color='k', ls='--', alpha=0.4)], [f'science Strehl $<$ {sr_min:g}'], fontsize=8)
@@ -268,20 +270,21 @@ def plot_comparison(curves, title, ref, sci_nm, terms=(('noise_photon', 'photon'
 
 
 def plot_noise_frame_rate(panels, ticks=(125, 250, 500, 1000, 2000)):
-    """Photon, readout and total residual against the magnitude, with the frame rate on the right axis; panels: {title: DataFrame with
-    noise_photon, noise_ron, total, fs (index: magnitude)}, two per row."""
+    """Photon, readout, lag and total residual against the magnitude, with the frame rate on the right axis; panels: {title: DataFrame
+    with noise_photon, noise_ron, lag, total, fs (index: magnitude)}, two per row."""
     n = len(panels)
     fig, ax = plt.subplots((n + 1) // 2, min(n, 2), figsize=(13, 4.2 * ((n + 1) // 2)), squeeze=False)
     for a, (title, df) in zip(ax.flat, panels.items()):
         a.semilogy(df.index, df['noise_photon'], '-', label='photon')
         a.semilogy(df.index, df['noise_ron'], '-', label='readout')
+        a.semilogy(df.index, df['lag'], '-', color='C2', label='lag')
         a.semilogy(df.index, df['total'], 'k-', label='total')
         tw = a.twinx()
         tw.semilogy(df.index, df['fs'], '-.', color='C3', label='optimal frame rate (right axis)')
         tw.set_yticks(list(ticks), [f'{t:g}' for t in ticks]); tw.minorticks_off(); tw.set_ylim(0.8 * min(ticks), 1.25 * max(ticks))
         tw.set_ylabel('optimal frame rate [Hz]', color='C3'); tw.tick_params(axis='y', colors='C3')
         a.set_xlabel('magnitude at 900 nm'); a.set_ylabel('residual [nm rms]'); a.grid(alpha=0.3); a.set_title(title)
-    fig.legend(*[sum(x, []) for x in zip(a.get_legend_handles_labels(), tw.get_legend_handles_labels())], loc='lower center', ncol=4,
+    fig.legend(*[sum(x, []) for x in zip(a.get_legend_handles_labels(), tw.get_legend_handles_labels())], loc='lower center', ncol=5,
                fontsize=8)
     fig.tight_layout(w_pad=3, rect=(0, 0.07 / ((n + 1) // 2), 1, 1))
     return fig
@@ -336,25 +339,29 @@ def plot_chromatic_limit(band, mags, ao_contrast, ao_label, chrom_now, zenith_no
 
 
 # ---- sensor fusion highlights (analyse_errorbudget.ipynb, presentation figures)
-def fusion_gain(ref, fused, sr_min=0.25):
+def fusion_gain(ref, fused, sr_min=0.25, col='contrast'):
     """Two sweeps (index: magnitude at 900 nm; columns contrast, SR) -> DataFrame per magnitude of `ref`: 'ratio' = fused / ref contrast
     and 'dmag' = magnitudes gained at equal contrast (the fused system reaches the contrast of ref at magnitude m at m + dmag; log-linear
-    interpolation within the fused sweep, NaN outside), 'ok' = both science Strehls >= sr_min."""
+    interpolation within the fused sweep, NaN outside), 'ok' = both science Strehls >= sr_min. col='SR': the same for the science Strehl
+    (ratio = fused / ref SR, dmag = magnitudes gained at equal Strehl)."""
     import pandas as pd
-    f = fused.dropna(subset=['contrast'])
-    cf = np.maximum.accumulate(np.log(f['contrast'].to_numpy(float)))         # contrast grows with the magnitude: enforce monotonicity
-    cr = np.log(ref['contrast'].to_numpy(float))
+    sg = -1.0 if col == 'SR' else 1.0                                          # the Strehl falls with the magnitude: flip the sign
+    f = fused.dropna(subset=[col])
+    cf = np.maximum.accumulate(sg * np.log(f[col].to_numpy(float)))           # the metric grows with the magnitude: enforce monotonicity
+    cr = sg * np.log(ref[col].to_numpy(float))
     m = ref.index.to_numpy(float)
     dmag = np.interp(cr, cf, f.index.to_numpy(float), left=np.nan, right=np.nan) - m
-    ratio = fused['contrast'].reindex(ref.index).to_numpy(float) / ref['contrast'].to_numpy(float)
+    ratio = fused[col].reindex(ref.index).to_numpy(float) / ref[col].to_numpy(float)
     ok = (ref['SR'] >= sr_min).to_numpy() & (fused['SR'].reindex(ref.index) >= sr_min).to_numpy()
     return pd.DataFrame({'ratio': ratio, 'dmag': dmag, 'ok': ok}, index=ref.index)
 
 
-def plot_fusion_gains(gains, zone=(2, 5), sr_min=0.25, bands=('VIS', 'NIR')):
+def plot_fusion_gains(gains, zone=(2, 5), sr_min=0.25, bands=('VIS', 'NIR'), mags=None, gate=True, sr_gains=None, ylim=None):
     """Headline figure: for every advantage (one colour) and variant (solid: main, dashed: alternative) the contrast of the fused system
     relative to its single-sensor reference (top) and the magnitudes gained at equal contrast (bottom), one column per band.
-    gains: {(advantage, variant, main): {band: fusion_gain DataFrame}}; faded where a science Strehl < sr_min."""
+    gains: {(advantage, variant, main): {band: fusion_gain DataFrame}}; faded where a science Strehl < sr_min (gate=True). mags: (lo, hi)
+    magnitude range shown; sr_gains: same structure from fusion_gain(..., col='SR'), its ratio replaces the magnitudes gained (bottom);
+    ylim: ((lo, hi) top, (lo, hi) bottom) shared by both bands."""
     from matplotlib.lines import Line2D
     fig, axs = plt.subplots(2, len(bands), figsize=(6.8 * len(bands), 8), sharex=True, squeeze=False)
     colours = {a: f'C{i}' for i, a in enumerate(dict.fromkeys(a for a, _, _ in gains))}
@@ -362,26 +369,32 @@ def plot_fusion_gains(gains, zone=(2, 5), sr_min=0.25, bands=('VIS', 'NIR')):
         for j, band in enumerate(bands):
             if band not in per_band:
                 continue
-            g = per_band[band]
-            for ax, col in zip(axs[:, j], ('ratio', 'dmag')):
+            for ax, (src, col) in zip(axs[:, j], ((gains, 'ratio'), (sr_gains or gains, 'ratio' if sr_gains else 'dmag'))):
+                g = src[(adv, var, main)][band]
+                if mags:
+                    g = g[(g.index >= mags[0]) & (g.index <= mags[1])]
+                g = g if gate else g.assign(ok=True)
                 y = g[col].where(g['ok'])
                 ax.plot(g.index, y, '-' if main else '--', color=colours[adv], lw=2 if main else 1.2, marker='o', ms=3,
                         label=f'{adv}: {var}')
                 ax.plot(g.index, g[col].where(~g['ok']), ':', color=colours[adv], lw=1, alpha=0.5)
     for j, band in enumerate(bands):
         axs[0, j].axhline(1.0, color='gray', lw=0.8)
-        axs[1, j].axhline(0.0, color='gray', lw=0.8)
+        axs[1, j].axhline(1.0 if sr_gains else 0.0, color='gray', lw=0.8)
         axs[0, j].set_title(band)
+        if ylim:
+            axs[0, j].set_ylim(ylim[0]); axs[1, j].set_ylim(ylim[1])
         axs[0, j].set_ylabel(f'contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D: fused / single')
-        axs[1, j].set_ylabel('magnitudes gained at equal contrast')
-        axs[1, j].set_xlabel('magnitude at 900 nm')
+        axs[1, j].set_ylabel('science Strehl: fused / single' if sr_gains else 'magnitudes gained at equal contrast')
+        axs[1, j].set_xlabel('magnitude' if mags else 'magnitude at 900 nm')
         for ax in axs[:, j]:
             ax.grid(alpha=0.3, which='both')
     h, l = axs[0, 0].get_legend_handles_labels()
-    h += [Line2D([], [], color='gray', ls=':')]
-    l += [f'science Strehl $<$ {sr_min:g}']
+    if gate:
+        h += [Line2D([], [], color='gray', ls=':')]
+        l += [f'science Strehl $<$ {sr_min:g}']
     fig.legend(h, l, loc='lower center', ncol=3, fontsize=8, frameon=False)
-    fig.suptitle('Sensor fusion against a single WFS: contrast gain per advantage')
+    fig.suptitle('Sensor fusion against a single WFS: contrast and Strehl gain per advantage')
     fig.tight_layout(rect=(0, 0.1, 1, 1))
     return fig
 
@@ -463,43 +476,48 @@ def plot_fusion_case(res, title, zone=(2, 5), ymin=1e-7, rmax=26):
     return fig
 
 
-def plot_scan(df, pairs, xlabel, title, sr_min=0.25, zone=(2, 5), logx=False, xref=None, secondary=None):
+def plot_scan(df, pairs, xlabel, title, sr_min=0.25, zone=(2, 5), logx=False, xref=None, secondary=None, ratio_only=False):
     """Fused against single-sensor configurations over a parameter (Study.scan DataFrame): one column per pair {label: (reference, fused)};
-    top: raw contrast in the zone of the reference (dashed) and of the fused system (solid), bottom: fused / reference; one colour per
-    magnitude, faded where a science Strehl < sr_min. xref: the nominal value (dotted line); secondary: (label, f, f_inverse) of a
-    second x axis on top."""
+    top: raw contrast in the zone of the reference (dashed) and of the fused system (solid), bottom: fused / reference (ratio_only: the
+    bottom row alone); one colour per magnitude, faded where a science Strehl < sr_min. xref: the nominal value (dotted line);
+    secondary: (label, f, f_inverse) of a second x axis on top."""
     from matplotlib.lines import Line2D
     mags = sorted(df['mag'].unique())
-    fig, axs = plt.subplots(2, len(pairs), figsize=(5.4 * len(pairs), 7.5), sharex=True, squeeze=False)
+    nrow = 1 if ratio_only else 2
+    fig, axs = plt.subplots(nrow, len(pairs), figsize=(5.4 * len(pairs), 3.9 * nrow), sharex=True, squeeze=False)
     for j, (lab, (ref, fu)) in enumerate(pairs.items()):
-        top, bot = axs[:, j]
+        top, bot = (None, axs[0, j]) if ratio_only else axs[:, j]
         for i, mg in enumerate(mags):
             d = df[df['mag'] == mg]
             a, b = (d[d['config'] == k].set_index('x').sort_index() for k in (ref, fu))
             c = f'C{i}'
-            for frame, ls in ((a, '--'), (b, '-')):
-                ok = frame['SR'] >= sr_min
-                top.plot(frame.index, frame['contrast'], ls, color=c, lw=1, alpha=0.25)
-                top.plot(frame.index, frame['contrast'].where(ok), ls, color=c, lw=1.8, marker='o', ms=3)
+            if top is not None:
+                for frame, ls in ((a, '--'), (b, '-')):
+                    ok = frame['SR'] >= sr_min
+                    top.plot(frame.index, frame['contrast'], ls, color=c, lw=1, alpha=0.25)
+                    top.plot(frame.index, frame['contrast'].where(ok), ls, color=c, lw=1.8, marker='o', ms=3)
             ratio, ok = b['contrast'] / a['contrast'], (a['SR'] >= sr_min) & (b['SR'] >= sr_min)
             bot.plot(ratio.index, ratio, '-', color=c, lw=1, alpha=0.25)
             bot.plot(ratio.index, ratio.where(ok), '-', color=c, lw=1.8, marker='o', ms=3, label=f'mag {mg:g}')
-        top.set_yscale('log')
-        top.set(title=f'{lab}\n{fu} vs {ref}', ylabel=f'raw contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D')
-        bot.set(xlabel=xlabel, ylabel='fused / single')
+        head = top if top is not None else bot
+        head.set_title(f'{lab}\n{fu} vs {ref}', fontsize=9)
+        if top is not None:
+            top.set_yscale('log')
+            top.set_ylabel(f'raw contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D')
+        bot.set(xlabel=xlabel, ylabel=f'contrast {zone[0]:g}-{zone[1]:g} $\\lambda$/D: fused / single')
         bot.axhline(1.0, color='gray', lw=0.8)
-        top.title.set_fontsize(9)
-        for ax in (top, bot):
+        for ax in axs[:, j]:
             if logx:
                 ax.set_xscale('log')
             if xref is not None:
                 ax.axvline(xref, color='gray', ls=':', lw=1)
             ax.grid(alpha=0.3, which='both')
         if secondary is not None:
-            sec = top.secondary_xaxis('top', functions=secondary[1:])
+            sec = head.secondary_xaxis('top', functions=secondary[1:])
             sec.set_xlabel(secondary[0])
-    axs[1, 0].legend(fontsize=8)
-    axs[0, 0].legend([Line2D([], [], color='k', ls='--'), Line2D([], [], color='k')], ['single WFS', 'fused'], fontsize=8)
+    axs[-1, 0].legend(fontsize=8)
+    if not ratio_only:
+        axs[0, 0].legend([Line2D([], [], color='k', ls='--'), Line2D([], [], color='k')], ['single WFS', 'fused'], fontsize=8)
     fig.suptitle(title)
     fig.tight_layout()
     return fig

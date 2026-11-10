@@ -286,15 +286,56 @@ def to_iir_filter(b, a, delay, og=1.0):
     return num[::-1].copy(), den[::-1].copy()                 # z^-i -> z^(L-i): reverse the coefficients
 
 
-class WienerTables:
+_WORKER = None            # _Designer of the running parallel design (one per worker process)
+
+
+def _init_worker(designer):
+    global _WORKER
+    _WORKER = designer
+
+
+def _fit_task(key):
+    return _WORKER._fit(*key, init=_WORKER._near(*key))
+
+
+class _Designer:
+    """The design proper of the per-mode Wiener filters (picklable: sent to the worker processes of WienerTables._design_all)."""
+
+    def __init__(self, fs, latency, wind, D, alias, order, M, design_fold, done):
+        self.fs, self.latency, self.wind, self.D, self.alias = fs, latency, wind, D, alias
+        self.order, self.M, self.design_fold, self.done = order, M, design_fold, done
+
+    def _spec(self, n, qn, qa):
+        from . import filter_optimizers as fo
+        nu, al = 0.0 if qn is None else 10 ** qn, 0.0 if qa is None else 10 ** qa
+        return ModeSpectra(lambda f: fo.unit_psd(f, n, self.wind, self.D), self.fs, self.latency,
+                           S_alias=None if al == 0 else (lambda f: al * self.alias.unit_psd(f)),
+                           noise=nu, M=self.M, n_fold=self.design_fold)
+
+    def _near(self, n, qn, qa):
+        """Warm start: the solution of the designed problem of the same radial order nearest in (qn, qa), None if none yet."""
+        d = min(self.done.get(int(n), []), default=None,
+                key=lambda d: abs((d[0] or -9) - (qn or -9)) + abs((d[1] or -9) - (qa or -9)))
+        return None if d is None else d[2]
+
+    def _fit(self, n, qn, qa, init):
+        """(b, a, solutions per order) of the Wiener filter of the problem."""
+        b, a, info = wiener_iir(self._spec(n, qn, qa), self.order, init=init)     # continuation: ~3-6x faster
+        return b, a, info['v']
+
+
+class WienerTables(_Designer):
     """Per-mode Wiener POL filters (order `order`) for the error budget, with the interface of filter_optimizers.LoopTables.optimize.
     A mode's design depends on its radial order and on its noise / turbulence and aliasing / turbulence ratios (both in modal units at
     the WFS: divided by og^2); designs are cached on those ratios rounded to `ratio_step` dex. The residual is evaluated with aoeb's
     continuous-time integrals for the command response K = F (exact POL)."""
 
     def __init__(self, fs, latency, wind, D, orders, alias, order=2, n_fold=3, M=2 ** 12, design_fold=10, ratio_step=0.05,
-                 max_sensitivity=None):
+                 max_sensitivity=None, n_jobs=None):
+        """n_jobs: worker processes of the per-mode designs (default: AOEB_WIENER_JOBS, else half the cores up to 32)."""
+        import os
         from . import filter_optimizers as fo
+        self.n_jobs = int(n_jobs if n_jobs is not None else os.environ.get('AOEB_WIENER_JOBS', min(32, max(1, (os.cpu_count() or 2) // 2))))
         self.fo, self.fs, self.latency, self.wind, self.D = fo, float(fs), float(latency), wind, float(D)      # wind: speed or temporal model
         self.order, self.alias, self.M, self.design_fold, self.step = int(order), alias, M, design_fold, ratio_step
         self.max_sensitivity = max_sensitivity
@@ -307,27 +348,57 @@ class WienerTables:
     def _q(self, r):
         return None if r <= 0 else round(np.log10(r) / self.step) * self.step
 
+    def _store(self, key, b, a, v):
+        """Closed-loop tables of a designed filter (b, a) into the cache; v: its solutions, kept as a warm start of its radial order."""
+        n = key[0]
+        self.done.setdefault(int(n), []).append((key[1], key[2], v))
+        F = np.polyval(b[::-1], self.z) / np.polyval(a[::-1], self.z)
+        t_t, t_c, k2 = self.fo._closed_loop_tables(F[None, :], self.g)
+        o = int(np.searchsorted(self.uo, n))
+        peak = float(np.max(np.abs(1.0 - F * self.P)))         # modulus margin of the equivalent error-based loop
+        if self.max_sensitivity is not None and peak > self.max_sensitivity and not self.warned:
+            self.warned = True
+            import warnings
+            warnings.warn(f'Wiener filter of radial order {n}: peak rejection {peak:.2f} above the modulus margin {self.max_sensitivity}')
+        self.cache[key] = (b, a, t_t[o, 0], t_c[o, 0], (2.0 / self.fs) * float(k2[0] @ self.g['w_edge']), float(k2[0] @ self.g['s_alias']))
+
     def _design(self, n, qn, qa):
         key = (int(n), qn, qa)
         if key not in self.cache:
-            fo, nu, al = self.fo, 0.0 if qn is None else 10 ** qn, 0.0 if qa is None else 10 ** qa
-            spec = ModeSpectra(lambda f: fo.unit_psd(f, n, self.wind, self.D), self.fs, self.latency,
-                               S_alias=None if al == 0 else (lambda f: al * self.alias.unit_psd(f)),
-                               noise=nu, M=self.M, n_fold=self.design_fold)
-            near = min(self.done.get(int(n), []), default=None,
-                       key=lambda d: abs((d[0] or -9) - (qn or -9)) + abs((d[1] or -9) - (qa or -9)))
-            b, a, info = wiener_iir(spec, self.order, init=None if near is None else near[2])     # continuation: ~3-6x faster
-            self.done.setdefault(int(n), []).append((qn, qa, info['v']))
-            F = np.polyval(b[::-1], self.z) / np.polyval(a[::-1], self.z)
-            t_t, t_c, k2 = fo._closed_loop_tables(F[None, :], self.g)
-            o = int(np.searchsorted(self.uo, n))
-            peak = float(np.max(np.abs(1.0 - F * self.P)))         # modulus margin of the equivalent error-based loop
-            if self.max_sensitivity is not None and peak > self.max_sensitivity and not self.warned:
-                self.warned = True
-                import warnings
-                warnings.warn(f'Wiener filter of radial order {n}: peak rejection {peak:.2f} above the modulus margin {self.max_sensitivity}')
-            self.cache[key] = (b, a, t_t[o, 0], t_c[o, 0], (2.0 / self.fs) * float(k2[0] @ self.g['w_edge']), float(k2[0] @ self.g['s_alias']))
+            self._store(key, *self._fit(n, qn, qa, self._near(n, qn, qa)))
         return self.cache[key]
+
+    def _design_all(self, keys):
+        """Designs of every key not in the cache, in parallel over the modes (n_jobs worker processes, two rounds: one cold design per
+        radial order, then the others warm-started from it); sequential when few."""
+        todo = [k for k in dict.fromkeys(keys) if k not in self.cache]
+        if self.n_jobs <= 1 or len(todo) < 2 * self.n_jobs:
+            for k in todo:
+                self._design(*k)
+            return
+        import concurrent.futures as cf
+        import multiprocessing as mp
+        import os
+        threads = {k: os.environ.get(k) for k in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS')}
+        for _round in range(2):
+            batch, seen = [], set()
+            for k in todo:
+                if k in self.cache or (k[0] in self.done and _round == 0) or (_round == 0 and k[0] in seen):
+                    continue
+                seen.add(k[0])
+                batch.append(k)
+            if not batch:
+                continue
+            designer = _Designer(self.fs, self.latency, self.wind, self.D, self.alias, self.order, self.M, self.design_fold, self.done)
+            os.environ.update({k: '1' for k in threads})          # the workers (spawned: fresh interpreters) run single-threaded BLAS
+            try:
+                with cf.ProcessPoolExecutor(min(self.n_jobs, len(batch)), mp_context=mp.get_context('spawn'),
+                                            initializer=_init_worker, initargs=(designer,)) as ex:
+                    for k, out in zip(batch, ex.map(_fit_task, batch, chunksize=1)):
+                        self._store(k, *out)
+            finally:
+                for k, v in threads.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
     def optimize(self, turb_var, noise_var, alias_var, og, order, xtalk_var=None, eta=None):
         fo = self.fo
@@ -342,9 +413,11 @@ class WienerTables:
         out = {k: np.zeros(R) for k in ('turb', 'noise', 'alias', 'xtalk', 'cross')}
         turb0 = turb * self.g['T0'][np.searchsorted(self.uo, order)]
         filters = []
+        keys = [(int(order[i]), self._q((noise[i] + xtalk[i]) / og[i] ** 2 / max(turb[i], 1e-300)), self._q(alias[i] / og[i] ** 2 / max(turb[i], 1e-300)))
+                for i in range(R)]
+        self._design_all(keys)
         for i in range(R):
-            v = max(turb[i], 1e-300)
-            b, a, tt, tc, nw, aw = self._design(order[i], self._q((noise[i] + xtalk[i]) / og[i] ** 2 / v), self._q(alias[i] / og[i] ** 2 / v))
+            b, a, tt, tc, nw, aw = self._design(*keys[i])
             out['turb'][i], out['cross'][i] = turb[i] * tt, turb[i] * tc
             out['noise'][i], out['xtalk'][i], out['alias'][i] = noise[i] * nw / og[i] ** 2, xtalk[i] * nw / og[i] ** 2, alias[i] * aw / og[i] ** 2
             filters.append((b, a))

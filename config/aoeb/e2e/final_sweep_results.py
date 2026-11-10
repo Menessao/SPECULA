@@ -495,3 +495,74 @@ def plot_profiles(mag=7.0, rmax=30.0):
         note += '; incomplete: ' + ', '.join(sorted(notes))
     fig.text(0.01, -0.01, T(_wrap(note)), fontsize=8, color=MUTED, ha='left', va='top')
     return fig
+
+
+# ----------------------------------------------------------------------------- best single vs best fusion
+def _best_replayed(curves, group, mag, band):
+    """(entity, label, case) of the single stage (group 'single': the rMod curves) or fusion ('fusion': fusion and swapped) with the lowest
+    replay-mean 2-5 lambda/D contrast at `mag` in `band`, among the cases where every replay converged; None when there is none."""
+    vals = []
+    for e, label, case in curves:
+        if (e.startswith('r')) != (group == 'single'):
+            continue
+        st = replays(case)
+        if complete(st, mag, f'contrast_{band}'):
+            vals.append((st[mag][f'contrast_{band}'], e, label, case))
+    return min(vals)[1:] if vals else None
+
+
+def plot_best(quantity='contrast'):
+    """Best single stage vs best fusion: at each magnitude, panel (achromatic / chromatic, 550 / 1650 nm) and band, the single stage (rMod 0 or 2)
+    and the fusion (fusion or fusion swapped) with the lowest replay-mean 2-5 lambda/D contrast; the winner is selected on the contrast for the
+    SR figure too, so both figures show the same runs. Replay mean +- std; the marker is that of the winning case (MARKER), so a switch along the
+    curve is visible. Ratio rows: best fusion / best single (contrast < 1 and SR > 1: the fusion is better)."""
+    fl = floors() if quantity == 'contrast' else None
+    panels = main_panels()
+    fig, gs = _figure(f"{'Contrast' if quantity == 'contrast' else 'Strehl ratio'}: best single stage vs best fusion (replay mean ± std)")
+    lim = ylim(quantity)
+    entity_label = {'r0': 'single, rMod 0', 'r2': 'single, rMod 2', 'fusion': 'fusion: unmod 900 nm + rMod 2 1300 nm',
+                    'swapped': 'fusion swapped: unmod 1300 nm + rMod 2 900 nm'}
+    for (chrom, band), curves in panels.items():
+        ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
+        k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
+        picks = {g: {m: _best_replayed(curves, g, m, band) for m in MAGS} for g in ('single', 'fusion')}
+        picks = {g: {m: p for m, p in d.items() if p is not None} for g, d in picks.items()}
+        used = []
+        for g, col in PROFILE_COLOR.items():
+            mags = sorted(picks[g])
+            if not mags:
+                continue
+            st = {m: replays(picks[g][m][2])[m] for m in mags}
+            y = np.array([st[m][k] for m in mags])
+            err = [st[m][k + '_std'] if np.isfinite(st[m][k + '_std']) else 0.0 for m in mags]
+            ax.errorbar(mags, y, yerr=err, fmt='none', ecolor=col, elinewidth=1.4, capsize=3, zorder=3)
+            ax.plot(mags, y, color=col, lw=2, zorder=4, label=T(f'best {g}'))
+            for m, yi in zip(mags, y):
+                e = picks[g][m][0]
+                hollow = quantity == 'contrast' and st[m][f'sr_{band}'] < SR_MASK
+                ax.plot([m], [yi], ls='none', marker=MARKER[e], ms=8, mfc='white' if hollow else col, mec=col if hollow else 'white',
+                        mew=1.6 if hollow else 1.5, zorder=5)
+                if e not in used:
+                    used.append(e)
+        both = sorted(set(picks['single']) & set(picks['fusion']))
+        if both:
+            ratio = [replays(picks['fusion'][m][2])[m][k] / replays(picks['single'][m][2])[m][k] for m in both]
+            _curve(rx, both, ratio, None, PROFILE_COLOR['fusion'], 'o', None)
+        if fl:
+            _floor_lines(ax, chrom, band, fl)
+        _style(ax, quantity == 'contrast')
+        _style(rx, False)
+        _labels(ax, rx, quantity, chrom, band, 'best single', f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}")
+        ax.set_ylim(*lim)
+        handles, labels = ax.get_legend_handles_labels()
+        for e in used:          # marker key: which case won at each point
+            handles.append(plt.Line2D([], [], ls='none', marker=MARKER[e], ms=8, mfc=MUTED, mec='white', mew=1.5))
+            labels.append(T(entity_label[e]))
+        ax.legend(handles, labels, fontsize=8, loc='best', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+    notes = ['at each magnitude the single stage (rMod 0 / 2) and the fusion (fusion / swapped) with the lowest replay-mean 2-5 λ/D contrast '
+             'in the panel band, among the cases where every replay converged; the marker shows the winning case (also for the SR: same runs)',
+             'ratio: best fusion / best single']
+    if quantity == 'contrast':
+        notes.append(f'hollow markers: science SR < {SR_MASK}')
+    fig.text(0.01, -0.01, T(_wrap('; '.join(notes))), fontsize=8, color=MUTED, ha='left', va='top')
+    return fig
