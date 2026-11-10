@@ -141,9 +141,9 @@ def main_panels():
         for band in ('vis', 'nir'):
             w = 1300 if (band == 'nir' and chrom) else 900
             curves = [(f'r{r}', f'single: WFS {w} nm, rMod {r}', f'single_wfs{w}_{t}_r{r}') for r in RMODS]
-            curves.append(('fusion', 'fusion: unmod 900 nm + rMod 2 at 1300 nm', f'dual_unmod900_{t}'))
+            curves.append(('fusion', 'fusion: unmod 900 nm + rMod 2 1300 nm', f'dual_unmod900_{t}'))
             if chrom:
-                curves.append(('swapped', 'fusion: unmod 1300 nm + rMod 2 at 900 nm', 'dual_unmod1300_chrom'))
+                curves.append(('swapped', 'fusion: unmod 1300 nm + rMod 2 900 nm', 'dual_unmod1300_chrom'))
             p[(chrom, band)] = curves
     return p
 
@@ -320,7 +320,7 @@ def plot_equal_flux(quantity='contrast'):
         st = stats[fusion]
         fm = [m for m in MAGS if m in st and np.isfinite(st[m][k])]
         if fm and w == 900:
-            ax.plot(fm, [st[m][k] for m in fm], color=INK, lw=1.5, ls='-.', zorder=2, label=T('fusion: unmod 900 + rMod 2 at 1300 nm'))
+            ax.plot(fm, [st[m][k] for m in fm], color=INK, lw=1.5, ls='-.', zorder=2, label=T('fusion: unmod 900 nm + rMod 2 1300 nm'))
         if fl:
             _floor_lines(ax, chrom, band, fl)
         _style(ax, quantity == 'contrast', SWEPT_MAGS)
