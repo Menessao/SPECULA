@@ -455,7 +455,7 @@ def calibrate(gpu):
 
 
 def main():
-    global RMOD_MOD, LADDER
+    global RMOD_MOD, LADDER, MAGS
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--calibrate', action='store_true', help='make the missing aliasing products and exit')
     ap.add_argument('--unmod-wvl', type=float, default=900.0, choices=sorted(BANDS), help='[nm] sensing wavelength of the unmodulated pyramid')
@@ -476,9 +476,12 @@ def main():
     ap.add_argument('--flat', action='store_true', help='with --bands: flat photon spectrum (the 900 nm photons per nm at every wavelength)')
     ap.add_argument('--science-nm', type=float, help='[nm] science_vis / coro_psf_vis wavelength (the metric)')
     ap.add_argument('--kf-shear', action='store_true', help='with --bands: chromatic shear as a shared state of the filter (two_colour.py)')
+    ap.add_argument('--mags', type=float, nargs='+', help=f'magnitudes of the search (default {MAGS})')
     ap.add_argument('--out')
     a = ap.parse_args()
     RMOD_MOD, LADDER = float(a.rmod_mod), LADDER[:max(1, a.unmod_rungs)]
+    if a.mags:
+        MAGS = tuple(float(x) for x in a.mags)
     os.environ['PATH'] = op.dirname(sys.executable) + os.pathsep + os.environ['PATH']   # the specula CLI of this environment
     if a.calibrate:
         calibrate(a.gpu)

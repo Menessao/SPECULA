@@ -5,6 +5,7 @@ wavelength. Existing products are kept, except reconstructors at these wavelengt
 (header SRC_WVL != WVL_NM): they are removed first, so that the reconstructors come from the new IMs. The PC IMs are not needed by the e2e.
 
     python calibrate_bands.py --vis 750 --nir 950 --gpu 0
+    python calibrate_bands.py --vis 750 --nir 450 --rmods 0 3 --steps im --shard 1/2 --gpu 1 --calib-dir <staging root>
 """
 import argparse
 import glob
@@ -32,14 +33,23 @@ def main():
     ap.add_argument('--vis', type=float, required=True, help='[nm] wavelength of the vis chain (unmodulated sensor of the e2e split case)')
     ap.add_argument('--nir', type=float, required=True, help='[nm] wavelength of the nir chain (modulated sensor)')
     ap.add_argument('--gpu', type=int, default=0)
+    ap.add_argument('--rmods', type=float, nargs='+', default=[0.0, 2.0], help='modulation radii (both chains get every one)')
+    ap.add_argument('--steps', nargs='+', default=['im', 'recs', 'alias'], help="subset of im recs alias pc, in this order ('pc': the "
+                    "perfect-correction IMs the error budget needs for the optical gains)")
+    ap.add_argument('--shard', default='0/1', help="k/m of the im / alias / pc cases ('recs' is not sharded: run it from one process)")
+    ap.add_argument('--calib-dir', help='products root (default: budget_wfsw.yml, the shared WFSW root)')
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
-    cfg = calibration.E2EConfig(n_subaps=(48,), rMods=(0.0, 2.0), seeings=(0.9,), modes_per_subap={48: [1300]},
+    cfg = calibration.E2EConfig(n_subaps=(48,), rMods=tuple(a.rmods), seeings=(0.9,), modes_per_subap={48: [1300]},
                                 wavelengths={'vis': a.vis, 'nir': a.nir})
-    remove_derived_recs(cfg, (a.vis, a.nir))
-    for step in ('im', 'recs', 'alias'):
-        logging.info('step %s', step)
-        calibration.STEPS[step](cfg, a.gpu, (0, 1))
+    if a.calib_dir:
+        cfg.calib_dir = a.calib_dir
+    shard = tuple(int(x) for x in a.shard.split('/'))
+    if 'recs' in a.steps:
+        remove_derived_recs(cfg, (a.vis, a.nir))
+    for step in a.steps:
+        logging.info('step %s (shard %d/%d)', step, *shard)
+        calibration.STEPS[step](cfg, a.gpu, (0, 1) if step == 'recs' else shard)
     logging.info('done')
 
 

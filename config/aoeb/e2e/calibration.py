@@ -68,6 +68,9 @@ class E2EConfig:
     main_yml: str = _STUDY['paths']['main']
     seed: int = 1
     overwrite: bool = False
+    fill: bool = False                       # alias: run a case if ANY of its products is missing; write only the missing files, compare
+                                             # the existing ones (identical: kept; different: kept, the new one goes to candidates_dir)
+    candidates_dir: str = None               # fill: where the differing new files go (default <calib_dir>/_recal_candidates)
     n_corr: tuple = None                     # corrected-mode counts of the alias / pc cases; None: modes_per_subap (standard). E.g.
                                              # (1300,) for the multistage products of a small sensor (aliasing of its own recs <= 1300)
 
@@ -177,6 +180,43 @@ def compute_recs(cfg, gpu=0, shard=(0, 1)):
                     save_rec(path, compute_reconstructor(au.read_fits(P.im_dl(r, n)), N), wvl_nm=float(wl), src_wvl=float(wl), dm_tag=cfg.dm_tag)
 
 
+def _alias_products(cfg, P, r, n, s, N):
+    """Every file the aliasing step writes for one pyramid and case."""
+    out = [P.turbmodes(r, n, s, N), P.avgframe(r, n, s, N), P.sn(r, n, s, N), P.thrp(r, n, s, N), P.slopes(r, n, s, N)]
+    return out + [P.alias(r, n, s, N_rec, N) for N_rec in cfg.mode_list(n) if N_rec <= N]
+
+
+def _same_fits(a, b, rtol=1e-6):
+    x, y = au.read_fits(a), au.read_fits(b)
+    return x.shape == y.shape and np.allclose(x, y, rtol=rtol, atol=0.0)
+
+
+def _fill_from(cfg, tmp_root):
+    """fill mode: move the files of tmp_root (a products root of the same layout) into cfg.calib_dir where missing; an existing file is
+    kept, and the new one dropped if identical or moved to the candidates folder (report.tsv: relative rms difference, sum ratio)."""
+    cand = cfg.candidates_dir or op.join(cfg.calib_dir, '_recal_candidates')
+    for folder in ('aliasing', 'frames', 'slopenulls', 'throughput'):
+        d = op.join(tmp_root, folder)
+        if not op.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            src, dst = op.join(d, name), op.join(cfg.calib_dir, folder, name)
+            if not op.exists(dst):
+                os.replace(src, dst)
+                log.info('added %s/%s', folder, name)
+            elif _same_fits(src, dst):
+                os.remove(src)
+            else:
+                x, y = au.read_fits(src).astype(float), au.read_fits(dst).astype(float)
+                os.makedirs(op.join(cand, folder), exist_ok=True)
+                os.replace(src, op.join(cand, folder, name))
+                rel = float(np.sqrt(np.mean((x - y) ** 2) / max(np.mean(y ** 2), 1e-300))) if x.shape == y.shape else np.nan
+                with open(op.join(cand, 'report.tsv'), 'a') as f:
+                    f.write(f'{folder}/{name}\trel_rms_diff\t{rel:.4g}\tsum_new/old\t{x.sum() / y.sum() if y.sum() else np.nan:.4g}\t'
+                            f'shape\t{x.shape}/{y.shape}\n')
+                log.info('kept %s/%s (differs: rel rms %.3g); new one in %s', folder, name, rel, cand)
+
+
 def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
     """Aliasing run (independent screens, N modes removed exactly) of both pyramids; products of each pyramid at its wavelength,
     aliasing of every reconstructor with N_rec <= N. Cases already on disk (also those renamed from the old e2e names, which have
@@ -184,8 +224,11 @@ def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
     names = {p: (f'slopes_{p}', f'{p}_frames', 'turb_modes') for p in PYRS}
     for r, n, s, N in _shard(cfg.cases(), shard):
         Ps = {p: cfg.paths(cfg.wavelengths[p]) for p in PYRS}
-        done = all(op.exists(P.slopes(r, n, s, N)) or (op.exists(P.avgframe(r, n, s, N)) and op.exists(P.alias(r, n, s, N, N)))
-                   for P in Ps.values())
+        if cfg.fill:
+            done = all(op.exists(f) for P in Ps.values() for f in _alias_products(cfg, P, r, n, s, N))
+        else:
+            done = all(op.exists(P.slopes(r, n, s, N)) or (op.exists(P.avgframe(r, n, s, N)) and op.exists(P.alias(r, n, s, N, N)))
+                       for P in Ps.values())
         if done and not cfg.overwrite:
             continue
         tag = Ps['vis'].sim(r, n, s, N).replace('_wvl', '_alias_wvl')
@@ -193,13 +236,25 @@ def calibrate_alias(cfg, gpu=0, shard=(0, 1)):
         run_specula(cfg, ['calib_wfs_aliasing.yml'], merge(_pyrs(cfg, r, n), {
             'main': {'total_time': cfg.alias_time}, 'seeing': {'constant': float(s)}, 'atmo_modes': {'nmodes': N},
             'atmo_random': {'seed': cfg.seed}, 'data_store': {'store_dir': store, 'create_tn': False}}), gpu, tag)
+        tmp_root = None
+        if cfg.fill and not cfg.overwrite:                 # products written in a scratch root first, then merged by _fill_from
+            tmp_root = op.join(cfg.calib_dir, 'scratch', tag + '_fill')
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            for folder in ('aliasing', 'frames', 'slopenulls', 'throughput'):
+                os.makedirs(op.join(tmp_root, folder))
+            for folder in ('rec', 'pupils'):                                        # read only (recs, pupil data)
+                os.symlink(op.join(cfg.calib_dir, folder), op.join(tmp_root, folder))
         for p, P in Ps.items():
-            process_aliasing_runs(P, r, n, s, N, [store], names=names[p])
+            Pw = P if tmp_root is None else Paths(tmp_root, cfg.pupilstop_tag, cfg.dm_tag).at(P.wavelength_nm)
+            process_aliasing_runs(Pw, r, n, s, N, [store], names=names[p])
             for N_rec in cfg.mode_list(n):
                 if N_rec <= N:
                     if not op.exists(P.rec(r, n, N_rec)):
                         raise FileNotFoundError(f'{P.rec(r, n, N_rec)} missing: run the recs step first')
-                    compute_alias_product(P, r, n, s, N_rec, N)
+                    compute_alias_product(Pw, r, n, s, N_rec, N)
+        if tmp_root is not None:
+            _fill_from(cfg, tmp_root)
+            shutil.rmtree(tmp_root, ignore_errors=True)
         shutil.rmtree(store, ignore_errors=True)
 
 
@@ -284,6 +339,9 @@ def main(argv=None):
     ap.add_argument('--n-corr', type=int, nargs='+', help='corrected-mode counts of the alias / pc cases (default: modes_per_subap)')
     ap.add_argument('--calib-dir')
     ap.add_argument('--overwrite', action='store_true')
+    ap.add_argument('--fill', action='store_true', help='alias: add only the missing products; existing files are never rewritten (the '
+                    'differing new ones go to --candidates-dir, report.tsv)')
+    ap.add_argument('--candidates-dir', help='--fill: folder of the new files that differ from existing ones (default <calib_dir>/_recal_candidates)')
     ap.add_argument('--list', action='store_true', help='print the status of the alias and pc cases and exit')
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
@@ -293,6 +351,9 @@ def main(argv=None):
         if v is not None:
             setattr(cfg, k, tuple(v) if isinstance(v, list) else v)
     cfg.overwrite = a.overwrite
+    cfg.fill, cfg.candidates_dir = a.fill, a.candidates_dir
+    if a.fill and a.overwrite:
+        ap.error('--fill and --overwrite exclude each other')
     if a.list:
         for k, (d, t) in status(cfg).items():
             print(f'{k}: {d}/{t} cases done')

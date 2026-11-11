@@ -51,6 +51,7 @@ SOURCE_MAG_CAL = {900.0: 7.0, 1300.0: 6.43}              # source_vis, source_ni
 REC = 'svd'                            # reconstructor: 'svd', 'ml' (ML at the flux of each run) or 'auto' (ML at rMod 0, SVD otherwise)
 METRIC_BAND = 'vis'                    # science band of the metric (sweep_dual sets it too)
 CHROMATIC = True                       # prop.enable_chromatic_effect
+SCIENCE_NM = None                      # science_vis / coro_psf_vis wavelength [nm] (--science-nm); None: that of the yml (550)
 ALIAS_SEEINGS = (0.75, 1.05)           # seeings with a slopes file, for the ML aliasing where the s0.9 frames were renamed from the old e2e and have none
 DT0, ZETA = 5e-4, 0.7                  # AR(2) file: sampling, damping of aoeb/pol_turb/ar2_mode_laws.ar2_model
 DELAY = 250e-6                         # [s]
@@ -358,7 +359,8 @@ class Sweep:
                                 'inputs': {'in_measurements_list': [f'pyr_modes_{b}.out_modes'], 'in_command': 'kpred.out_comm:-1'},
                                 'outputs': ['out_projected_state', 'out_state']},   # no biased sensor: no out_bias
             'kpred_override': {'delay': DELAY * fs, 'iir_filter_data_object': self.unity_tag(N)},
-            'coro_psf_vis_override': {'verbose': False},
+            'coro_psf_vis_override': {'verbose': False, **({'wavelengthInNm': SCIENCE_NM} if SCIENCE_NM else {})},
+            **({'science_vis_override': {'wavelengthInNm': SCIENCE_NM}} if SCIENCE_NM else {}),
             'data_store_override': {'store_dir': self.store, 'inputs': {'input_list': [
                 'sr_vis-coro_psf_vis.out_sr', 'coro_psf_vis_int-coro_psf_vis.out_int_coronagraph_psf_profile',
                 'sr_nir-coro_psf_nir.out_sr', 'coro_psf_nir_int-coro_psf_nir.out_int_coronagraph_psf_profile',
@@ -607,7 +609,7 @@ def final_table(sweeps):
 
 
 def main():
-    global N_SUBAPS, N_MODES, REC, WVL, METRIC_BAND, CHROMATIC
+    global N_SUBAPS, N_MODES, REC, WVL, METRIC_BAND, CHROMATIC, SCIENCE_NM, MAGS
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--rec', choices=('svd', 'ml', 'auto'), default=REC, help='reconstructor; ml: at the flux of each run; auto: ml at rMod 0, svd otherwise')
     ap.add_argument('--wvl', type=float, default=WVL, choices=sorted(BANDS), help='[nm] sensing wavelength; the metric is in the nearest science band')
@@ -626,7 +628,12 @@ def main():
     ap.add_argument('--total-time', type=float, default=3.0, help='[s] of each run (of each replay with --replay)')
     ap.add_argument('--out', default=op.join(result_dir, 'sweep_contrast_20261106'))
     ap.add_argument('--rmod', type=float, help='fixed modulation: skip the modulation selection')
+    ap.add_argument('--science-nm', type=float, help='[nm] science_vis / coro_psf_vis wavelength (the vis metric); default that of the yml')
+    ap.add_argument('--mags', type=float, nargs='+', help=f'magnitudes searched after {MAG_START:g} (default {MAGS})')
     a = ap.parse_args()
+    SCIENCE_NM = a.science_nm
+    if a.mags:
+        MAGS = tuple(float(x) for x in a.mags)
     if a.final_table:
         print(final_table(a.final_table))
         return
