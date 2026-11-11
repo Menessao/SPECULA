@@ -228,6 +228,36 @@ def _cmp(quantity, value, ref):
     return value / ref if quantity == 'contrast' else value - ref
 
 
+CMP_ROWS = []      # comparison points of the last plot_main / plot_best figure, as drawn (cmp_range)
+
+
+def _cmp_curve(rx, mags, vals, color, marker, quantity, chrom, band, label):
+    """Comparison curve drawn in rx and recorded in CMP_ROWS."""
+    _curve(rx, mags, vals, None, color, marker, None)
+    panel = f"{'chromatic' if chrom else 'achromatic'}, {WL[band]}"
+    CMP_ROWS.extend(dict(quantity=quantity, panel=panel, curve=label, mag=m, value=v) for m, v in zip(mags, vals))
+
+
+def cmp_range():
+    """Min and max of every comparison curve of the last plot_main / plot_best figure (contrast: ratio, SR: difference), with the
+    magnitude where each occurs; exactly the points drawn in the comparison rows."""
+    import pandas as pd
+    df = pd.DataFrame(CMP_ROWS)
+    rows = []
+    for (q, panel, curve), g in df.groupby(['quantity', 'panel', 'curve'], sort=False):
+        g = g[np.isfinite(g['value'])]
+        if g.empty:
+            continue
+        i, j = g['value'].idxmin(), g['value'].idxmax()
+        rows.append({'panel': panel, 'comparison': curve, 'min': g.at[i, 'value'], 'mag of min': g.at[i, 'mag'],
+                     'max': g.at[j, 'value'], 'mag of max': g.at[j, 'mag'], 'n': len(g)})
+    out = pd.DataFrame(rows)
+    fmt = '{:.3f}' if df['quantity'].iloc[0] == 'contrast' else '{:+.4f}'
+    return out.style.format({'min': fmt, 'max': fmt, 'mag of min': '{:g}', 'mag of max': '{:g}'}).hide(axis='index').set_caption(
+        'contrast ratio (< 1: better than the reference)' if df['quantity'].iloc[0] == 'contrast'
+        else 'SR difference (> 0: better than the reference)')
+
+
 def _labels(ax, rx, quantity, chrom, band, ref_label, top_title):
     q = 'contrast 2-5 λ/D' if quantity == 'contrast' else 'SR'
     ax.set_ylabel(T(f'{q}, {WL[band]}'), color=INK, fontsize=FS_LAB)
@@ -292,6 +322,7 @@ def plot_main(quantity='contrast'):
     stats = {c: replays(c) for curves in panels.values() for _, _, c in curves}
     fig, gs = _figure(f"{'Contrast' if quantity == 'contrast' else 'Strehl ratio'}: replay mean ± std of the selected configurations")
     missing, dropped, lim = set(), set(), ylim(quantity)
+    CMP_ROWS.clear()
     for (chrom, band), curves in panels.items():
         ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
         k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
@@ -311,7 +342,11 @@ def plot_main(quantity='contrast'):
             hollow = [st[m][f'sr_{band}'] < SR_MASK for m in mags] if quantity == 'contrast' else None
             _curve(ax, mags, y, err, COLOR[e], MARKER[e], label, hollow)
             rm = [m for m in mags if m in ref]
-            _curve(rx, rm, [_cmp(quantity, st[m][k], ref[m]) for m in rm], None, COLOR[e], MARKER[e], None)
+            vals = [_cmp(quantity, st[m][k], ref[m]) for m in rm]
+            if e == REF:                                          # the reference itself: drawn, not listed
+                _curve(rx, rm, vals, None, COLOR[e], MARKER[e], None)
+            else:
+                _cmp_curve(rx, rm, vals, COLOR[e], MARKER[e], quantity, chrom, band, f"{label} {'/' if quantity == 'contrast' else '-'} single rMod 1")
         if fl:
             _floor_lines(ax, chrom, band, fl)
         _style(ax, quantity == 'contrast')
@@ -578,6 +613,8 @@ def plot_best(quantity='contrast', single=REF, extra=('r2',)):
     sname = 'best single' if single == 'best' else f'single rMod {single[1:]}'
     fig, gs = _figure(f"{'Contrast' if quantity == 'contrast' else 'Strehl ratio'}: {sname} stage vs best fusion (replay mean ± std)")
     lim = ylim(quantity)
+    CMP_ROWS.clear()
+    op_ = '/' if quantity == 'contrast' else '-'
     entity_label = {'r0': 'single, rMod 0', 'r1': 'single, rMod 1', 'r2': 'single, rMod 2', 'fusion': 'fusion: unmod 900 + rMod 2 1300 nm',
                     'swapped': 'swapped: unmod 1300 + rMod 2 900 nm'}
     for (chrom, band), curves in panels.items():
@@ -596,7 +633,8 @@ def plot_best(quantity='contrast', single=REF, extra=('r2',)):
                         label=T(f'single rMod {e2[1:]}'))
                 b2 = [m for m in m2 if m in picks['fusion']]
                 if b2:
-                    _curve(rx, b2, [_cmp(quantity, replays(picks['fusion'][m][2])[m][k], st2[m][k]) for m in b2], None, COLOR[e2], MARKER[e2], None)
+                    _cmp_curve(rx, b2, [_cmp(quantity, replays(picks['fusion'][m][2])[m][k], st2[m][k]) for m in b2], COLOR[e2], MARKER[e2],
+                               quantity, chrom, band, f'best fusion {op_} single rMod {e2[1:]}')
         for g, col in PROFILE_COLOR.items():
             mags = sorted(picks[g])
             if not mags:
@@ -616,7 +654,7 @@ def plot_best(quantity='contrast', single=REF, extra=('r2',)):
         both = sorted(set(picks['single']) & set(picks['fusion']))
         if both:
             ratio = [_cmp(quantity, replays(picks['fusion'][m][2])[m][k], replays(picks['single'][m][2])[m][k]) for m in both]
-            _curve(rx, both, ratio, None, PROFILE_COLOR['single'], 'o', None)
+            _cmp_curve(rx, both, ratio, PROFILE_COLOR['single'], 'o', quantity, chrom, band, f'best fusion {op_} {sname}')
         if fl:
             _floor_lines(ax, chrom, band, fl)
         _style(ax, quantity == 'contrast')

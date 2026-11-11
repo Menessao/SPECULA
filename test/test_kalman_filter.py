@@ -1361,6 +1361,52 @@ def run_aliasing_toy(seed, mode, n_steps=8000, settle=1000, T=4):
     return np.mean(res[settle:] ** 2, axis=0)
 
 
+def run_common_error_toy(seed, mode, n_steps=6000, settle=1000):
+    """Closed loop (SPECULA timing) with two fast sensors that see one common error c with gains of
+    opposite sign (chromatic shear of two sensors on either side of the science wavelength):
+    z_i = phi + g_i c + noise. mode: 'common' (c in the state, shared), 'white' (g_i^2 var(c)
+    added to each R, independently), 'ignore', or 'absent' (no common error at all: the floor)."""
+    N = 3
+    rho, om = np.array([0.999, 0.99, 0.995]), np.array([0.01, 0.05, 0.2])
+    a1, a2 = 2 * rho * np.cos(om), -rho ** 2
+    sw2 = np.ones(N)
+    r = [np.full(N, 0.05), np.full(N, 0.05)]
+    g = [2.72, -1.18]
+    ca1, ca2 = 2 * 0.995 * np.cos(0.1), -0.995 ** 2
+    cv = np.array([4.0, 2.0, 1.0])                                     # stationary variance of c
+
+    rng = np.random.default_rng(seed)
+    phi, c = np.zeros((n_steps, N)), np.zeros((n_steps, N))
+    w = rng.normal(size=(n_steps, N)) * np.sqrt(sw2)
+    wc = rng.normal(size=(n_steps, N)) * np.sqrt(ar2_driving_noise_variance(ca1, ca2, cv))
+    for k in range(2, n_steps):
+        phi[k] = a1 * phi[k - 1] + a2 * phi[k - 2] + w[k]
+        c[k] = ca1 * c[k - 1] + ca2 * c[k - 2] + wc[k]
+    if mode == 'absent':
+        c[:] = 0.0
+
+    if mode == 'common':
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, r, common_var=cv, common_a1=ca1,
+                                                     common_a2=ca2, common_gain=g)
+    elif mode == 'white':
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [ri + gi ** 2 * cv for ri, gi in zip(r, g)])
+    else:
+        data = KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, r)
+    kf = KalmanFilter(kalman_filter_data=data, target_device_idx=-1, precision=0)
+    rig = KalmanRig(kf, [N, N], np, -1, command_size=N)
+
+    c1, c2 = np.zeros(N), np.zeros(N)
+    res = np.zeros((n_steps, N))
+    for k in range(n_steps):
+        d = 0.5 * c1 + 0.5 * c2
+        res[k] = phi[k] - d
+        fresh = {i: res[k] + g[i] * c[k] + rng.normal(size=N) * np.sqrt(r[i]) for i in range(2)}
+        rig.step(k + 1, fresh, command=d)
+        out = cpuArray(kf.outputs['out_projected_state'].value).copy()
+        c2, c1 = c1, out
+    return np.mean(res[settle:] ** 2, axis=0)
+
+
 class TestKalmanFilterAliasingAndAdaptiveNoise(unittest.TestCase):
 
     def test_aliasing_state_structure(self):
@@ -1393,6 +1439,41 @@ class TestKalmanFilterAliasingAndAdaptiveNoise(unittest.TestCase):
         with self.assertRaises(ValueError):                                       # one item per sensor
             KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)] * 2, aliasing_var=[0.3],
                                                   aliasing_a1=aa1, aliasing_a2=aa2)
+
+    def test_common_error_state_structure(self):
+        a1, a2, sw2 = np.array([1.9, 1.5]), np.array([-0.95, -0.6]), np.array([1.0, 2.0])
+        ca1, ca2 = 1.5, -0.6
+        data = KalmanFilterData.from_ar2_closed_loop(
+            a1, a2, sw2, [np.ones(2), np.ones(2)], integration_steps=[4, 1], aliasing_var=[None, 0.3],
+            aliasing_a1=1.2, aliasing_a2=-0.4, common_var=np.array([0.5, 0.2]), common_a1=ca1, common_a2=ca2,
+            common_gain=[2.0, -1.0])
+        A, P0, H = data.state_transition_matrix, data.initial_covariance, data.observation_matrix
+        self.assertEqual(A.shape, (2, 10, 10))                       # 4 phi + 2 aliasing (sensor 1) + 4 common lags
+        np.testing.assert_allclose(H[0][0, 6:10], 2.0 / 4)            # frame-averaged, gain 2
+        np.testing.assert_array_equal(H[0][0, 4:6], 0)
+        np.testing.assert_array_equal(H[1][0, 4:6], [1, 0])
+        np.testing.assert_array_equal(H[1][0, 6:10], [-1, 0, 0, 0])
+        np.testing.assert_array_equal(A[:, 6, 6:8], np.tile([ca1, ca2], (2, 1)))
+        np.testing.assert_allclose(P0[:, 6, 6], [0.5, 0.2], rtol=1e-8)
+        np.testing.assert_array_equal(data.projection_matrix[:, 4:], 0)          # the projection ignores c
+        with self.assertRaises(ValueError):                                       # gains missing
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], common_var=0.3, common_a1=ca1, common_a2=ca2)
+        with self.assertRaises(ValueError):                                       # one gain per sensor
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)] * 2, common_var=0.3, common_a1=ca1,
+                                                  common_a2=ca2, common_gain=[1.0])
+        with self.assertRaises(ValueError):                                       # non-stationary
+            KalmanFilterData.from_ar2_closed_loop(a1, a2, sw2, [np.ones(2)], common_var=0.3, common_a1=1.5,
+                                                  common_a2=-0.4, common_gain=[1.0])
+
+    def test_common_error_state_cancels_opposite_gains(self):
+        """Two sensors seeing a common error with gains of opposite sign: the shared state estimates phi
+        (the error cancelled: close to the residual without that error), far better than independent white
+        errors in R, or ignoring them."""
+        common, absent = run_common_error_toy(5, 'common'), run_common_error_toy(5, 'absent')
+        white, ignore = run_common_error_toy(5, 'white'), run_common_error_toy(5, 'ignore')
+        self.assertTrue(np.all(common < 1.25 * absent), msg=f'{common} vs absent {absent}')
+        self.assertTrue(np.all(common < 0.6 * white), msg=f'{common} vs white {white}')
+        self.assertTrue(np.all(common < 0.85 * ignore), msg=f"{common} vs ignore {ignore}")
 
     def test_aliasing_states_beat_white_approximation(self):
         """With temporally correlated aliasing, modelling it in the state gives a

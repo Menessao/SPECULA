@@ -36,7 +36,7 @@ from specula.data_objects.kalman_filter_data import (
 
 
 def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driving', command_hold_steps=1,
-                     plant_inverse_tag=None, beta=0.0, subdir='filter', overwrite=True, delay=1.5):
+                     plant_inverse_tag=None, beta=0.0, subdir='filter', overwrite=True, delay=1.5, common=None):
     """
     Build and save a KalmanFilterData FITS file.
 
@@ -88,6 +88,11 @@ def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driv
     delay : float
         Prediction horizon of the filter output, in loop steps: 1 + tau, with tau the
         fractional delay of the IirFilter (default 1.5: tau = 0.5).
+    common : dict, optional
+        An error term shared by the sensors (KalmanFilterData.from_ar2_closed_loop
+        common_*), e.g. the chromatic shear of two sensors on either side of the
+        science wavelength: 'var' (n_modes,) stationary variance per loop step,
+        'a1', 'a2' its AR(2) at the loop rate, 'gain' one scalar per sensor (dn_i).
 
     Returns
     -------
@@ -159,7 +164,9 @@ def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driv
         command_hold_steps=command_hold_steps,
         bias_process_noise_cov=bias_q if any(b is not None for b in bias_q) else None,
         initial_bias=bias_x0 if any(b is not None for b in bias_x0) else None,
-        initial_bias_covariance=bias_p0 if any(b is not None for b in bias_p0) else None)
+        initial_bias_covariance=bias_p0 if any(b is not None for b in bias_p0) else None,
+        **({} if common is None else dict(common_var=per_mode(common['var'], 'common["var"]'), common_a1=common['a1'],
+                                          common_a2=common['a2'], common_gain=list(common['gain']))))
 
     folder = os.path.join(root_dir, subdir)
     os.makedirs(folder, exist_ok=True)

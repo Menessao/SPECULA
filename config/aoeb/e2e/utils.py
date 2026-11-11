@@ -27,7 +27,7 @@ from specula.data_objects.slopes import Slopes
 import calibration                                                                    # noqa: E402
 
 _CFG = calibration.E2EConfig()                         # aoeb/config/budget_wfsw.yml
-calib_dir = _CFG.calib_dir
+calib_dir = os.environ.get('E2E_CALIB_DIR') or _CFG.calib_dir   # E2E_CALIB_DIR: another root for every importer (e.g. a staging root)
 result_dir = '/raid1/mmenessini/results/WFSW'
 PUPILSTOP_TAG, DM_TAG = _CFG.pupilstop_tag, _CFG.dm_tag
 SEEING = 0.9          # seeing of the calibration products [arcsec] (the first e2e runs were made at 0.88 and are named s0.9)

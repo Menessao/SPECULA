@@ -339,6 +339,7 @@ class KalmanFilterData(BaseDataObj):
                              initial_bias_covariance=None, aliasing_var=None,
                              aliasing_a1=None, aliasing_a2=None, photon_noise_var=None,
                              readout_noise_var=None, reference_flux=None,
+                             common_var=None, common_a1=None, common_a2=None, common_gain=None,
                              target_device_idx=None, precision=None):
         """
         Closed-loop model: the filter receives the raw modal measurements and,
@@ -347,7 +348,8 @@ class KalmanFilterData(BaseDataObj):
 
             phi[k]   = a1 phi[k-1] + a2 phi[k-2] + w[k]                 (turbulence)
             alpha_i  : same form, coefficients aliasing_a1/a2           (aliasing, optional)
-            z_i[k]   = mean_{j = D_i .. D_i+T_i-1} (phi - d + alpha_i)[k-j]
+            c        : same form, coefficients common_a1/a2             (common error, optional)
+            z_i[k]   = mean_{j = D_i .. D_i+T_i-1} (phi - d + alpha_i + g_i c)[k-j]
                        (+ b_i if biased) + noise
 
         T_i = integration_steps[i] is the frame of sensor i in loop steps (4 for
@@ -355,7 +357,7 @@ class KalmanFilterData(BaseDataObj):
         delay in steps. The DM commands are known, so they enter through the
         command observation matrices, not the state.
 
-        State per mode: [phi lags | alpha_0 lags | alpha_1 lags | ...] (+ biases,
+        State per mode: [phi lags | alpha_0 lags | alpha_1 lags | ... | c lags] (+ biases,
         appended by the constructor). The projection is the prediction of phi
         ``delay`` steps ahead: 1 (E[phi[k+1] | k]) for the Ristretto chain, where
         the plant-inverse IirFilter compensates the 1.5-step plant.
@@ -387,6 +389,16 @@ class KalmanFilterData(BaseDataObj):
         photon_noise_var, readout_noise_var, reference_flux : None or lists
             Flux scaling of the measurement noise (see the class docstring);
             None for the sensors whose noise is kept fixed.
+        common_var, common_a1, common_a2, common_gain : optional
+            One error term c SHARED by the sensors, seen by sensor i as g_i c
+            (common_gain: one scalar per sensor, 0 for a sensor that does not
+            see it): an AR(2) state of stationary variance common_var
+            ((n_modes,) or scalar, loop rate) and coefficients common_a1/a2.
+            E.g. the chromatic shear: sensor i measures phi(x + s dn_i) ~
+            phi + dn_i c with dn_i = n_i - n_science, so two sensors on either
+            side of the science wavelength (gains of opposite sign) are
+            combined so as to estimate phi at the science wavelength; phi is
+            then the science phase (the projection ignores c).
         """
         a1, a2, sw2 = _check_ar2(a1, a2, driving_noise_var, delay)
         N = a1.size
@@ -423,6 +435,22 @@ class KalmanFilterData(BaseDataObj):
                 blocks.append(_ar2_companion(aa1, aa2, ar2_driving_noise_variance(aa1, aa2, var), n_lags))
                 alias_offset[i] = offset
                 offset += n_lags
+        common_offset, gains = None, None
+        if common_var is not None:
+            if common_a1 is None or common_a2 is None or common_gain is None:
+                raise ValueError('common_a1, common_a2 and common_gain are required with common_var')
+            gains = [float(g) for g in _as_list(common_gain)]
+            if len(gains) != n_sensors:
+                raise ValueError(f'common_gain has {len(gains)} items, but there are {n_sensors} sensors')
+            ca1 = np.broadcast_to(np.asarray(common_a1, dtype=float), (N,))
+            ca2 = np.broadcast_to(np.asarray(common_a2, dtype=float), (N,))
+            cvar = np.broadcast_to(np.asarray(common_var, dtype=float), (N,))
+            if not np.all(ar2_is_stationary(ca1, ca2)):
+                raise ValueError('common-error AR(2) coefficients are not stationary')
+            if np.any(cvar < 0) or not np.all(np.isfinite(cvar)):
+                raise ValueError('common_var must be finite and non-negative')
+            common_offset = sum(Ab.shape[1] for Ab, _ in blocks)
+            blocks.append(_ar2_companion(ca1, ca2, ar2_driving_noise_variance(ca1, ca2, cvar), L))
 
         n = sum(Ab.shape[1] for Ab, _ in blocks)
         A, Q, P0 = (np.zeros((N, n, n)) for _ in range(3))
@@ -439,6 +467,9 @@ class KalmanFilterData(BaseDataObj):
             if i in alias_offset:
                 o = alias_offset[i]
                 h[0, o + w.start:o + w.stop] = 1.0 / t                # aliasing, frame-averaged
+            if common_offset is not None:
+                o = common_offset
+                h[0, o + w.start:o + w.stop] = gains[i] / t           # common error, frame-averaged
             d = np.zeros((1, L))
             d[0, w] = -1.0 / t                                        # minus the DM commands seen
             H.append(h)

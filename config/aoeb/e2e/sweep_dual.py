@@ -17,6 +17,10 @@ once with that sensor's model flux (ML weights, KF noise) x measured / model; th
 `mag` is the 900 nm magnitude. Search at each magnitude, from the best (k, n) of the previous one, never going back: k + 1 until the metric
 stops improving, then the next rung of the LADDER until it stops improving; if the rung changed, k again.
 
+Two-colour correction of the chromatic shear (two_colour.py, 2026-11-11): --bands 750 100 450 100 --rmod-mod 3 --flat --science-nm 600
+--kf-shear --unmod-rungs 1: the unmodulated pyramid at 750 nm and the rMod 3 one at 450 nm, 100 nm bands of a flat photon spectrum (the 900 nm
+photons per nm), the metric at 600 nm, the chromatic shear a shared state of the filter seen with gain dn_i by each sensor, 48x48 only.
+
 Every file written has its own tag (sweep_dual_*). Finished runs are read back from results.csv, so an interrupted sweep is resumed by starting it again.
 
     python sweep_dual.py --calibrate --gpu 0
@@ -44,7 +48,8 @@ from aoeb.noise import slope_noise_cov                                          
 from aoeb.reconstructors import compute_reconstructor, save_rec                                            # noqa: E402
 from save_kalman_data import save_kalman_data, save_plant_inverse_iir                                      # noqa: E402
 from utils import (SEEING, _load_calib, calib_dir, get_aliasing_power, get_pupil_flux, get_rec, get_static_slopes, latest_tn, machine,  # noqa: E402
-                   noise_sensitivities, paths, propagated_noise_var, result_dir, run_specula)
+                   noise_sensitivities, paths, propagated_noise_var, result_dir, run_specula, D)
+import two_colour                                                                                          # noqa: E402
 
 N_SUBAPS_MOD, N_CORR, RMOD_MOD, RMOD_UNMOD = 48, 1300, 2.0, 0.0
 LADDER = ((48, 1300), (36, 900), (24, 300), (14, 100))     # unmodulated pyramid
@@ -115,11 +120,20 @@ def sn_tag(rmod, n, N, wvl):
 
 
 class Sweep:
-    def __init__(self, out, gpu, total_time, unmod_wvl, chromatic=True, same_wvl=None, unmod_frac=1.0, bands=None):
+    def __init__(self, out, gpu, total_time, unmod_wvl, chromatic=True, same_wvl=None, unmod_frac=1.0, bands=None, flat=False, science_nm=None,
+                 kf_shear=False):
         """bands: (unmod nm, unmod bandw nm, mod nm, mod bandw nm): each pyramid at its own wavelength and camera band (unmodulated on the vis
         chain, products calibrated on that chain: MAG_CAL of the chain), the star magnitude at that wavelength from the colour of MAG_CAL,
-        linear in the wavelength, as the 1300 nm source of the other cases."""
+        linear in the wavelength, as the 1300 nm source of the other cases. flat (with bands): flat photon spectrum, the photons per nm of
+        the 900 nm magnitude at every wavelength. science_nm: wavelength of science_vis / coro_psf_vis (the metric; default that of the yml).
+        kf_shear: the chromatic shear as a state of the filter shared by the two sensors (two_colour.common_block)."""
         self.out, self.gpu, self.total_time, self.chromatic = out, gpu, total_time, chromatic
+        if (flat or kf_shear) and not bands:
+            raise ValueError('flat and kf_shear need bands')
+        if kf_shear and not chromatic:
+            raise ValueError('kf_shear needs the chromatic propagation')
+        self.science_nm = float(science_nm) if science_nm else None          # None: the science_vis wavelength of the yml (550 nm)
+        self.kf_shear = bool(kf_shear)
         colour = MAG_CAL[900.0] - MAG_CAL[1300.0]
         if bands:
             uw, ubw, mw, mbw = (float(x) for x in bands)
@@ -127,7 +141,12 @@ class Sweep:
             self.frac = {'vis': ubw / BANDW, 'nir': mbw / BANDW}
             MAG_CAL.setdefault(uw, MAG_CAL[900.0])          # calibration.py: vis chain at uw, nir chain at mw, sources of ristretto_main.yml
             MAG_CAL.setdefault(mw, MAG_CAL[1300.0])
-            self.mag_offset = {c: -colour * (w - 900.0) / 400.0 for c, w in self.wvl.items()}
+            if flat:
+                from specula.lib.n_phot import n_phot
+                ph0 = lambda w: float(n_phot(0.0, lambda_=w * 1e-9, width=1e-9)[0])
+                self.mag_offset = {c: float(2.5 * np.log10(ph0(w) / ph0(900.0))) for c, w in self.wvl.items()}
+            else:
+                self.mag_offset = {c: -colour * (w - 900.0) / 400.0 for c, w in self.wvl.items()}
         elif same_wvl:      # both sensors at one wavelength, band split: unmodulated on the vis chain
             self.wvl, self.unmod_chain = {'vis': float(same_wvl), 'nir': float(same_wvl)}, 'vis'
             self.frac = {'vis': float(unmod_frac), 'nir': 1.0 - float(unmod_frac)}
@@ -221,7 +240,13 @@ class Sweep:
             sensors.append(s)
         kf_tag = f'{self.tag}_kf_{name}'
         a1, a2, q = ar2_at(fs)
-        save_kalman_data(kf_tag, calib_dir, a1, a2, q, sensors, n_modes=N_CORR, delay=1 + DELAY * fs)
+        common = None
+        if self.kf_shear:
+            common = two_colour.common_block(a1[:N_CORR], a2[:N_CORR], q[:N_CORR], [self.wvl[c] for c in CHAINS], self.science_nm or 550.0, D,
+                                             sc.ZETA, fs)
+        save_kalman_data(kf_tag, calib_dir, a1, a2, q, sensors, n_modes=N_CORR, delay=1 + DELAY * fs, common=common)
+        if self.science_nm:
+            ov.update({'science_vis_override': {'wavelengthInNm': self.science_nm}})
         ov.update({
             'main_override': {'time_step': 1 / fs, 'total_time': self.total_time, 'root_dir': calib_dir},
             'seeing_override': {'constant': sim_seeing()},
@@ -230,7 +255,7 @@ class Sweep:
                                 'inputs': {'in_measurements_list': ['pyr_modes_vis.out_modes', 'pyr_modes_nir.out_modes'], 'in_command': 'kpred.out_comm:-1'},
                                 'outputs': ['out_projected_state', 'out_state']},
             'kpred_override': {'delay': DELAY * fs, 'iir_filter_data_object': self.unity},
-            'coro_psf_vis_override': {'verbose': False},
+            'coro_psf_vis_override': {'verbose': False, **({'wavelengthInNm': self.science_nm} if self.science_nm else {})},
             'data_store_override': {'store_dir': self.store, 'inputs': {'input_list': [
                 'sr_vis-coro_psf_vis.out_sr', 'coro_psf_vis_int-coro_psf_vis.out_int_coronagraph_psf_profile',
                 'sr_nir-coro_psf_nir.out_sr', 'coro_psf_nir_int-coro_psf_nir.out_int_coronagraph_psf_profile',
@@ -430,6 +455,7 @@ def calibrate(gpu):
 
 
 def main():
+    global RMOD_MOD, LADDER
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--calibrate', action='store_true', help='make the missing aliasing products and exit')
     ap.add_argument('--unmod-wvl', type=float, default=900.0, choices=sorted(BANDS), help='[nm] sensing wavelength of the unmodulated pyramid')
@@ -445,13 +471,20 @@ def main():
     ap.add_argument('--replay-extra-mags', type=float, nargs='+', default=(), help='also replay these (not swept) magnitudes with the mag 7 configuration')
     ap.add_argument('--replay-seed', type=int, default=20261108, help='seed of the random wind directions of the replays')
     ap.add_argument('--total-time', type=float, default=3.0, help='[s] of each run (of each replay with --replay)')
+    ap.add_argument('--rmod-mod', type=float, default=RMOD_MOD, help='modulation radius of the modulated pyramid [lambda/D]')
+    ap.add_argument('--unmod-rungs', type=int, default=len(LADDER), help='rungs of the LADDER the unmodulated pyramid may use (1: 48x48 only)')
+    ap.add_argument('--flat', action='store_true', help='with --bands: flat photon spectrum (the 900 nm photons per nm at every wavelength)')
+    ap.add_argument('--science-nm', type=float, help='[nm] science_vis / coro_psf_vis wavelength (the metric)')
+    ap.add_argument('--kf-shear', action='store_true', help='with --bands: chromatic shear as a shared state of the filter (two_colour.py)')
     ap.add_argument('--out')
     a = ap.parse_args()
+    RMOD_MOD, LADDER = float(a.rmod_mod), LADDER[:max(1, a.unmod_rungs)]
     os.environ['PATH'] = op.dirname(sys.executable) + os.pathsep + os.environ['PATH']   # the specula CLI of this environment
     if a.calibrate:
         calibrate(a.gpu)
         return
-    sweep = Sweep(a.out or op.join(result_dir, f'sweep_dual_unmod{a.unmod_wvl:g}_20261106'), a.gpu, a.total_time, a.unmod_wvl, not a.achromatic, a.same_wvl, a.unmod_frac, a.bands)
+    sweep = Sweep(a.out or op.join(result_dir, f'sweep_dual_unmod{a.unmod_wvl:g}_20261106'), a.gpu, a.total_time, a.unmod_wvl, not a.achromatic, a.same_wvl, a.unmod_frac, a.bands,
+                  a.flat, a.science_nm, a.kf_shear)
     if a.case:
         check_ar2()
         save_plant_inverse_iir(sweep.unity, calib_dir, N_CORR, beta=0.0)
