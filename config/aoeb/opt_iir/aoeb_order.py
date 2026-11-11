@@ -4,6 +4,13 @@ Residual per KL mode for the integrator, the leaky integrator, the order-2 IIR W
 
   cd SPECULA/config; python aoeb/opt_iir/aoeb_order.py        # the two figures, next to this file
   python aoeb/opt_iir/aoeb_order.py tf [mode [mag [delay]]]   # PSDs, |RTF|^2, |NTF|^2 of one mode (default 5, 8, 1.5)
+  python aoeb/opt_iir/aoeb_order.py table                     # total residual (rss) per controller at delay 2, mags 5/8/11
+  python aoeb/opt_iir/aoeb_order.py ratios                    # leaky / IIR2 vs magnitude, residual vs delay (from the cache)
+  python aoeb/opt_iir/aoeb_order.py coeffs                    # leaky (G, leak) and IIR2 (b, a) coefficients vs magnitude and delay
+  python aoeb/opt_iir/aoeb_order.py coeffs-env                # ... vs seeing (calibrated 0.6-1.05") and wind speed (all layers scaled)
+  python aoeb/opt_iir/aoeb_order.py coeffs-rand               # ... for random layer speeds at the same effective wind speed
+  python aoeb/opt_iir/aoeb_order.py coeffs-plot               # coefficient figures and table from the caches only
+  (AOEB_ORDER_ALL=1: all 1300 modes; coefficient caches *_coeffs*.json next to the residual cache)
 
 Sensor: pyramid rMod RMOD (env AOEB_ORDER_RMOD: 0 unmodulated, default; 1), 48x48, 900 nm, 1300 modes, seeing 0.9", fs 2 kHz (fixed), magnitudes at 900 nm.
 MODES: 30 KL modes log-spaced over 1..1150 (numbered from 1: 1 = tip; MODE_MAX below). Each mode is designed on ITS OWN values (nothing averaged), from
@@ -59,40 +66,87 @@ CACHE = os.path.join(HERE, f'aoeb_order_cache_rmod{RMOD:g}_{TEMPORAL}' + ('_meas
 N_JOBS = int(os.environ.get('AOEB_WIENER_JOBS', 12))
 
 
-def inputs():
-    """Per mode number j: radial order, turbulence / noise (per magnitude) / aliasing [nm^2], og; wind, D, alias spectrum."""
-    import yaml, importlib.util
+class ScaledAliasSpectrum:
+    """Aliasing temporal shape with every wind speed scaled by k: frozen flow is then the same signal in time t * k, S_k(f) = S(f / k) / k
+    (exact up to the folding of the measured spectra at 2 kHz: ~0.05 % of their power above 263 Hz)."""
+    def __init__(self, base, k):
+        self.base, self.k = base, k
+
+    def unit_psd(self, f, n):
+        return self.base.unit_psd(np.asarray(f) / self.k, n) / self.k
+
+
+_MACHINE = []
+
+
+def machine():
+    if not _MACHINE:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('aoeb_e2e_utils', os.path.join(CONFIG, 'aoeb', 'e2e', 'utils.py'))
+        e2e = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(e2e)
+        m = e2e.machine()
+        if ALIAS == 'measured':
+            m.set_alias_psd(ALIAS_PSD)
+        _MACHINE.append(m)
+    return _MACHINE[0]
+
+
+def v_eff(layers):
+    """Effective (tau0) wind speed of [(Cn2 weight, speed)]: (sum w V^(5/3) / sum w)^(3/5)."""
+    w, V = np.array(layers, float).T
+    return float((np.sum(w * V ** (5 / 3)) / w.sum()) ** 0.6)
+
+
+RAND_SEEDS, RAND_SPAN = (1, 2, 3, 4), 2.0    # random wind profiles: each layer speed x log-uniform [1/RAND_SPAN, RAND_SPAN], same V_eff
+
+
+def random_layers(layers, seed):
+    """layers [(Cn2 weight, speed)] with every speed multiplied by its own log-uniform factor in [1/RAND_SPAN, RAND_SPAN] (seeded), then all
+    rescaled to the effective speed of the original profile (so the draws differ in the distribution of speeds, not in V_eff)."""
+    w, V = np.array(layers, float).T
+    V2 = V * np.exp(np.random.default_rng(seed).uniform(-1, 1, len(V)) * np.log(RAND_SPAN))
+    V2 *= v_eff(layers) / v_eff(list(zip(w, V2)))
+    return [(float(a), float(b)) for a, b in zip(w, V2)]
+
+
+def inputs(seeing=SEEING, wind_k=1.0, mags=None, wind_seed=None):
+    """Per mode number j: radial order, turbulence / noise (per magnitude) / aliasing [nm^2], og; wind, D, alias spectrum.
+    seeing: calibration products of that seeing (simulated at 0.6/0.75/0.9/1.05"; aliasing PSD shape kept from 0.9"); wind_k: every layer
+    speed x wind_k (turbulence and aliasing temporal PSDs rescaled in frequency); wind_seed: every layer speed x its own random factor
+    (random_layers), the turbulence PSDs exact, the measured aliasing shape kept (the draws keep the effective speed)."""
+    import yaml
     from specula.lib.n_phot import n_phot
     from aoeb import utils
-    spec = importlib.util.spec_from_file_location('aoeb_e2e_utils', os.path.join(CONFIG, 'aoeb', 'e2e', 'utils.py'))
-    e2e = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(e2e)
-    m = e2e.machine()
-    if ALIAS == 'measured':
-        m.set_alias_psd(ALIAS_PSD)
+    m = machine()
     Y = yaml.safe_load(open(os.path.join(CONFIG, 'aoeb', 'e2e', 'ristretto_main.yml')))
     area = (m.pupil() > 0).sum() * Y['main']['pixel_pitch'] ** 2
-    cal = m.calibration(RMOD, NSUB, SEEING, N, N, ('svd',), WL)
-    turb, rms, _ = m.turbulence(SEEING, N)
-    alias = cal.alias_rms ** 2 * (SEEING / cal.alias_seeing) ** (5 / 3)
+    cal = m.calibration(RMOD, NSUB, seeing, N, N, ('svd',), WL)
+    turb, rms, _ = m.turbulence(seeing, N)
+    alias = cal.alias_rms ** 2 * (seeing / cal.alias_seeing) ** (5 / 3)
     order = utils.radial_order(np.arange(N))
     at = lambda v: {j: float(v[j - 1]) for j in MODES}
     noise = {}
-    for mg in sorted({mg for cases, _ in FIGURES.values() for _, mg in cases}):
+    for mg in (mags or sorted({mg for cases, _ in FIGURES.values() for _, mg in cases})):
         flux = n_phot(mg, lambda_=WL * 1e-9, width=1e-9)[0] * Y['cred_vis']['bandw'] * area      # [ph/s], as Study.flux_of
         ph, ro = cal.noise.modal_variance_parts(m.detector.n_det(flux, FS), m.detector)
         noise[mg] = at((ph + ro) / cal.og ** 2 * rms ** 2)
     if TEMPORAL == 'zernike':        # exact frozen-flow von Karman PSDs of the radial orders, 10 layers (Cn2, speed) of ristretto_main
         from aoeb.temporal import ZernikePSD
-        wind = ZernikePSD(m.D, L0=m.L0, layers=m.alias_layers)
+        layers = [(w, V * wind_k) for w, V in (m.alias_layers if wind_seed is None else random_layers(m.alias_layers, wind_seed))]
+        wind = ZernikePSD(m.D, L0=m.L0, layers=layers)
         for n in sorted({int(order[j - 1]) for j in MODES}):
             wind.unit_psd(1.0, n)     # tables built once here (the workers get them with the task)
         tlabel = f'frozen flow, {len(m.alias_layers)} layers of ristretto_main'
     else:
-        wind, tlabel = m.wind, f'Conan, wind {m.wind:.1f} m/s'
+        layers = [(1.0, m.wind * wind_k)]
+        wind, tlabel = m.wind * wind_k, f'Conan, wind {m.wind * wind_k:.1f} m/s'
     tlabel += (f'; aliasing PSD measured per radial order (rMod {RMOD:g}, rotated winds)' if ALIAS == 'measured' else '; aliasing PSD AliasSpectrum')
+    alias_spec = m.alias_spectrum(WL, N, RMOD)
+    if wind_k != 1.0:
+        alias_spec = ScaledAliasSpectrum(alias_spec, wind_k)
     return dict(tlabel=tlabel, order={j: int(order[j - 1]) for j in MODES}, turb=at(turb * rms ** 2), alias=at(alias / cal.og ** 2 * rms ** 2),
-                og=at(cal.og), noise=noise, wind=wind, D=m.D, alias_spec=m.alias_spectrum(WL, N, RMOD))
+                og=at(cal.og), noise=noise, wind=wind, D=m.D, alias_spec=alias_spec, v_eff=v_eff(layers))
 
 
 def make_spec(total, n, turb, noise, alias, wind, D, alias_spec):
@@ -318,8 +372,194 @@ def table(total=2.0, mags=(5.0, 8.0, 11.0), cache=None):
     return '\n'.join(rows)
 
 
+COEF_CASES = [(2.0, 5.0), (2.0, 8.0), (2.0, 11.0), (1.5, 8.0), (2.5, 8.0), (2.0, 6.0), (2.0, 7.0)]
+COEF_CACHE = CACHE.replace('.json', '_coeffs.json')
+
+
+def dump(obj, path):
+    """json.dump through a temporary file and an atomic rename (readers never see a partial cache)."""
+    json.dump(obj, open(path + '.tmp', 'w'))
+    os.replace(path + '.tmp', path)
+
+
+def coef_task(args):
+    """Leaky integrator (G, leak) and IIR2 POL filter (b, a) of one (delay, magnitude, mode), with their residuals [nm^2]."""
+    from wiener_ao_iir import wiener_iir
+    from ao_tools import optimal_leaky_integrator
+    spec = make_spec(*args)
+    (G, l), jl = optimal_leaky_integrator(spec)
+    b, a, j2 = wiener_iir(spec, 2)[2]['lower'][1]
+    return dict(G=float(G), leak=float(l), b=[float(x) for x in b], a=[float(x) for x in a], res=[float(jl), float(j2)])
+
+
+def compute_coeffs():
+    """{key: coefficients} for COEF_CASES and MODES (resumable cache COEF_CACHE); residuals checked against CACHE."""
+    I = inputs(mags=sorted({mg for _, mg in COEF_CASES}))
+    tag = repr((RMOD, NSUB, WL, SEEING, N, FS, 'coeffs'))
+    done = json.load(open(COEF_CACHE)) if os.path.exists(COEF_CACHE) else {}
+    done = done if done.get('tag') == tag else {'tag': tag}
+    plot_first = set(log_modes(N_PLOT, MODE_MAX))
+    jobs = {key(t, mg, j): (t, I['order'][j], I['turb'][j], I['noise'][mg][j], I['alias'][j], I['wind'], I['D'], I['alias_spec'])
+            for t, mg in COEF_CASES for j in sorted(MODES, key=lambda j: (j not in plot_first, -(I['order'][j] < 4)))}
+    todo = {k: v for k, v in jobs.items() if k not in done}
+    print(f'{len(jobs) - len(todo)} cached, {len(todo)} to design on {N_JOBS} workers', flush=True)
+    if todo:
+        import multiprocessing as mp
+        with mp.get_context('fork').Pool(min(len(todo), N_JOBS)) as pool:
+            for i, (k, r) in enumerate(zip(todo, pool.imap(coef_task, todo.values(), chunksize=1))):
+                done[k] = r
+                if i % 20 == 0 or i == len(todo) - 1:
+                    dump(done, COEF_CACHE)
+                    print(f'[{i + 1}/{len(todo)}]', flush=True)
+    res = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
+    d = [abs(done[k]['res'][i] / res[k][i + 1] - 1) for k in jobs if k in res for i in (0, 1)]
+    print(f'residuals vs {os.path.basename(CACHE)}: {len(d) // 2} designs compared, max rel diff {max(d, default=np.nan):.1e}')
+    return done, I
+
+
+ENV_T, ENV_MAG = 2.0, 8.0                                    # seeing and wind sweeps: total delay 2 frames, magnitude 8
+ENV_SEEINGS, ENV_WINDS = (0.6, 0.75, 0.9, 1.05), (0.5, 0.75, 1.0, 1.5, 2.0)   # calibrated seeings ["]; wind speed factors
+ENV_CASES = [(s, 1.0) for s in ENV_SEEINGS if s != SEEING] + [(SEEING, k) for k in ENV_WINDS if k != 1.0]
+RAND_CASES = [(SEEING, 1.0, r) for r in RAND_SEEDS]
+ENV_CACHE = CACHE.replace('.json', '_coeffs_env.json')
+RAND_CACHE = CACHE.replace('.json', '_coeffs_rand.json')
+
+
+def ekey(t, mg, j, s=SEEING, k=1.0, r=None):
+    return key(t, mg, j) + ('' if (s, k) == (SEEING, 1.0) else f'|s{s:g}|v{k:g}') + ('' if r is None else f'|r{r}')
+
+
+def compute_env(random=False):
+    """{ekey: coefficients} at ENV_T, ENV_MAG for ENV_CASES (seeing, wind factor) and MODES (resumable cache ENV_CACHE). The 30 plotted
+    modes of every case are designed first."""
+    cache = RAND_CACHE if random else ENV_CACHE
+    done = json.load(open(cache)) if os.path.exists(cache) else {}
+    tag = repr((RMOD, NSUB, WL, N, FS, 'coeffs_rand' if random else 'coeffs_env'))   # coeffs_env: as the running sweep's cache
+    done = done if done.get('tag') == tag else {'tag': tag}
+    plot_first = set(log_modes(N_PLOT, MODE_MAX))
+    jobs, veff = [], {}
+    for s, k, *r in (RAND_CASES if random else ENV_CASES):
+        r = r[0] if r else None
+        I = inputs(s, k, mags=[ENV_MAG], wind_seed=r)
+        veff[f'{k:g}' if r is None else f'r{r}'] = I['v_eff']
+        jobs += [((j not in plot_first, -(I['order'][j] < 4)), ekey(ENV_T, ENV_MAG, j, s, k, r),
+                  (ENV_T, I['order'][j], I['turb'][j], I['noise'][ENV_MAG][j], I['alias'][j], I['wind'], I['D'], I['alias_spec']))
+                 for j in MODES]
+    done['v_eff' if not random else 'v_eff_rand'] = veff
+    jobs = {kk: v for _, kk, v in sorted(jobs, key=lambda x: x[0])}
+    todo = {kk: v for kk, v in jobs.items() if kk not in done}
+    print(f'effective wind speeds [m/s]: {veff}; {len(jobs) - len(todo)} cached, {len(todo)} to design on {N_JOBS} workers', flush=True)
+    if todo:
+        import multiprocessing as mp
+        with mp.get_context('fork').Pool(min(len(todo), N_JOBS)) as pool:
+            for i, (kk, r) in enumerate(zip(todo, pool.imap(coef_task, todo.values(), chunksize=1))):
+                done[kk] = r
+                if i % 20 == 0 or i == len(todo) - 1:
+                    dump(done, cache)
+                    print(f'[{i + 1}/{len(todo)}]', flush=True)
+    return done
+
+
+def coef_groups(veff=None):
+    """Figures of plot_coeffs: (name, subtitle, [(label, key of mode j)])."""
+    veff = veff or {}
+    vl = lambda k: f'wind x{k:g}' + (f' (V$_{{eff}}$ {veff[f"{k:g}"]:.1f} m/s)' if f'{k:g}' in veff else '')
+    return [('mags', 'total delay 2 frames, seeing 0.9"', [(f'mag {mg:g}', lambda j, mg=mg: key(2.0, mg, j)) for mg in (5.0, 8.0, 11.0)]),
+            ('mags678', 'total delay 2 frames, seeing 0.9"', [(f'mag {mg:g}', lambda j, mg=mg: key(2.0, mg, j)) for mg in (6.0, 7.0, 8.0)]),
+            ('delays', 'magnitude 8, seeing 0.9"', [(f'total delay {t:g} frames', lambda j, t=t: key(t, 8.0, j)) for t in (1.5, 2.0, 2.5)]),
+            ('seeing', 'magnitude 8, total delay 2 frames', [(f'seeing {s:g}"', lambda j, s=s: ekey(ENV_T, ENV_MAG, j, s)) for s in ENV_SEEINGS]),
+            ('wind', 'magnitude 8, total delay 2 frames, seeing 0.9"', [(vl(k), lambda j, k=k: ekey(ENV_T, ENV_MAG, j, SEEING, k))
+                                                                         for k in ENV_WINDS]),
+            ('windrand', f'magnitude 8, total delay 2 frames, seeing 0.9"; random layer speeds (x log-uniform 1/{RAND_SPAN:g}..{RAND_SPAN:g}, '
+                         'rescaled to the same V$_{eff}$)',
+             [('ristretto_main speeds', lambda j: key(ENV_T, ENV_MAG, j))]
+             + [(f'random draw {r}', lambda j, r=r: ekey(ENV_T, ENV_MAG, j, SEEING, 1.0, r)) for r in RAND_SEEDS])]
+
+
+def plot_coeffs(done, groups, n_bins=30, modes=None):
+    """One figure per group (coef_groups), vs KL mode: leaky gain G, leak; IIR2 b0, b1, b2 (one panel) and a1, a2
+    (one panel). Colour: case of the group; line style: coefficient index."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    modes = modes or MODES
+    panels = [('Leaky integrator: gain G', [('', lambda c: c['G'])], True),
+              ('Leaky integrator: leak', [('', lambda c: c['leak'])], False),
+              ('IIR2 numerator: b0, b1, b2', [(f'b{i}', lambda c, i=i: c['b'][i]) for i in range(3)], False),
+              ('IIR2 denominator: a1, a2', [(f'a{i}', lambda c, i=i: c['a'][i]) for i in (1, 2)], False)]
+    styles = ['-', '--', ':']
+    colors = ['tab:blue', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown']
+    out = []
+    for name, sub, lines in groups:
+        fig, axs = plt.subplots(2, 2, figsize=(16, 10))
+        axs = axs.flat
+        dense = False
+        for (title, coefs, logy), ax in zip(panels, axs):
+            for (lab, kf), col in zip(lines, colors):
+                js = np.array([j for j in modes if kf(j) in done])
+                if not len(js):
+                    continue
+                for (cn, fn), ls in zip(coefs, styles):
+                    y = np.array([fn(done[kf(j)]) for j in js])
+                    if len(js) > 100:          # thin per mode + median in log bins
+                        dense = True
+                        ax.plot(js, y, color=col, lw=0.3, alpha=0.2, ls='-')
+                        e = np.unique(np.round(np.geomspace(1, js.max() + 1, n_bins)))
+                        xb, yb = zip(*[(np.exp(np.mean(np.log(js[s]))), np.median(y[s])) for lo, hi in zip(e[:-1], e[1:])
+                                       for s in [(js >= lo) & (js < hi)] if s.any()])
+                        ax.plot(xb, yb, color=col, lw=2, ls=ls)
+                    else:
+                        ax.plot(js, y, color=col, lw=1.5, ls=ls, marker='o', ms=3)
+            ax.set_xscale('log')
+            if logy:
+                ax.set_yscale('log')
+            ax.set_title(title)
+            ax.set_xlabel('KL mode')
+            ax.grid(True, which='both', alpha=0.3)
+            if len(coefs) > 1:
+                ax.legend([Line2D([], [], color='k', ls=ls) for _, ls in zip(coefs, styles)], [cn for cn, _ in coefs],
+                          loc='best', fontsize=9)
+        axs[0].legend([Line2D([], [], color=c, lw=2) for _, c in zip(lines, colors)], [lab for lab, _ in lines], fontsize=8)
+        fig.suptitle(f'Controller coefficients, pyramid rMod {RMOD:g}, 48x48, 900 nm, fs 2 kHz, {sub}.\n'
+                     'Leaky: C(z) = G / (1 - leak z$^{-1}$) on the residual; IIR2: POL filter F(z) = (b0 + b1 z$^{-1}$ + b2 z$^{-2}$) / '
+                     '(1 + a1 z$^{-1}$ + a2 z$^{-2}$)' + ('; thin: per mode, bold: median in log bins' if dense else ''), fontsize=10)
+        fig.tight_layout()
+        f = os.path.join(HERE, f'coeffs_aoeb_rmod{RMOD:g}_{name}{"_all" if len(modes) > 100 else ""}.png')
+        fig.savefig(f, dpi=130)
+        plt.close(fig)
+        out.append(f)
+    return out
+
+
+def coef_table(done, js=(1, 2, 5, 10, 30, 100, 300, 600, 1000, 1150)):
+    rows = ['| delay | mag | mode | G | leak | b0 | b1 | b2 | a1 | a2 | res leaky / IIR2 [nm²] |', '|---|---|---|---|---|---|---|---|---|---|---|']
+    for t, mg in COEF_CASES:
+        for j in js:
+            c = done.get(key(t, mg, j))
+            if c:
+                rows.append(f'| {t:g} | {mg:g} | {j} | {c["G"]:.3f} | {c["leak"]:.4f} | ' + ' | '.join(f'{x:+.4f}' for x in c['b'] + c['a'][1:])
+                            + f' | {c["res"][0]:.3g} / {c["res"][1]:.3g} |')
+    return '\n'.join(rows)
+
+
 if __name__ == '__main__':
-    if sys.argv[1:2] == ['table']:           # python aoeb_order.py table [cache.json]: total residual per controller
+    if sys.argv[1:2] in (['coeffs'], ['coeffs-plot'], ['coeffs-env'], ['coeffs-rand']):
+        # coeffs: leaky and IIR2 coefficients vs magnitude and delay (designed, cached); coeffs-env: vs seeing and wind speed;
+        # coeffs-plot: all figures and the table from the caches only
+        if sys.argv[1] == 'coeffs':
+            compute_coeffs()
+        if sys.argv[1] in ('coeffs-env', 'coeffs-rand'):
+            compute_env(random=sys.argv[1] == 'coeffs-rand')
+        done = {**(json.load(open(RAND_CACHE)) if os.path.exists(RAND_CACHE) else {}),
+                **(json.load(open(ENV_CACHE)) if os.path.exists(ENV_CACHE) else {}), **json.load(open(COEF_CACHE))}
+        print(coef_table(done))
+        for f in plot_coeffs(done, coef_groups(done.get('v_eff'))):
+            print(f)
+        if ALL_MODES:              # also the 30 plotted modes only
+            for f in plot_coeffs(done, coef_groups(done.get('v_eff')), modes=log_modes(N_PLOT, MODE_MAX)):
+                print(f)
+    elif sys.argv[1:2] == ['table']:          # python aoeb_order.py table [cache.json]: total residual per controller
         print(table(cache=sys.argv[2] if len(sys.argv) > 2 else None))
     elif sys.argv[1:2] == ['ratios']:          # python aoeb_order.py ratios: from the cache only
         print(plot_ratios())
