@@ -30,8 +30,11 @@ sys.path[:0] = [HERE, CONFIG, os.path.join(CONFIG, 'aoeb', 'e2e')]
 RMOD = float(os.environ.get('AOEB_ORDER_RMOD', 0.0))           # modulation [lambda/D]: 0 (unmodulated) or 1
 TEMPORAL = os.environ.get('AOEB_ORDER_TEMPORAL', 'zernike')    # 'zernike': multi-layer frozen flow (default); 'conan': one effective wind
 ALIAS = os.environ.get('AOEB_ORDER_ALIAS', 'measured')          # 'measured': per-radial-order measured aliasing PSDs (A10b); 'model': AliasSpectrum
-ALIAS_DIR = '/raid1/mmenessini/results/WFSW/alias_psd/modes'   # aliasing PSD study (2026-11-06): frozen flow, 0.9", 48x48, 2 kHz, 8 s
-ALIAS_PSD = {1300: [f'{ALIAS_DIR}/base_seed{i}.npz' for i in (1, 2, 3, 4)], 300: [f'{ALIAS_DIR}/n48_N300.npz', f'{ALIAS_DIR}/n24_N300.npz']}
+# measured aliasing runs per modulation (frozen flow, 10-layer ristretto profile, 0.9", 48x48, 2 kHz, 8 s; wind directions rotated by
+# 0/45/90/135 deg, 4 seeds each at N 1300, one per rotation at N 300): results/WFSW/alias_psd_rmod<r>/modes (run_rmod<r>.py)
+_A = '/raid1/mmenessini/results/WFSW/alias_psd_rmod{r:g}/modes/r{r:g}_'
+ALIAS_PSD = {r: {1300: [_A.format(r=r) + f'rot{a}_seed{s}.npz' for a in (0, 45, 90, 135) for s in (1001, 1101, 1201, 1301)],
+                 300: [_A.format(r=r) + f'N300_rot{a}.npz' for a in (0, 45, 90, 135)]} for r in (0.0, 1.0)}
 NSUB, WL, SEEING, N, FS = 48, 900.0, 0.9, 1300, 2000.0
 MODE_MAX, N_PLOT = 1150, 30
 # MODE_MAX: the measured aliasing of the controlled modes grows towards the cut-off (rMod 1: 0.09 nm^2 at 779, ~0.25 at 1100-1150, ~0.5
@@ -52,7 +55,7 @@ FIGURES = {'delay2': ([(2.0, 5.0), (2.0, 11.0)], (0, 1, 2, 3)),   # name: ([(tot
            'mag8': ([(1.5, 8.0), (2.0, 8.0), (2.5, 8.0)], (1, 2))}  # style each, controllers shown (indices in LABELS))
 LABELS = ['Integrator (leak = 1)', 'Leaky integrator', 'IIR Wiener, N=2', 'Wiener bound (N = ∞)']
 COLORS, MARKERS = ['0.5', 'k', 'tab:orange', 'tab:red'], ['v', 'o', 's', '^']
-CACHE = os.path.join(HERE, f'aoeb_order_cache_rmod{RMOD:g}_{TEMPORAL}' + ('_measalias' if ALIAS == 'measured' else '') + '.json')   # one entry per (delay, magnitude, mode): resumable
+CACHE = os.path.join(HERE, f'aoeb_order_cache_rmod{RMOD:g}_{TEMPORAL}' + ('_measalias2' if ALIAS == 'measured' else '') + '.json')   # measalias2: rotated per-rMod runs   # one entry per (delay, magnitude, mode): resumable
 N_JOBS = int(os.environ.get('AOEB_WIENER_JOBS', 12))
 
 
@@ -66,7 +69,7 @@ def inputs():
     spec.loader.exec_module(e2e)
     m = e2e.machine()
     if ALIAS == 'measured':
-        m.alias_psd = ALIAS_PSD
+        m.set_alias_psd(ALIAS_PSD)
     Y = yaml.safe_load(open(os.path.join(CONFIG, 'aoeb', 'e2e', 'ristretto_main.yml')))
     area = (m.pupil() > 0).sum() * Y['main']['pixel_pitch'] ** 2
     cal = m.calibration(RMOD, NSUB, SEEING, N, N, ('svd',), WL)
@@ -87,9 +90,9 @@ def inputs():
         tlabel = f'frozen flow, {len(m.alias_layers)} layers of ristretto_main'
     else:
         wind, tlabel = m.wind, f'Conan, wind {m.wind:.1f} m/s'
-    tlabel += '; aliasing PSD measured per radial order' if ALIAS == 'measured' else '; aliasing PSD AliasSpectrum'
+    tlabel += (f'; aliasing PSD measured per radial order (rMod {RMOD:g}, rotated winds)' if ALIAS == 'measured' else '; aliasing PSD AliasSpectrum')
     return dict(tlabel=tlabel, order={j: int(order[j - 1]) for j in MODES}, turb=at(turb * rms ** 2), alias=at(alias / cal.og ** 2 * rms ** 2),
-                og=at(cal.og), noise=noise, wind=wind, D=m.D, alias_spec=m.alias_spectrum(WL, N))
+                og=at(cal.og), noise=noise, wind=wind, D=m.D, alias_spec=m.alias_spectrum(WL, N, RMOD))
 
 
 def make_spec(total, n, turb, noise, alias, wind, D, alias_spec):
@@ -300,8 +303,25 @@ def plot_ratios(mags=(5.0, 8.0, 11.0), total=2.0, mg_delay=8.0, delays=(1.5, 2.0
     return fname
 
 
+def table(total=2.0, mags=(5.0, 8.0, 11.0), cache=None):
+    """Root sum of squares over all N controlled modes [nm rms] per controller at `total` and `mags`, from a cache (default CACHE) whose
+    cases are complete; markdown rows. The fitting error (modes above N) is not included."""
+    done = json.load(open(cache or CACHE))
+    rows = ['| mag | integrator | leaky | IIR2 | Wiener bound | leaky / IIR2 |', '|---|---|---|---|---|---|']
+    for mg in mags:
+        ks = [key(total, mg, j) for j in range(1, N + 1)]
+        if not all(k in done for k in ks):
+            rows.append(f'| {mg:g} | incomplete ({sum(k in done for k in ks)}/{N} modes) |')
+            continue
+        v = np.sqrt(np.sum([done[k] for k in ks], axis=0))
+        rows.append(f'| {mg:g} | {v[0]:.1f} | {v[1]:.1f} | {v[2]:.1f} | {v[3]:.1f} | {v[1] / v[2]:.2f} |')
+    return '\n'.join(rows)
+
+
 if __name__ == '__main__':
-    if sys.argv[1:2] == ['ratios']:          # python aoeb_order.py ratios: from the cache only
+    if sys.argv[1:2] == ['table']:           # python aoeb_order.py table [cache.json]: total residual per controller
+        print(table(cache=sys.argv[2] if len(sys.argv) > 2 else None))
+    elif sys.argv[1:2] == ['ratios']:          # python aoeb_order.py ratios: from the cache only
         print(plot_ratios())
     elif sys.argv[1:2] == ['tf']:               # python aoeb_order.py tf [mode [mag [total delay]]]
         print(plot_tf(*[int(x) for x in sys.argv[2:3]], *map(float, sys.argv[3:5])))

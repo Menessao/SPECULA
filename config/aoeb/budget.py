@@ -166,8 +166,7 @@ class ErrorBudgetMachine:
         self.D, self.L0, self.wind = diameter, L0, wind
         self.alias_layers = ((1.0, wind),) if alias_layers is None else alias_layers    # (Cn2, speed) of the aliasing spectrum (A10)
         self._alias = {}
-        self.alias_psd = {int(k): list(v) for k, v in (alias_psd or {}).items()}   # {N corrected: [files]}: measured aliasing PSDs (A10b)
-        self._alias_measured = {}
+        self.set_alias_psd(alias_psd)
         self.temporal = temporal        # None: Conan spectra with the effective wind; or temporal.ZernikePSD (multi-layer frozen flow)
         self.detector = detector if detector is not None else Detector()
         self.modes_per_subap = dict(modes_per_subap or DEFAULT_MODES_PER_SUBAP)
@@ -441,26 +440,38 @@ class ErrorBudgetMachine:
                            lambda: read_rec(rpath) @ (utils.read_fits(im_path)[:, :N] * scale), og_by_level=by_level, alias_seeing=seeing)
 
     # ---- loop tables
-    def alias_spectrum(self, wavelength_nm=None, N_corr=None):
+    def set_alias_psd(self, alias_psd):
+        """Measured aliasing PSDs (A10b): {N corrected: [files]} (any rMod) and / or {rMod: {N corrected: [files]}} (that modulation
+        first); None: AliasSpectrum (A10) everywhere. Clears the measured spectra already built."""
+        self.alias_psd = {}
+        for k, v in (alias_psd or {}).items():
+            if isinstance(v, dict):
+                self.alias_psd.setdefault(float(k), {}).update({int(n): list(f) for n, f in v.items()})
+            else:
+                self.alias_psd.setdefault(None, {})[int(k)] = list(v)
+        self._alias_measured = {}
+
+    def alias_spectrum(self, wavelength_nm=None, N_corr=None, rMod=None):
         """Temporal spectrum of the aliasing at a sensing wavelength (A10; None: the reference, 900 nm). With alias_psd (A10b) and N_corr
-        measured: the measured per-radial-order spectra of that N (nearest measured wavelength); otherwise AliasSpectrum (warned once)."""
+        measured: the measured per-radial-order spectra of that N (of that rMod if listed for it; nearest measured wavelength); otherwise
+        AliasSpectrum (warned once)."""
         wl = self._wl(wavelength_nm)
         if self.alias_psd and N_corr is not None:
-            key = (wl, int(N_corr))
+            key = (wl, int(N_corr), None if rMod is None else float(rMod))
             if key not in self._alias_measured:
-                self._alias_measured[key] = self._measured_alias(wl, int(N_corr))
+                self._alias_measured[key] = self._measured_alias(wl, int(N_corr), rMod)
             if self._alias_measured[key] is not None:
                 return self._alias_measured[key]
         if wl not in self._alias:
             self._alias[wl] = AliasSpectrum(self.alias_layers, wl)
         return self._alias[wl]
 
-    def _measured_alias(self, wl, N):
+    def _measured_alias(self, wl, N, rMod=None):
         """MeasuredAliasSpectrum of N corrected modes at the measured wavelength nearest wl, None (with a warning) if N is not measured."""
         from .filter_optimizers import MeasuredAliasSpectrum
-        files = self.alias_psd.get(N)
+        files = (self.alias_psd.get(None if rMod is None else float(rMod), {}).get(N) or self.alias_psd.get(None, {}).get(N))
         if not files:
-            warnings.warn(f'alias_psd: no measured aliasing spectrum for {N} corrected modes: AliasSpectrum (A10) used')
+            warnings.warn(f'alias_psd: no measured aliasing spectrum for {N} corrected modes (rMod {rMod}): AliasSpectrum (A10) used')
             return None
         with np.load(files[0]) as z:
             wls = [float(k[6:]) for k in z.files if k.startswith('modes_')]
@@ -560,7 +571,7 @@ class ErrorBudgetMachine:
         if chromatic is not None and wl is None:
             raise ValueError('chromatic terms need the sensing wavelength: give wavelength_nm')
         eta = chromatic.eta(wl) if mult else None
-        tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wl, N_corr), ff_grid, n_fold, iir, wiener=ctl == 'wiener')
+        tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wl, N_corr, rMod), ff_grid, n_fold, iir, wiener=ctl == 'wiener')
         photon, readout = cal.noise.modal_variance_parts(self.detector.n_det(flux, fs), self.detector)
         noise_cmd = photon + readout
         alias_cmd = cal.alias_rms ** 2 * (seeing / cal.alias_seeing) ** (5 / 3)            # Kolmogorov: alias variance ~ r0^(-5/3)
@@ -768,7 +779,7 @@ class ErrorBudgetMachine:
             extra.update(cm.variances(r0, self.L0, k_cut, wl_eff, self._k_nyquist()))
             bands = [(cm, 0.0, k_cut, wl_eff)]
         ff = tuple(ff_grid if ff_grid is not None else (DEFAULT_FF_GRID if controller == 'leaky' else (1.0,)))
-        tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wls[int(np.argmax(wbar))], N), ff, n_fold,
+        tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wls[int(np.argmax(wbar))], N, sensors[int(np.argmax(wbar))].get('rMod')), ff, n_fold,
                                    wiener=controller == 'wiener')
         opt = self._solve(tables, turb_cmd, noise_cmd, alias_cmd, np.ones(N), orders, xt)
         desc = ' + '.join(f"{s['n_subap']}x{s['n_subap']} rMod {s['rMod']:g} {s['wavelength_nm']:.0f}nm"

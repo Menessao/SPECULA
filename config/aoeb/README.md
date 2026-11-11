@@ -134,7 +134,7 @@ the nearest one of the same radial order (3–6x faster): one budget takes from 
 (or a narrow frame-rate range) in scans. A warning is given when a filter's peak rejection exceeds `loop.max_sensitivity` (the design
 itself has no robustness constraint). The integrator / leaky optimisation is unchanged (`controller='int'` / `'leaky'`).
 
-**Aliasing spectra.** By default the aliasing has one empirical temporal shape for every mode (A10). `alias_psd={N: [npz files]}` (machine argument; `options.alias_psd`) uses instead the MEASURED shape of each radial order for the N listed (A10b, `MeasuredAliasSpectrum`, built in a few seconds from the aliasing PSD study's mode time series); other N keep A10, with a warning.
+**Aliasing spectra.** By default the aliasing has one empirical temporal shape for every mode (A10). `alias_psd={N: [npz files]}` or `{rMod: {N: [npz files]}}` (the shape depends on the modulation: use the runs of the sensor's own rMod) (machine argument; `options.alias_psd`) uses instead the MEASURED shape of each radial order for the N listed (A10b, `MeasuredAliasSpectrum`, built in a few seconds from the aliasing PSD study's mode time series); other N keep A10, with a warning.
 
 **Temporal spectra.** By default the temporal PSD of each radial order is Conan's (1995) asymptotic model with one effective wind;
 `atmosphere.temporal: zernike` (or `ErrorBudgetMachine(temporal=ZernikePSD(D, L0=L0, layers=[(cn2, speed), ...]))`, `aoeb/temporal.py`)
