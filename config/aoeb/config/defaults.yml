@@ -72,6 +72,8 @@ options:
   optimize_freq: true                   # loop.fs values are MAXIMA: lower frame rates (grid freq_min * 2^(k/3)) are tried, the best is kept
   optimize_modes: true                  # sensors.modes_per_subap values are MAXIMA: the other calibrated counts below are tried too
   freq_min: 100.0                       # [Hz] lowest frame rate tried
+  alias_psd: null                       # measured aliasing temporal PSDs (A10b), per radial order: {N corrected: [npz files with modes_<wavelength>]};
+                                        # other N keep AliasSpectrum (A10). e.g. {1300: [.../alias_psd/modes/base_seed1.npz, ...]}
 
 generation:                             # SPECULA calibration runs (generator); every realisation is its own run with seed = seed0 + i + 1
   pixel_pupil: null                     # main.pixel_pupil (must match the pupilstop and the DM influence functions); null: the pupilstop array size.

@@ -88,6 +88,7 @@ class SplitStudy:
         self.st, self.m, self.cm = st, st.m, dataclasses.replace(chromatic, multiplicative=False, fresnel=False, scintillation=False)
         self.n_sci = float(self.cm.n_minus_1(self.cm.science_nm))
         st.set_band(self.cm.science_nm, self.cm)
+        self._rates = {}
 
     def _dn(self, s):
         return float(s.get('n_minus_1') or self.cm.n_minus_1(s['wavelength_nm'])) - self.n_sci
@@ -124,8 +125,20 @@ class SplitStudy:
 
     def fused(self, sensors, weights='min_noise', chromatic=True, fs=None):
         """Fused budget of `sensors` (one or two) with the given weighting; fs None: rate of the grid minimising the total residual of the
-        min_noise system (the weighting is then optimised at that rate). Returns the BudgetResult (params['weights'], ['weight_shift_zone'])."""
+        min_noise system (the weighting is then optimised at that rate). Returns the BudgetResult (params['weights'], ['weight_shift_zone']).
+        Study criterion 'contrast' and fs None (multiwfs): one sensor -> the (binning, rate) of st.binnings x the rate grid ranked first
+        by st._contrast_key (each binning with all its calibrated modes); two sensors -> the rate ranking the min_noise system first,
+        then the weighting at that rate."""
         m, st = self.m, self.st
+        if fs is None and getattr(st, 'criterion', 'strehl') == 'contrast':
+            if len(sensors) == 1:
+                cands = [self.fused([{**sensors[0], 'n_subap': n}], weights, chromatic, fs=f)
+                         for n in st.binnings for f in st.fs_grid]
+                return min(cands, key=st._contrast_key)
+            key = (repr(sensors), bool(chromatic), st.sci_nm)              # the rate of a pair is shared by its three weightings
+            if key not in self._rates:
+                self._rates[key] = min(st.fs_grid, key=lambda f: st._contrast_key(self.fused(sensors, 'min_noise', chromatic, fs=f)))
+            return self.fused(sensors, weights, chromatic, fs=self._rates[key])
         kw = {**st.kw, 'optimize_freq': fs is None}
         cm = self.cm if chromatic else None
         base = m.budget_fused(sensors, st.seeing, fs or st.fs_max, chromatic=cm, warn=False, **kw)
@@ -167,5 +180,5 @@ class SplitStudy:
         """Contrast (zone, science wavelength), Strehl, chromatic and total residual [nm rms], frame rate, zone-weighted dn, weights."""
         v = r.variances()
         return dict(extra, contrast=self.st.contrast(r), sr=r.strehl(self.cm.science_nm), total_nm=np.sqrt(v['total']),
-                    chrom_nm=np.sqrt(v.get('chrom_shear', 0.0)), fs=r.params['freqUsedInHz'], dn_eff_zone=r.params.get('dn_eff_zone', np.nan),
+                    chrom_nm=np.sqrt(v.get('chrom_shear', 0.0)), fs=r.params['freqUsedInHz'], n_subap=r.params.get('Nsubaps', np.nan), dn_eff_zone=r.params.get('dn_eff_zone', np.nan),
                     weight_shift_zone=r.params.get('weight_shift_zone', 0.0))

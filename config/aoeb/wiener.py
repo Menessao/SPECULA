@@ -309,7 +309,7 @@ class _Designer:
         from . import filter_optimizers as fo
         nu, al = 0.0 if qn is None else 10 ** qn, 0.0 if qa is None else 10 ** qa
         return ModeSpectra(lambda f: fo.unit_psd(f, n, self.wind, self.D), self.fs, self.latency,
-                           S_alias=None if al == 0 else (lambda f: al * self.alias.unit_psd(f)),
+                           S_alias=None if al == 0 else (lambda f: al * self.alias.unit_psd(f, n)),    # per radial order (A10b)
                            noise=nu, M=self.M, n_fold=self.design_fold)
 
     def _near(self, n, qn, qa):
@@ -360,7 +360,7 @@ class WienerTables(_Designer):
             self.warned = True
             import warnings
             warnings.warn(f'Wiener filter of radial order {n}: peak rejection {peak:.2f} above the modulus margin {self.max_sensitivity}')
-        self.cache[key] = (b, a, t_t[o, 0], t_c[o, 0], (2.0 / self.fs) * float(k2[0] @ self.g['w_edge']), float(k2[0] @ self.g['s_alias']))
+        self.cache[key] = (b, a, t_t[o, 0], t_c[o, 0], (2.0 / self.fs) * float(k2[0] @ self.g['w_edge']), float(k2[0] @ self.g['s_alias'][o]))
 
     def _design(self, n, qn, qa):
         key = (int(n), qn, qa)

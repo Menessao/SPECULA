@@ -1,0 +1,25 @@
+group,configuration,band,quantity,5.0,8.0,12.0
+flux-added,case 1: double flux,NIR,SR,1.001,1.003,1.026
+flux-added,case 1: double flux,NIR,contrast,0.829,0.727,0.682
+flux-added,case 1: double flux,VIS,SR,1.005,1.027,1.274
+flux-added,case 1: double flux,VIS,contrast,0.943,0.845,0.815
+flux-added,case 2: double flux,NIR,SR,1.0,1.0,1.012
+flux-added,case 2: double flux,NIR,contrast,0.841,0.735,0.464
+flux-added,case 2: double flux,VIS,SR,1.001,1.005,1.122
+flux-added,case 2: double flux,VIS,contrast,0.949,0.843,0.605
+flux-added,combined: mod 900 + unmod 1300,NIR,SR,1.001,1.007,1.06
+flux-added,combined: mod 900 + unmod 1300,NIR,contrast,0.638,0.484,0.4
+flux-added,combined: mod 900 + unmod 1300,VIS,SR,1.009,1.034,1.302
+flux-added,combined: mod 900 + unmod 1300,VIS,contrast,0.791,0.677,0.639
+flux-added,combined: unmod 900 + mod 1300,NIR,SR,1.001,1.007,1.06
+flux-added,combined: unmod 900 + mod 1300,NIR,contrast,0.644,0.464,0.38
+flux-added,combined: unmod 900 + mod 1300,VIS,SR,1.008,1.036,1.298
+flux-added,combined: unmod 900 + mod 1300,VIS,contrast,0.797,0.653,0.609
+flux-equated,case 2: optimal split,NIR,SR,1.0,1.0,1.001
+flux-equated,case 2: optimal split,NIR,contrast,1.001,1.003,0.73
+flux-equated,case 2: optimal split,VIS,SR,1.0,0.999,1.005
+flux-equated,case 2: optimal split,VIS,contrast,1.0,1.001,0.834
+flux-equated,"case 3: rMod 2 + rMod 0, 50/50",NIR,SR,1.0,1.003,1.005
+flux-equated,"case 3: rMod 2 + rMod 0, 50/50",NIR,contrast,0.816,0.76,0.925
+flux-equated,"case 3: rMod 2 + rMod 0, 50/50",VIS,SR,1.003,1.015,1.018
+flux-equated,"case 3: rMod 2 + rMod 0, 50/50",VIS,contrast,0.951,0.88,0.956

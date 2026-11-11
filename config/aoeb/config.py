@@ -129,7 +129,8 @@ class Config:
                                   asm=o['asm'], max_sensitivity=self.d['loop']['max_sensitivity'], optimize_freq=o['optimize_freq'],
                                   optimize_modes=o['optimize_modes'], freq_min=o['freq_min'],
                                   wiener_order=self.d['loop']['wiener_order'], temporal=self.temporal(),
-                                  alias_layers=list(zip(self.d['atmosphere']['cn2'], self.d['atmosphere']['wind_speed'])), **kw)
+                                  alias_layers=list(zip(self.d['atmosphere']['cn2'], self.d['atmosphere']['wind_speed'])),
+                                  alias_psd=o['alias_psd'], **kw)
 
     def iir(self):
         """IirControllers of loop.iir_file (a file saved by SPECULA's IirFilterData); loop.iir_optimize_gain: optimise the global gain."""
