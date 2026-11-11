@@ -5,6 +5,7 @@ Residual per KL mode for the integrator, the leaky integrator, the order-2 IIR W
   cd SPECULA/config; python aoeb/opt_iir/aoeb_order.py        # the two figures, next to this file
   python aoeb/opt_iir/aoeb_order.py tf [mode [mag [delay]]]   # PSDs, |RTF|^2, |NTF|^2 of one mode (default 5, 8, 1.5)
   python aoeb/opt_iir/aoeb_order.py table                     # total residual (rss) per controller at delay 2, mags 5/8/11
+  python aoeb/opt_iir/aoeb_order.py common                    # + pure integrator with ONE gain for all modes (needs AOEB_ORDER_ALL=1)
   python aoeb/opt_iir/aoeb_order.py ratios                    # leaky / IIR2 vs magnitude, residual vs delay (from the cache)
   python aoeb/opt_iir/aoeb_order.py coeffs                    # leaky (G, leak) and IIR2 (b, a) coefficients vs magnitude and delay
   python aoeb/opt_iir/aoeb_order.py coeffs-env                # ... vs seeing (calibrated 0.6-1.05") and wind speed (all layers scaled)
@@ -62,6 +63,7 @@ FIGURES = {'delay2': ([(2.0, 5.0), (2.0, 11.0)], (0, 1, 2, 3)),   # name: ([(tot
            'mag8': ([(1.5, 8.0), (2.0, 8.0), (2.5, 8.0)], (1, 2))}  # style each, controllers shown (indices in LABELS))
 LABELS = ['Integrator (leak = 1)', 'Leaky integrator', 'IIR Wiener, N=2', 'Wiener bound (N = ∞)']
 COLORS, MARKERS = ['0.5', 'k', 'tab:orange', 'tab:red'], ['v', 'o', 's', '^']
+COMMON_COLOR = 'tab:cyan'                  # integrator with one gain for all modes
 CACHE = os.path.join(HERE, f'aoeb_order_cache_rmod{RMOD:g}_{TEMPORAL}' + ('_measalias2' if ALIAS == 'measured' else '') + '.json')   # measalias2: rotated per-rMod runs   # one entry per (delay, magnitude, mode): resumable
 N_JOBS = int(os.environ.get('AOEB_WIENER_JOBS', 12))
 
@@ -209,13 +211,18 @@ def plot(done, I):
     head = (f'Pyramid rMod {RMOD:g}, {NSUB}x{NSUB}, {WL:.0f} nm, {N} modes, seeing {SEEING:g}", fs = {FS:g} Hz; aoeb e2e products '
             f'({I["tlabel"]}; measured noise, aliasing, og {min(ogs):.2f}-{max(ogs):.2f})')
     out = []
+    common = compute_common() if os.path.exists(COMMON_CACHE) else {}
     for name, (cases, show) in FIGURES.items():
         fig, ax = plt.subplots(figsize=(7.5, 5.5))
+        with_common = 0 in show and all(mg in common and common['total'] == t for t, mg in cases)
         for k, (t, mg) in enumerate(cases):
             res = np.sqrt(np.array([done[key(t, mg, j)] for j in MODES]))
             for c in show:
                 ax.plot(MODES, res[:, c], ls[k], color=COLORS[c], lw=0.8 if ALL_MODES else 1.2, mfc='none',
                         **({} if ALL_MODES else dict(marker=MARKERS[c], ms=3)))
+            if with_common:
+                ax.plot(MODES, np.sqrt(common[mg][1][np.array(MODES) - 1]), ls[k], color=COMMON_COLOR, lw=0.8 if ALL_MODES else 1.2,
+                        mfc='none', **({} if ALL_MODES else dict(marker='D', ms=3)))
         ax.set_xscale('log'); ax.set_yscale('log')
         ylim = ax.get_ylim()                     # the controllers set the limits
         ax.plot(MODES, np.sqrt([I['alias'][j] for j in MODES]), color='tab:purple', lw=1.0, zorder=0)   # aliasing rms / og
@@ -231,8 +238,11 @@ def plot(done, I):
         ax.set_title(f'Total delay {cases[0][0]:g} frames' if same_t else f'Magnitude {cases[0][1]:g}')
         ax.grid(True, which='both', alpha=0.3)
         h = [Line2D([], [], color=COLORS[c], lw=1.5, marker=MARKERS[c], mfc='none') for c in show]
+        if with_common:
+            h.insert(0, Line2D([], [], color=COMMON_COLOR, lw=1.5, marker='D', mfc='none'))
         h += [Line2D([], [], color='gray', ls=s) for s in ls[:len(cases)]] + [Line2D([], [], color='tab:purple', lw=1.0)]
-        lab = [LABELS[c] for c in show] + [f'mag {mg:g}' if same_t else f'total delay {t:g} frames' for t, mg in cases] + ['aliasing (rms / og, input)']
+        lab = ([f'Integrator, one gain (G = {" / ".join(f"{common[mg][0]:.2f}" for _, mg in cases)})'] if with_common else []) \
+            + [LABELS[c] for c in show] + [f'mag {mg:g}' if same_t else f'total delay {t:g} frames' for t, mg in cases] + ['aliasing (rms / og, input)']
         ax.legend(h, lab, fontsize=8, ncol=2)
         fig.suptitle(head, fontsize=8, wrap=True)
         fig.tight_layout()
@@ -357,18 +367,52 @@ def plot_ratios(mags=(5.0, 8.0, 11.0), total=2.0, mg_delay=8.0, delays=(1.5, 2.0
     return fname
 
 
+GAIN_GRID = np.geomspace(0.01, 2.0, 600)            # common-gain integrator: gains scanned (0.9 % steps)
+COMMON_CACHE = CACHE.replace('.json', '_common_gain.npz')
+
+
+def gain_task(args):
+    """Residual [nm^2] of the pure integrator u_k = u_{k-1} + G y_k at every gain of GAIN_GRID (inf where the loop is unstable)."""
+    from ao_tools import closed_loop_residual
+    spec = make_spec(*args)
+    return [closed_loop_residual(spec, [G], [1.0, -1.0], 'residual') for G in GAIN_GRID]
+
+
+def compute_common(total=2.0, mags=(5.0, 8.0, 11.0)):
+    """Pure integrator with ONE gain for all N modes, per magnitude: residual of every mode on GAIN_GRID (cache COMMON_CACHE), the gain
+    minimising the sum over modes. Returns {mag: (G, residual per mode 1..N [nm^2]), 'total': total}."""
+    if not os.path.exists(COMMON_CACHE):
+        assert ALL_MODES, 'the common gain needs every mode: AOEB_ORDER_ALL=1'
+        I = inputs(mags=list(mags))
+        jobs = [(total, I['order'][j], I['turb'][j], I['noise'][mg][j], I['alias'][j], I['wind'], I['D'], I['alias_spec'])
+                for mg in mags for j in range(1, N + 1)]
+        import multiprocessing as mp
+        with mp.get_context('fork').Pool(N_JOBS) as pool:
+            R = np.array(pool.map(gain_task, jobs, chunksize=4), float).reshape(len(mags), N, len(GAIN_GRID))
+        np.savez(COMMON_CACHE, R=R, mags=np.array(mags), total=total, G=GAIN_GRID)
+    d = np.load(COMMON_CACHE)
+    out = {'total': float(d['total'])}
+    for mg, R in zip(d['mags'], d['R']):
+        i = int(np.argmin(R.sum(0)))
+        out[float(mg)] = (float(d['G'][i]), R[:, i])
+    return out
+
+
 def table(total=2.0, mags=(5.0, 8.0, 11.0), cache=None):
     """Root sum of squares over all N controlled modes [nm rms] per controller at `total` and `mags`, from a cache (default CACHE) whose
     cases are complete; markdown rows. The fitting error (modes above N) is not included."""
     done = json.load(open(cache or CACHE))
-    rows = ['| mag | integrator | leaky | IIR2 | Wiener bound | leaky / IIR2 |', '|---|---|---|---|---|---|']
+    common = compute_common() if os.path.exists(COMMON_CACHE) else {}
+    rows = ['| mag | integrator, one gain (G) | integrator, gain per mode | leaky | IIR2 | Wiener bound | leaky / IIR2 |',
+            '|---|---|---|---|---|---|---|']
     for mg in mags:
         ks = [key(total, mg, j) for j in range(1, N + 1)]
         if not all(k in done for k in ks):
             rows.append(f'| {mg:g} | incomplete ({sum(k in done for k in ks)}/{N} modes) |')
             continue
         v = np.sqrt(np.sum([done[k] for k in ks], axis=0))
-        rows.append(f'| {mg:g} | {v[0]:.1f} | {v[1]:.1f} | {v[2]:.1f} | {v[3]:.1f} | {v[1] / v[2]:.2f} |')
+        c = (f'{np.sqrt(common[mg][1].sum()):.1f} ({common[mg][0]:.2f})' if mg in common and common['total'] == total else 'n/a')
+        rows.append(f'| {mg:g} | {c} | {v[0]:.1f} | {v[1]:.1f} | {v[2]:.1f} | {v[3]:.1f} | {v[1] / v[2]:.2f} |')
     return '\n'.join(rows)
 
 
@@ -544,7 +588,13 @@ def coef_table(done, js=(1, 2, 5, 10, 30, 100, 300, 600, 1000, 1150)):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:2] in (['coeffs'], ['coeffs-plot'], ['coeffs-env'], ['coeffs-rand']):
+    if sys.argv[1:2] == ['common']:           # AOEB_ORDER_ALL=1 python aoeb_order.py common: integrator with one gain for all modes
+        print({k: (v if k == 'total' else round(v[0], 4)) for k, v in compute_common().items()})
+        print(table())
+        done, I = compute()
+        for f in plot(done, I):
+            print(f)
+    elif sys.argv[1:2] in (['coeffs'], ['coeffs-plot'], ['coeffs-env'], ['coeffs-rand']):
         # coeffs: leaky and IIR2 coefficients vs magnitude and delay (designed, cached); coeffs-env: vs seeing and wind speed;
         # coeffs-plot: all figures and the table from the caches only
         if sys.argv[1] == 'coeffs':
