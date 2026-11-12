@@ -1,0 +1,5 @@
+group,configuration,band,quantity,5.0,8.0,12.0
+flux-added,case 1: double flux,NIR,SR,1.0,1.002,1.022
+flux-added,case 1: double flux,NIR,contrast,0.913,0.724,0.657
+flux-added,case 1: double flux,VIS,SR,1.003,1.018,1.213
+flux-added,case 1: double flux,VIS,contrast,0.986,0.923,0.77
