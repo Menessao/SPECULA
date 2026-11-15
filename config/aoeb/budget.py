@@ -753,7 +753,7 @@ class ErrorBudgetMachine:
             alias.append(cal.alias_rms[:N] * (seeing / cal.alias_seeing) ** (5 / 6) / g)
         inv = np.sum([1.0 / np.maximum(p + rn, 1e-300) for p, rn in zip(phot, ron)], axis=0)
         w = [1.0 / np.maximum(p + rn, 1e-300) / inv for p, rn in zip(phot, ron)]
-        if np.any(weight_shift):                                # scalar, or one value per mode (bandsplit.py)
+        if np.any(weight_shift):                                # scalar, or one value per mode
             if len(w) != 2:
                 raise ValueError('weight_shift needs exactly two sensors')
             w = [w[0] + weight_shift, w[1] - weight_shift]
@@ -772,8 +772,7 @@ class ErrorBudgetMachine:
         wl_eff = float(np.sum(wbar * np.asarray(wls)))
         extra, bands = {}, None
         if chromatic is not None:
-            # a sensor may carry the photon-weighted n - 1 of its band ('n_minus_1', bandsplit.py) instead of that of its wavelength
-            n_eff = float(np.sum(wbar * np.array([s.get('n_minus_1') or chromatic.n_minus_1(x) for s, x in zip(sensors, wls)])))
+            n_eff = float(np.sum(wbar * np.array([float(chromatic.n_minus_1(x)) for x in wls])))
             cm = _replace(chromatic, delta_n=n_eff - float(chromatic.n_minus_1(chromatic.science_nm)))
             k_cut = utils.fitting_cutoff(N, self.D)
             extra.update(cm.variances(r0, self.L0, k_cut, wl_eff, self._k_nyquist()))
