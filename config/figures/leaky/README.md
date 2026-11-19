@@ -1,6 +1,6 @@
 # WFS Workshop 2026 talk figures (leaky)
 
-Notebook: config/wfs_talk_figures.ipynb, commit 94eeb64 (uncommitted changes in config/). EB controller: leaky; z = 30 deg, seeing 0.9" along the line of sight. EB selection criterion: contrast (every single-sensor reference is the best binning 48/36/24/14 and frame rate, every fusion at its best frame rate, ranked as the e2e runs: 2-5 lambda/D contrast among SR >= 10 %, then SR; slide 17 uses the older Strehl-criterion c4a sweeps).
+Notebook: config/wfs_talk_figures.ipynb, commit 0569db9 (uncommitted changes in config/). EB controller: leaky; z = 30 deg, seeing 0.9" along the line of sight. EB selection criterion: contrast (every single-sensor reference is the best binning 48/36/24/14 and frame rate, every fusion at its best frame rate, ranked as the e2e runs: 2-5 lambda/D contrast among SR >= 10 %, then SR; slide 17 uses the older Strehl-criterion c4a sweeps).
 
 | slide | file (.pdf, .png) | data and code | quick EB evaluation |
 | --- | --- | --- | --- |

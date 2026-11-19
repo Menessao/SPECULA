@@ -4,7 +4,7 @@ SR < SR_SWITCH; peak contrast saved too.
 Modulated pyramid, reference of the filter: rMod 2, 48x48, 1300 modes, SVD, frame of k loop steps (2000 / k Hz).
 Unmodulated pyramid: rMod 0, 2 kHz, ML reconstructor at the flux of the run, on the LADDER of (subapertures, modes). Modes it does not reconstruct
 are padded: zero rows in its reconstructor, very large noise in the filter, so only the modulated sensor drives them.
-From mag SLOW_FROM on, after the search, also the slower rates FS / K_UNMOD at the best (k, rung), the next magnitude starting its search from that
+From mag SLOW_FROM on, after the search, also the slower rates FS / K_UNMOD and then RATE_STEP steps around the best (slow_loop) at the best (k, rung), the next magnitude starting its search from that
 (k, rung) at 2 kHz. At a slower rate the whole loop runs at that rate, as in sweep_contrast.py (time step, unmodulated frame 1 / fs, delay
 DELAY * fs, AR(2) at fs, horizon 1 + delay), and the modulated frame keeps its duration as well as a whole number of steps allows.
 Both: slope nulls, no bias. Frames, nulls and aliasing of every sensor are those of N_CORR corrected modes.
@@ -50,10 +50,13 @@ N_SUBAPS_MOD, N_CORR, RMOD_MOD, RMOD_UNMOD = 48, 1300, 2.0, 0.0
 LADDER = ((48, 1300), (36, 900), (24, 300), (14, 100))     # unmodulated pyramid
 FS = 2000.0
 K_MAX = 20                              # slowest modulated frame: 100 Hz
-K_UNMOD, SLOW_FROM = (2, 4), 12.0       # slower rates of the loop and unmodulated sensor (1 kHz, 500 Hz), tried from this magnitude
+K_UNMOD, SLOW_FROM = (2, 3, 4), 12.0    # slower rates of the loop and unmodulated sensor (1000, 667, 500 Hz), tried from this magnitude (--slow-from)
+RATE_STEP = 100.0                       # [Hz] then the loop rate walks by this step around the best of them, as sweep_contrast.py (2026-11-19)
+RATE_MIN = 300.0                        # [Hz] slowest loop
 MAGS = (7.0, 8.0, 9.0, 10.0, 11.0, 12.0)   # 13 and 14 dropped on 2026-11-08
 DOUBLE_FLUX = False                      # --double-flux (with --same-wvl): each pyramid with the whole band
 SAME_RATE = False                        # --same-rate: one loop rate for both pyramids, searched (talk cases, 2026-11-12)
+START = (1, 0)                           # --start: (modulated frame k, LADDER index) of the search at the first magnitude
 MAG_CAL = {900.0: 7.0, 1300.0: 6.43}    # source_vis, source_nir of ristretto_main.yml: the magnitudes of the calibration frames
 BANDS = {900.0: 'vis', 1300.0: 'nir'}   # sensing wavelength -> nearest science band (and chain of the unequal dual)
 CHAINS = ('vis', 'nir')                 # yml chains source_/pyr_/cred_/pyr_slopes_/pyr_modes_<chain>
@@ -160,7 +163,7 @@ class Sweep:
 
     @staticmethod
     def key(mag, k, n, ku, fc):
-        return (float(mag), int(k), int(n), int(ku), round(float(fc['vis']), 3), round(float(fc['nir']), 3))
+        return (float(mag), int(k), int(n), round(float(ku), 4), round(float(fc['vis']), 3), round(float(fc['nir']), 3))
 
     def model_flux(self, chain, rmod, n, N, mag, exposure):
         """Pupil flux of one frame [e-]: calibration frame flux scaled to the chain's source magnitude and camera band."""
@@ -248,7 +251,8 @@ class Sweep:
     @staticmethod
     def name(mag, k, n, ku, fc=None):
         corr = ''.join(f'_f{c}{fc[c]:.3f}' for c in CHAINS if fc and fc[c] != 1.0)
-        return f'm{mag:g}_k{k}_n{n}' + (f'_ku{ku}' if ku > 1 else '') + corr
+        rate = '' if ku == 1 else f'_ku{int(ku)}' if float(ku).is_integer() else f'_fs{FS / ku:.0f}'    # ku: loop rate FS / ku, not always whole
+        return f'm{mag:g}_k{k}_n{n}' + rate + corr
 
     def run_one(self, phase, mag, k, i, ku, fc):
         n, N = LADDER[i]
@@ -353,10 +357,37 @@ class Sweep:
             if not moved:
                 return best, ku, i
 
+    def slow_loop(self, mag, best, k, i):
+        """Slower loop (and unmodulated sensor) at the best (k, rung) of the 2 kHz search, the modulated frame keeping its duration as well as
+        whole steps allow: the rates FS / K_UNMOD, then from the best of them RATE_STEP down while the metric improves, up if the first step down
+        does not (as sweep_contrast.py)."""
+        t_mod = k / FS
+        def at(phase, f):
+            row = self.evaluate(phase, mag, max(1, round(t_mod * f)), i, FS / f)
+            self.note(row, best)
+            return row
+        for ku in K_UNMOD:
+            row = at('unmod rate', FS / ku)
+            if better(row, best):
+                best = row
+        if best['fs_unmod'] >= FS:
+            return best
+        f0 = best['fs_unmod']
+        for step in (-RATE_STEP, RATE_STEP):     # on the RATE_STEP grid: first the grid rate just below (above) f0
+            f, moved = float((np.ceil(f0 / RATE_STEP - 1e-6) - 1 if step < 0 else np.floor(f0 / RATE_STEP + 1e-6) + 1) * RATE_STEP), False
+            while RATE_MIN <= f < FS:
+                row = at('loop rate', f)
+                if not better(row, best):
+                    break
+                best, moved, f = row, True, f + step
+            if moved:
+                break
+        return best
+
     def run(self):
         check_ar2()
         save_plant_inverse_iir(self.unity, calib_dir, N_CORR, beta=0.0)
-        k, i, selected = 1, 0, []
+        (k, i), selected = START, []
         ku = 1
         for mag in MAGS:
             if SAME_RATE:
@@ -365,12 +396,7 @@ class Sweep:
                 continue
             best, k, i = self.search(mag, k, i)
             if mag >= SLOW_FROM:
-                for ku in K_UNMOD:
-                    k_slow = max(1, round(k / ku))      # same modulated frame duration, as well as whole steps allow
-                    row = self.evaluate('unmod rate', mag, k_slow, i, ku)
-                    self.note(row, best)
-                    if better(row, best):
-                        best = row
+                best = self.slow_loop(mag, best, k, i)
             selected.append(best)
         self.report(selected)
 
@@ -378,8 +404,9 @@ class Sweep:
         u, m = self.unmod_chain, self.mod_chain
         fc = f", flux x {r[f'fc_{u}']:.3f}/{r[f'fc_{m}']:.3f}" if r[f'fc_{u}'] != 1.0 or r[f'fc_{m}'] != 1.0 else ''
         lo = 'ML' if RMOD_UNMOD == 0.0 else f'rMod {RMOD_UNMOD:g} SVD'
+        mod_bin = '' if N_SUBAPS_MOD == 48 else f' {N_SUBAPS_MOD}x{N_SUBAPS_MOD} {N_CORR} modes'     # 48x48 1300 modes: the default, unwritten
         return (f"unmod {self.unmod_wvl:g} nm {self.frac[u]:.0%} band {int(r['n_unmod'])}x{int(r['n_unmod'])} {int(r['N_unmod'])} modes {r['fs_unmod']:.0f} Hz {lo}, "
-                f"mod {self.mod_wvl:g} nm {self.frac[m]:.0%} band rMod {RMOD_MOD:g} {r['fs_mod']:.0f} Hz{fc}")
+                f"mod {self.mod_wvl:g} nm {self.frac[m]:.0%} band rMod {RMOD_MOD:g}{mod_bin} {r['fs_mod']:.0f} Hz{fc}")
 
     def report(self, selected):
         def line(cells):
@@ -403,7 +430,7 @@ class Sweep:
         text = '\n'.join(out) + '\n'
         with open(op.join(self.out, 'table.md'), 'w') as f:
             f.write(text)
-        write_selected(self.out, [dict(mag=r['mag'], key=[float(r['mag']), int(r['k']), int(r['n_unmod']), int(r['k_unmod']), float(r['fc_vis']), float(r['fc_nir'])],
+        write_selected(self.out, [dict(mag=r['mag'], key=[float(r['mag']), int(r['k']), int(r['n_unmod']), round(float(r['k_unmod']), 4), float(r['fc_vis']), float(r['fc_nir'])],
                                        config=self.describe(r), **{x: r[x] for x in ('contrast_vis', 'sr_vis', 'contrast_nir', 'sr_nir', 'notes', 'tn')})
                                   for r in selected])
         print(text, flush=True)
@@ -430,7 +457,7 @@ class Sweep:
             for j, (seed, dirs) in enumerate(wind_realizations(n_real, seed0)):
                 if (mag, j, s['config']) in done:
                     continue
-                ov, flux = self.overrides(mag, int(k), i, int(ku), self.name(mag, int(k), int(n), int(ku), fc), fc)
+                ov, flux = self.overrides(mag, int(k), i, float(ku), self.name(mag, int(k), int(n), float(ku), fc), fc)
                 ov = replay_overrides(ov, total_time, seed, dirs)
                 ov['data_store_override']['store_dir'] = store
                 tn = self.simulate(ov, f'replay_m{mag:g}_k{j}', store)
@@ -449,12 +476,12 @@ def calibrate(gpu):
     """Aliasing runs with N_CORR modes corrected on the smaller rungs of the LADDER (both wavelengths; existing products are skipped)."""
     rungs = LADDER[1:]
     cfg = calibration.E2EConfig(n_subaps=tuple(n for n, _ in rungs), rMods=(RMOD_UNMOD,), seeings=(SEEING,),
-                                modes_per_subap={n: [N, N_CORR] for n, N in rungs})
+                                modes_per_subap={n: [N] for n, N in rungs}, n_corr=(N_CORR,))   # N_CORR corrected, aliasing of the N-mode rec only
     calibration.calibrate_alias(cfg, gpu)
 
 
 def main():
-    global RMOD_MOD, LADDER, MAGS, SAME_RATE, RMOD_UNMOD, DOUBLE_FLUX
+    global RMOD_MOD, LADDER, MAGS, SAME_RATE, RMOD_UNMOD, DOUBLE_FLUX, N_SUBAPS_MOD, N_CORR, START, SLOW_FROM
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--calibrate', action='store_true', help='make the missing aliasing products and exit')
     ap.add_argument('--unmod-wvl', type=float, default=900.0, choices=sorted(BANDS), help='[nm] sensing wavelength of the unmodulated pyramid')
@@ -476,8 +503,16 @@ def main():
                     'SVD aliasing, as the modulated one; talk cases 1 and 2, 2026-11-12)')
     ap.add_argument('--double-flux', action='store_true', help='with --same-wvl: both pyramids with the whole band (flux added)')
     ap.add_argument('--ladder', type=int, nargs='+', help='subaperture counts of the LADDER the "unmodulated" pyramid may use (e.g. 14)')
+    ap.add_argument('--mod-subaps', type=int, choices=(48, 36), default=48, help='subapertures of the modulated pyramid: 48 (1300 modes) or '
+                    '36 (900 modes, the whole chain then corrects 900 modes; unmodulated LADDER rungs up to 36x36) (2026-11-19)')
+    ap.add_argument('--start', type=int, nargs=2, metavar=('K', 'RUNG'), help='modulated frame k and LADDER index (after --ladder / --mod-subaps) '
+                    'the search starts from at the first magnitude (default 1 0)')
+    ap.add_argument('--slow-from', type=float, default=SLOW_FROM, help='magnitude from which the slower loop rates are searched (default %(default)g)')
     ap.add_argument('--out')
     a = ap.parse_args()
+    if a.mod_subaps != 48:
+        N_SUBAPS_MOD, N_CORR = a.mod_subaps, 900
+        LADDER = tuple((n, min(N, N_CORR)) for n, N in LADDER if n <= a.mod_subaps)
     RMOD_MOD, LADDER = float(a.rmod_mod), LADDER[:max(1, a.unmod_rungs)]
     if a.ladder:
         LADDER = tuple(x for x in LADDER if x[0] in a.ladder)
@@ -487,6 +522,9 @@ def main():
     if a.mags:
         MAGS = tuple(float(x) for x in a.mags)
     SAME_RATE = bool(a.same_rate)
+    SLOW_FROM = float(a.slow_from)
+    if a.start:
+        START = (int(a.start[0]), int(a.start[1]))
     os.environ['PATH'] = op.dirname(sys.executable) + os.pathsep + os.environ['PATH']   # the specula CLI of this environment
     if a.calibrate:
         calibrate(a.gpu)
