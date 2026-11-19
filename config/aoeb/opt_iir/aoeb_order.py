@@ -5,16 +5,18 @@ Residual per KL mode for the integrator, the leaky integrator, the order-2 IIR W
   cd SPECULA/config; python aoeb/opt_iir/aoeb_order.py        # the two figures, next to this file
   python aoeb/opt_iir/aoeb_order.py tf [mode [mag [delay]]]   # PSDs, |RTF|^2, |NTF|^2 of one mode (default 5, 8, 1.5)
   python aoeb/opt_iir/aoeb_order.py table                     # total residual (rss) per controller at delay 2, mags 5/8/11
-  python aoeb/opt_iir/aoeb_order.py common                    # + pure integrator with ONE gain for all modes (needs AOEB_ORDER_ALL=1)
+  (AOEB_ORDER_SHOW_ALIAS=1 / AOEB_ORDER_SHOW_COMMON=1: also the input aliasing / the one-gain integrator in the figures; default off.
+   The delay-2 figure also shows the Wiener bound with the aliasing set to 0, cache *_noalias.json)
+  python aoeb/opt_iir/aoeb_order.py common                    # + pure integrator with ONE gain for all modes
   python aoeb/opt_iir/aoeb_order.py ratios                    # leaky / IIR2 vs magnitude, residual vs delay (from the cache)
   python aoeb/opt_iir/aoeb_order.py coeffs                    # leaky (G, leak) and IIR2 (b, a) coefficients vs magnitude and delay
   python aoeb/opt_iir/aoeb_order.py coeffs-env                # ... vs seeing (calibrated 0.6-1.05") and wind speed (all layers scaled)
   python aoeb/opt_iir/aoeb_order.py coeffs-rand               # ... for random layer speeds at the same effective wind speed
   python aoeb/opt_iir/aoeb_order.py coeffs-plot               # coefficient figures and table from the caches only
-  (AOEB_ORDER_ALL=1: all 1300 modes; coefficient caches *_coeffs*.json next to the residual cache)
+  (coefficient caches *_coeffs*.json next to the residual cache)
 
 Sensor: pyramid rMod RMOD (env AOEB_ORDER_RMOD: 0 unmodulated, default; 1), 48x48, 900 nm, 1300 modes, seeing 0.9", fs 2 kHz (fixed), magnitudes at 900 nm.
-MODES: 30 KL modes log-spaced over 1..1150 (numbered from 1: 1 = tip; MODE_MAX below). Each mode is designed on ITS OWN values (nothing averaged), from
+MODES: all N KL modes (numbered from 1: 1 = tip). Each mode is designed on ITS OWN values (nothing averaged), from
 the aoeb machine (aoeb/e2e calibration.machine(), budget_wfsw.yml):
   turbulence variance (KL von Karman, r0 of the seeing); temporal PSD of its radial order (TEMPORAL: exact multi-layer frozen-flow von
   Karman spectra of the 10 ristretto_main layers, aoeb.temporal.ZernikePSD; or Conan with one effective wind); noise (photon + readout, measured slope-noise propagation, detector of budget_wfsw.yml) / og^2; aliasing (measured
@@ -44,25 +46,21 @@ _A = '/raid1/mmenessini/results/WFSW/alias_psd_rmod{r:g}/modes/r{r:g}_'
 ALIAS_PSD = {r: {1300: [_A.format(r=r) + f'rot{a}_seed{s}.npz' for a in (0, 45, 90, 135) for s in (1001, 1101, 1201, 1301)],
                  300: [_A.format(r=r) + f'N300_rot{a}.npz' for a in (0, 45, 90, 135)]} for r in (0.0, 1.0)}
 NSUB, WL, SEEING, N, FS = 48, 900.0, 0.9, 1300, 2000.0
-MODE_MAX, N_PLOT = 1150, 30
-# MODE_MAX: the measured aliasing of the controlled modes grows towards the cut-off (rMod 1: 0.09 nm^2 at 779, ~0.25 at 1100-1150, ~0.5
-# above 1200, 0.86 at 1300; rMod 0: ~0.1 up to 900, ~0.2-0.27 at 1050-1150, ~0.4-0.55 above 1200), which makes the last modes jump
-
-
-def log_modes(n, j_max):
-    """n distinct KL mode numbers (from 1), as close to log-spaced over 1..j_max as integers allow (consecutive at the start)."""
-    k = n
-    while len(np.unique(np.round(np.geomspace(1, j_max, k)))) < n:
-        k += 1
-    return [int(j) for j in np.unique(np.round(np.geomspace(1, j_max, k)))][:n - 1] + [j_max]
-
-
-ALL_MODES = os.environ.get('AOEB_ORDER_ALL', '') == '1'          # every mode 1..N (figures *_all.png) instead of the N_PLOT log-spaced ones
-MODES = list(range(1, N + 1)) if ALL_MODES else log_modes(N_PLOT, MODE_MAX)
-FIGURES = {'delay2': ([(2.0, 5.0), (2.0, 11.0)], (0, 1, 2, 3)),   # name: ([(total delay [frames], magnitude at 900 nm)]: one line
+MODES = list(range(1, N + 1))
+FIGURES = {'delay2': ([(2.0, 5.0), (2.0, 11.0)], (0, 1, 2, 3, 4)),   # name: ([(total delay [frames], magnitude at 900 nm)]: one line
            'mag8': ([(1.5, 8.0), (2.0, 8.0), (2.5, 8.0)], (1, 2))}  # style each, controllers shown (indices in LABELS))
-LABELS = ['Integrator (leak = 1)', 'Leaky integrator', 'IIR Wiener, N=2', 'Wiener bound (N = ∞)']
-COLORS, MARKERS = ['0.5', 'k', 'tab:orange', 'tab:red'], ['v', 'o', 's', '^']
+LABELS = ['Integrator (leak = 1)', 'Leaky integrator', 'IIR Wiener, N=2', 'Wiener bound (N = ∞)', 'Wiener bound, no aliasing']
+COLORS = ['0.5', 'k', 'tab:orange', 'tab:red', 'tab:green']
+# optional curves of the residual figures (env '1' to show; default off): the input aliasing rms / og per mode, and the pure integrator
+# with ONE gain for all modes (needs its cache, `common`)
+SHOW_ALIAS = os.environ.get('AOEB_ORDER_SHOW_ALIAS', '0') == '1'
+SHOW_COMMON = os.environ.get('AOEB_ORDER_SHOW_COMMON', '0') == '1'
+# all-modes (MIMO) results of mimo_spectral.py (rMod 0, modes 1..100, total delay 2): drawn on the figures showing the Wiener bound
+# (env AOEB_ORDER_SHOW_MIMO=1 to show; default off); aliasing input of those bounds: 'measured' (simulated cross-spectra) or 'eb'
+SHOW_MIMO = os.environ.get('AOEB_ORDER_SHOW_MIMO', '0') == '1'
+MIMO_RESULTS, MIMO_ALIAS = '/raid1/mmenessini/results/WFSW/mimo_spectral/bounds_N100_M8192.npz', 'measured'
+MIMO_CURVES = [('mimo', 'All-modes Wiener bound', 'tab:blue'), ('var32_mimo', 'All-modes VAR(32) + Kalman', 'tab:purple'),
+               ('var2_mimo', 'All-modes VAR(2) + Kalman', 'tab:brown')]
 COMMON_COLOR = 'tab:cyan'                  # integrator with one gain for all modes
 CACHE = os.path.join(HERE, f'aoeb_order_cache_rmod{RMOD:g}_{TEMPORAL}' + ('_measalias2' if ALIAS == 'measured' else '') + '.json')   # measalias2: rotated per-rMod runs   # one entry per (delay, magnitude, mode): resumable
 N_JOBS = int(os.environ.get('AOEB_WIENER_JOBS', 12))
@@ -172,6 +170,37 @@ def design(spec):
             ('pol', None, None, info['F_bound'], info['bound'])]
 
 
+def noalias_task(args):
+    """Wiener bound [nm^2] of one (delay, magnitude, mode) with the aliasing set to 0 (turbulence and noise unchanged)."""
+    from wiener_ao_iir import wiener_iir
+    args = list(args)
+    args[4] = 0.0
+    return wiener_iir(make_spec(*args), 2)[2]['bound']      # the IIR2 design is the starting filter of the bound (see wiener_bound)
+
+
+NOALIAS_CACHE = CACHE.replace('.json', '_noalias.json')
+
+
+def compute_noalias(I):
+    """{key: no-aliasing Wiener bound} of every (delay, magnitude, mode) of the FIGURES showing index 4; cached as computed."""
+    tag = repr((RMOD, NSUB, WL, SEEING, N, FS, 'bound_noalias'))
+    done = json.load(open(NOALIAS_CACHE)) if os.path.exists(NOALIAS_CACHE) else {}
+    done = done if done.get('tag') == tag else {'tag': tag}
+    cases = list(dict.fromkeys(c for cs, show in FIGURES.values() if 4 in show for c in cs))
+    jobs = {key(t, mg, j): (t, I['order'][j], I['turb'][j], I['noise'][mg][j], I['alias'][j], I['wind'], I['D'], I['alias_spec'])
+            for t, mg in cases for j in sorted(MODES, key=lambda j: -(I['order'][j] < 4))}
+    todo = {k: v for k, v in jobs.items() if k not in done}
+    print(f'no aliasing: {len(jobs) - len(todo)} cached, {len(todo)} to design on {N_JOBS} workers', flush=True)
+    if todo:
+        import multiprocessing as mp
+        with mp.get_context('fork').Pool(min(len(todo), N_JOBS)) as pool:
+            for i, (k, r) in enumerate(zip(todo, pool.imap(noalias_task, todo.values(), chunksize=1))):
+                done[k] = r
+                dump(done, NOALIAS_CACHE)
+                print(f'[{i + 1}/{len(todo)}] no aliasing {k}: {r:.3g}', flush=True)
+    return done
+
+
 def task(args):
     """Residuals [int, leaky, IIR2, bound] [nm^2] of one (delay, magnitude, mode)."""
     return [c[4] for c in design(make_spec(*args))]
@@ -199,6 +228,10 @@ def compute():
                 done[k] = r
                 json.dump(done, open(CACHE, 'w'))
                 print(f'[{i + 1}/{len(todo)}] {k}: ' + ' '.join(f'{x:.3g}' for x in r), flush=True)
+    noalias = compute_noalias(I)
+    for k, v in noalias.items():
+        if k != 'tag':
+            done[k] = done[k][:4] + [v]          # index 4 of LABELS (in memory only: the main cache keeps 4 entries)
     return done, I
 
 
@@ -211,22 +244,29 @@ def plot(done, I):
     head = (f'Pyramid rMod {RMOD:g}, {NSUB}x{NSUB}, {WL:.0f} nm, {N} modes, seeing {SEEING:g}", fs = {FS:g} Hz; aoeb e2e products '
             f'({I["tlabel"]}; measured noise, aliasing, og {min(ogs):.2f}-{max(ogs):.2f})')
     out = []
-    common = compute_common() if os.path.exists(COMMON_CACHE) else {}
+    common = compute_common() if SHOW_COMMON and os.path.exists(COMMON_CACHE) else {}
     for name, (cases, show) in FIGURES.items():
         fig, ax = plt.subplots(figsize=(7.5, 5.5))
-        with_common = 0 in show and all(mg in common and common['total'] == t for t, mg in cases)
+        with_common = SHOW_COMMON and 0 in show and all(mg in common and common['total'] == t for t, mg in cases)
+        mimo = np.load(MIMO_RESULTS) if SHOW_MIMO and RMOD == 0 and 3 in show and os.path.exists(MIMO_RESULTS) else None
+        mimo_shown = []
         for k, (t, mg) in enumerate(cases):
             res = np.sqrt(np.array([done[key(t, mg, j)] for j in MODES]))
             for c in show:
-                ax.plot(MODES, res[:, c], ls[k], color=COLORS[c], lw=0.8 if ALL_MODES else 1.2, mfc='none',
-                        **({} if ALL_MODES else dict(marker=MARKERS[c], ms=3)))
+                ax.plot(MODES, res[:, c], ls[k], color=COLORS[c], lw=0.8)
+            for suffix, lab, col in (MIMO_CURVES if mimo is not None and t == 2.0 else []):
+                k_ = f'{MIMO_ALIAS}_mag{mg:g}_{suffix}'
+                if k_ in mimo.files:          # prediction error + hold error per mode [nm^2], modes 1..len
+                    v = mimo[k_] + mimo['hold']
+                    ax.plot(np.arange(1, len(v) + 1), np.sqrt(v), ls[k], color=col, lw=1.0)
+                    mimo_shown += [(lab, col)] if (lab, col) not in mimo_shown else []
             if with_common:
-                ax.plot(MODES, np.sqrt(common[mg][1][np.array(MODES) - 1]), ls[k], color=COMMON_COLOR, lw=0.8 if ALL_MODES else 1.2,
-                        mfc='none', **({} if ALL_MODES else dict(marker='D', ms=3)))
+                ax.plot(MODES, np.sqrt(common[mg][1][np.array(MODES) - 1]), ls[k], color=COMMON_COLOR, lw=0.8)
         ax.set_xscale('log'); ax.set_yscale('log')
-        ylim = ax.get_ylim()                     # the controllers set the limits
-        ax.plot(MODES, np.sqrt([I['alias'][j] for j in MODES]), color='tab:purple', lw=1.0, zorder=0)   # aliasing rms / og
-        ax.set_ylim(ylim)
+        if SHOW_ALIAS:
+            ylim = ax.get_ylim()                     # the controllers set the limits
+            ax.plot(MODES, np.sqrt([I['alias'][j] for j in MODES]), color='tab:purple', lw=1.0, zorder=0)   # aliasing rms / og
+            ax.set_ylim(ylim)
         ax.xaxis.set_major_locator(LogLocator(subs=(1, 2, 5)))
         ax.xaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax.xaxis.set_minor_formatter(NullFormatter())
@@ -237,16 +277,20 @@ def plot(done, I):
         same_t = len({t for t, _ in cases}) == 1
         ax.set_title(f'Total delay {cases[0][0]:g} frames' if same_t else f'Magnitude {cases[0][1]:g}')
         ax.grid(True, which='both', alpha=0.3)
-        h = [Line2D([], [], color=COLORS[c], lw=1.5, marker=MARKERS[c], mfc='none') for c in show]
+        h = [Line2D([], [], color=COLORS[c], lw=1.5) for c in show] + [Line2D([], [], color=col, lw=1.5) for _, col in mimo_shown]
         if with_common:
-            h.insert(0, Line2D([], [], color=COMMON_COLOR, lw=1.5, marker='D', mfc='none'))
-        h += [Line2D([], [], color='gray', ls=s) for s in ls[:len(cases)]] + [Line2D([], [], color='tab:purple', lw=1.0)]
+            h.insert(0, Line2D([], [], color=COMMON_COLOR, lw=1.5))
+        h += [Line2D([], [], color='gray', ls=s) for s in ls[:len(cases)]] + ([Line2D([], [], color='tab:purple', lw=1.0)] if SHOW_ALIAS else [])
         lab = ([f'Integrator, one gain (G = {" / ".join(f"{common[mg][0]:.2f}" for _, mg in cases)})'] if with_common else []) \
-            + [LABELS[c] for c in show] + [f'mag {mg:g}' if same_t else f'total delay {t:g} frames' for t, mg in cases] + ['aliasing (rms / og, input)']
-        ax.legend(h, lab, fontsize=8, ncol=2)
+            + [LABELS[c] for c in show] + [f'{lab} (modes 1-100, aliasing cross-spectra)' for lab, _ in mimo_shown] + [f'mag {mg:g}' if same_t else f'total delay {t:g} frames' for t, mg in cases] + (['aliasing (rms / og, input)'] if SHOW_ALIAS else [])
+        if mimo_shown:              # many entries: below the axes, so no curve is hidden
+            fig.set_size_inches(7.5, 7.0)
+            ax.legend(h, lab, fontsize=8, ncol=2, loc='upper center', bbox_to_anchor=(0.5, -0.12))
+        else:
+            ax.legend(h, lab, fontsize=8, ncol=2)
         fig.suptitle(head, fontsize=8, wrap=True)
         fig.tight_layout()
-        fname = os.path.join(HERE, f'residual_vs_mode_aoeb_rmod{RMOD:g}_{name}' + ('_all' if ALL_MODES else '') + '.png')
+        fname = os.path.join(HERE, f'residual_vs_mode_aoeb_rmod{RMOD:g}_{name}.png')
         fig.savefig(fname, dpi=150)
         plt.close(fig)
         out.append(fname)
@@ -382,7 +426,6 @@ def compute_common(total=2.0, mags=(5.0, 8.0, 11.0)):
     """Pure integrator with ONE gain for all N modes, per magnitude: residual of every mode on GAIN_GRID (cache COMMON_CACHE), the gain
     minimising the sum over modes. Returns {mag: (G, residual per mode 1..N [nm^2]), 'total': total}."""
     if not os.path.exists(COMMON_CACHE):
-        assert ALL_MODES, 'the common gain needs every mode: AOEB_ORDER_ALL=1'
         I = inputs(mags=list(mags))
         jobs = [(total, I['order'][j], I['turb'][j], I['noise'][mg][j], I['alias'][j], I['wind'], I['D'], I['alias_spec'])
                 for mg in mags for j in range(1, N + 1)]
@@ -442,9 +485,8 @@ def compute_coeffs():
     tag = repr((RMOD, NSUB, WL, SEEING, N, FS, 'coeffs'))
     done = json.load(open(COEF_CACHE)) if os.path.exists(COEF_CACHE) else {}
     done = done if done.get('tag') == tag else {'tag': tag}
-    plot_first = set(log_modes(N_PLOT, MODE_MAX))
     jobs = {key(t, mg, j): (t, I['order'][j], I['turb'][j], I['noise'][mg][j], I['alias'][j], I['wind'], I['D'], I['alias_spec'])
-            for t, mg in COEF_CASES for j in sorted(MODES, key=lambda j: (j not in plot_first, -(I['order'][j] < 4)))}
+            for t, mg in COEF_CASES for j in sorted(MODES, key=lambda j: -(I['order'][j] < 4))}
     todo = {k: v for k, v in jobs.items() if k not in done}
     print(f'{len(jobs) - len(todo)} cached, {len(todo)} to design on {N_JOBS} workers', flush=True)
     if todo:
@@ -474,19 +516,17 @@ def ekey(t, mg, j, s=SEEING, k=1.0, r=None):
 
 
 def compute_env(random=False):
-    """{ekey: coefficients} at ENV_T, ENV_MAG for ENV_CASES (seeing, wind factor) and MODES (resumable cache ENV_CACHE). The 30 plotted
-    modes of every case are designed first."""
+    """{ekey: coefficients} at ENV_T, ENV_MAG for ENV_CASES (seeing, wind factor) and MODES (resumable cache ENV_CACHE)."""
     cache = RAND_CACHE if random else ENV_CACHE
     done = json.load(open(cache)) if os.path.exists(cache) else {}
     tag = repr((RMOD, NSUB, WL, N, FS, 'coeffs_rand' if random else 'coeffs_env'))   # coeffs_env: as the running sweep's cache
     done = done if done.get('tag') == tag else {'tag': tag}
-    plot_first = set(log_modes(N_PLOT, MODE_MAX))
     jobs, veff = [], {}
     for s, k, *r in (RAND_CASES if random else ENV_CASES):
         r = r[0] if r else None
         I = inputs(s, k, mags=[ENV_MAG], wind_seed=r)
         veff[f'{k:g}' if r is None else f'r{r}'] = I['v_eff']
-        jobs += [((j not in plot_first, -(I['order'][j] < 4)), ekey(ENV_T, ENV_MAG, j, s, k, r),
+        jobs += [(-(I['order'][j] < 4), ekey(ENV_T, ENV_MAG, j, s, k, r),
                   (ENV_T, I['order'][j], I['turb'][j], I['noise'][ENV_MAG][j], I['alias'][j], I['wind'], I['D'], I['alias_spec']))
                  for j in MODES]
     done['v_eff' if not random else 'v_eff_rand'] = veff
@@ -569,7 +609,7 @@ def plot_coeffs(done, groups, n_bins=30, modes=None):
                      'Leaky: C(z) = G / (1 - leak z$^{-1}$) on the residual; IIR2: POL filter F(z) = (b0 + b1 z$^{-1}$ + b2 z$^{-2}$) / '
                      '(1 + a1 z$^{-1}$ + a2 z$^{-2}$)' + ('; thin: per mode, bold: median in log bins' if dense else ''), fontsize=10)
         fig.tight_layout()
-        f = os.path.join(HERE, f'coeffs_aoeb_rmod{RMOD:g}_{name}{"_all" if len(modes) > 100 else ""}.png')
+        f = os.path.join(HERE, f'coeffs_aoeb_rmod{RMOD:g}_{name}.png')
         fig.savefig(f, dpi=130)
         plt.close(fig)
         out.append(f)
@@ -588,7 +628,7 @@ def coef_table(done, js=(1, 2, 5, 10, 30, 100, 300, 600, 1000, 1150)):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:2] == ['common']:           # AOEB_ORDER_ALL=1 python aoeb_order.py common: integrator with one gain for all modes
+    if sys.argv[1:2] == ['common']:           # python aoeb_order.py common: integrator with one gain for all modes
         print({k: (v if k == 'total' else round(v[0], 4)) for k, v in compute_common().items()})
         print(table())
         done, I = compute()
@@ -606,9 +646,6 @@ if __name__ == '__main__':
         print(coef_table(done))
         for f in plot_coeffs(done, coef_groups(done.get('v_eff'))):
             print(f)
-        if ALL_MODES:              # also the 30 plotted modes only
-            for f in plot_coeffs(done, coef_groups(done.get('v_eff')), modes=log_modes(N_PLOT, MODE_MAX)):
-                print(f)
     elif sys.argv[1:2] == ['table']:          # python aoeb_order.py table [cache.json]: total residual per controller
         print(table(cache=sys.argv[2] if len(sys.argv) > 2 else None))
     elif sys.argv[1:2] == ['ratios']:          # python aoeb_order.py ratios: from the cache only

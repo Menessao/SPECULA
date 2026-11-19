@@ -12,6 +12,18 @@ Criteria (Study(criterion=...)):
       sensor's own n_subap is ignored); a fusion keeps its sensors and gets the best frame rate; a dual system the best HO rate, then the
       best LO-mode rate (coordinate search); the split and the sampling the lowest contrast. The disk-cache keys hold the criterion.
 
+Reused configurations (config_from='leaky', 2026-11-13): with another controller (Wiener), every sweep / scan point / cached result
+not already complete under that controller is evaluated at the configuration (binning, HO and LO rates, split, sampling, weight shift)
+selected for the leaky controller under the same name and settings, with no search; stored under keys that hold config_from, so they
+are never mistaken for searched optima. A result without a leaky counterpart is searched (warning). Results complete under the
+controller (searched) are used as they are.
+
+Contrast normalisation (2026-11-15): Study(contrast_norm='ao', the default) gives every contrast relative to the peak of the
+long-exposure AO PSF of the same budget, as the e2e runs (SPECULA PsfCoronagraph: the integrated AO PSF peak); 'dl': relative to the
+diffraction-limited peak (every result cached before 2026-11-15). The cache keys do not hold it: rows computed since carry
+contrast_norm and the AO peak ('peak'); a cached row without them is converted when loaded (contrast / SR: the SR stands for the AO
+peak, ~3 % below it, so those contrasts are ~3 % high; legacy_contrast). Selections made before 2026-11-15 ranked the DL-normalised contrast.
+
 Cache: Study.sweep / Study.cached store their results in cache_dir under a hash of (name, band, every setting of the Study). A change of
 a setting recomputes; a change of the code does NOT: bump VERSION, or pass recompute=True."""
 import contextlib
@@ -31,11 +43,15 @@ SR_SWITCH = 0.10                     # criterion 'contrast': below this science 
 
 class Study:
     def __init__(self, machine, engine, seeing, latency_s, controller, area, bandw, colour, cache_dir, fs_max=2000., zone=(2.0, 5.0),
-                 sr_min=0.25, recompute=False, criterion='strehl', binnings=BINNINGS):
+                 sr_min=0.25, recompute=False, criterion='strehl', binnings=BINNINGS, config_from=None, contrast_norm='ao'):
         """machine / engine: ErrorBudgetMachine / PsfEngine; area [m^2] and bandw [nm]: pupil and camera band for the photometry; colour:
         m(900) - m(1300) of the star; zone: separations [lambda/D] where the contrast is maximised; sr_min: science Strehl below which
         a contrast is flagged (sweeps keep the Strehl); criterion: 'strehl' or 'contrast' (module docstring); binnings: subapertures
-        searched by the contrast-optimal single stage."""
+        searched by the contrast-optimal single stage; config_from: controller whose selected configurations are reused (module
+        docstring; None: search); contrast_norm: 'ao' (relative to the AO PSF peak, as e2e) or 'dl' (module docstring)."""
+        if contrast_norm not in ('ao', 'dl'):
+            raise ValueError("contrast_norm must be 'ao' or 'dl'")
+        self.contrast_norm = contrast_norm
         if criterion not in ('strehl', 'contrast'):
             raise ValueError("criterion must be 'strehl' or 'contrast'")
         self.criterion = criterion
@@ -52,6 +68,8 @@ class Study:
         self._stages = {}
         self.sci_nm, self.chromatic = None, None
         self._wind0 = machine.wind
+        self.config_from = config_from
+        self.fixed = None                    # configuration in force (dict n_subap, fs, fs_lo, f_LO, n_unmod, weight_shift), or None
 
     # ---- band, photometry, sensors
     def set_band(self, sci_nm, chromatic):
@@ -91,6 +109,10 @@ class Study:
         grid with the lowest zone contrast; each binning with all its calibrated modes (s['n_subap'] and s['N'] are ignored).
         params['contrast_search']: the number of candidates."""
         cm = self._chrom(chromatic)
+        if self._fx('n_subap') is not None and self._fx('fs') is not None:
+            n = int(self._fx('n_subap'))
+            return self.m.budget(s['rMod'], n, self.seeing, s['flux'], self._fx('fs'), N=self.m.max_modes(n), wavelength_nm=s['wavelength_nm'],
+                                 chromatic=cm, warn=False, **self.kw)
         key = (s['rMod'], s['wavelength_nm'], round(s['flux'], 6), float(s['fs']), repr(cm), self.sci_nm, self.m.max_sensitivity)
         if key not in self._best:
             cands = [self.m.budget(s['rMod'], n, self.seeing, s['flux'], f, N=self.m.max_modes(n), wavelength_nm=s['wavelength_nm'],
@@ -122,6 +144,8 @@ class Study:
     def best_rate(self, make, grid=None):
         """make(fs) -> BudgetResult; the one of the frame-rate grid with the lowest total residual (criterion 'contrast': zone
         contrast)."""
+        if self._fx('fs') is not None:
+            return make(self._fx('fs'))
         key = self._contrast_key if self._by_contrast() else (lambda r: r.variances()['total'])
         return min((make(f) for f in (self.fs_grid if grid is None else grid)), key=key)
 
@@ -169,6 +193,9 @@ class Study:
         n_lo, cm = int(lo['N']), self._chrom(chromatic)
         dual = lambda f_lo, f_ho: self.m.budget_dual({**lo, 'fs': f_lo}, {**ho, 'fs': f_ho}, self.seeing, latency_s=self.kw['latency_s'],
                                                      controller=self.kw['controller'], chromatic=cm, r_ho=self.stage(ho, f_ho))
+        if self._fx('fs') is not None and self._fx('fs_lo') is not None:
+            f_lo, f_ho = self._fx('fs_lo'), self._fx('fs')
+            return float(np.sum(self.stage(ho, f_ho).residual[n_lo:])), dual(f_lo, f_ho)
         f_lo0 = min(self.fs_grid, key=lambda f: float(np.sum(self.m.budget_dual({**lo, 'fs': f}, {**ho, 'fs': self.fs_max}, self.seeing,
                     latency_s=self.kw['latency_s'], controller=self.kw['controller'], chromatic=None,
                     r_ho=self.stage(ho, self.fs_max)).residual[:n_lo])))
@@ -190,6 +217,8 @@ class Study:
         """dual_at with the weight shift minimising the zone contrast (criterion 'contrast') or the total residual ('total'), the
         chromatic term INCLUDED: the fused LO modes are no longer the minimum-noise estimate but extrapolate the two bands towards the
         science wavelength (params['weight_shift']: added to the LO sensor's weight, taken from the HO one)."""
+        if self._fx('weight_shift') is not None:
+            return self.dual_at(r, lo, ho, chromatic, self._fx('weight_shift'))
         from scipy.optimize import minimize_scalar
         cost = {'contrast': lambda x: self.contrast(x), 'total': lambda x: x.variances()['total']}[criterion]
         res = minimize_scalar(lambda d: cost(self.dual_at(r, lo, ho, chromatic, d)), bounds=bounds, method='bounded',
@@ -240,13 +269,22 @@ class Study:
         for v in values:
             with context(v):
                 for mg in mags:
-                    out = self.cached(f'{name} x{v:g} mag{mg:g}', lambda: {k: self.row(make(mg)) for k, make in configs.items()})
+                    key = f'{name} x{v:g} mag{mg:g}'
+                    if self._reusing():
+                        out = self._scan_point(key, configs, mg)
+                    else:
+                        out = self.cached(key, lambda: {k: self.row(make(mg)) for k, make in configs.items()})
                     rows += [dict(x=v, mag=mg, config=k, **row) for k, row in out.items()]
         return pd.DataFrame(rows)
 
     def best_split(self, lo, ho, fracs, tol, chromatic=True):
         """lo(share), ho(share) -> sensor dicts. Share f of the light to the LO sensor minimising the contrast zone, with the HO-mode
         residual rms within (1 + tol) of the HO sensor with all the light (smallest share if never met); result.params['f_LO']."""
+        if self._fx('f_LO') is not None:
+            f = self._fx('f_LO')
+            r = self.best_dual(lo(f), ho(1 - f), chromatic)[1]
+            r.params['f_LO'] = f
+            return r
         ref = self.best_residual_stage(ho(1.0), lo(1.0)['N'])[0]
         cand = [(f, *self.best_dual(lo(f), ho(1 - f), chromatic)) for f in fracs]
         ok = [c for c in cand if np.sqrt(c[1] / ref) <= 1 + tol] or cand[:1]
@@ -258,6 +296,8 @@ class Study:
         """unmod: {n: sensor dict of n x n subapertures}; the n (dual system with the modulated `mod` as HO) maximising the Strehl
         (minimum total residual); result.params['n_unmod']."""
         cands = []
+        if self._fx('n_unmod') is not None:
+            unmod = {int(self._fx('n_unmod')): unmod[int(self._fx('n_unmod'))]}
         for n, s in unmod.items():
             r = self.best_dual(s, mod, chromatic)[1]
             r.params['n_unmod'] = n
@@ -266,10 +306,22 @@ class Study:
 
     # ---- contrast, sweeps, cache
     def contrast(self, r, name='total'):
-        """Mean coronagraphic raw contrast over the zone at the science wavelength (NaN only if not positive: the model breaks down)."""
-        res = self.eng.psf_terms(r, self.sci_nm, names=[name])
+        """Mean coronagraphic raw contrast over the zone at the science wavelength (NaN only if not positive: the model breaks down),
+        relative to the AO PSF peak (contrast_norm 'ao') or to the diffraction-limited one ('dl')."""
+        return self._contrast_peak(r, name)[0]
+
+    def ao_peak(self, r):
+        """Peak of the long-exposure AO PSF of r at the science wavelength, diffraction-limited peak = 1."""
+        return float(self.eng.psf_terms(r, self.sci_nm, names=['total']).image('total', 'psf').max())
+
+    def _contrast_peak(self, r, name='total'):
+        names = [name] if name == 'total' else [name, 'total']
+        res = self.eng.psf_terms(r, self.sci_nm, names=names)
         c = float(np.mean(res.contrast_at(list(np.arange(self.zone[0], self.zone[1] + 1e-9)), name=name, kind='coro')))
-        return c if c > 0 else np.nan
+        peak = float(res.image('total', 'psf').max())
+        if self.contrast_norm == 'ao':
+            c /= peak
+        return (c if c > 0 else np.nan), peak
 
     def _key(self, name, extra=()):
         settings = (VERSION, name, self.sci_nm, repr(self.chromatic), self.seeing, self.kw, self.m.max_sensitivity, tuple(self.fs_grid),
@@ -278,24 +330,107 @@ class Study:
             settings += (('wind', float(self.m.wind)),)
         if self.criterion != 'strehl':                   # (only then: the keys of the Strehl criterion are unchanged)
             settings += (('criterion', self.criterion, self.binnings),)
+        if self.config_from and self.config_from != self.kw['controller'] and not getattr(self, '_plain', False):
+            settings += (('config_from', self.config_from),)
         h = hashlib.md5(repr(settings).encode()).hexdigest()[:12]
         slug = ''.join(c if c.isalnum() else '_' for c in name)[:60]
         return op.join(self.cache_dir, f'{slug}_{h}.pkl')
 
+    def _scan_point(self, key, configs, mg):
+        """config_from: one (value, magnitude) of a scan, each configuration at its own config_from row (searched result if complete)."""
+        plain, path = self._plain_key(key), self._key(key)
+        for p in (plain, path):
+            if op.exists(p) and not self.recompute:
+                return self._load(p)
+        ref = self._reference(key) or {}
+        return self._save(path, {k: self._at(_config_of(ref.get(k)), lambda: self.row(make(mg)), f'{key} [{k}]') for k, make in configs.items()})
+
     def cached(self, name, compute, extra=()):
-        """compute() stored under `name` (+ the settings of the Study and `extra`); loaded from the cache when present."""
+        """compute() stored under `name` (+ the settings of the Study and `extra`); loaded from the cache when present. With config_from
+        (another controller): the searched result if complete, else compute() at the configuration of the config_from result of the same
+        name."""
         path = self._key(name, extra)
+        if not self._reusing():
+            return self._load_or(path, compute)
+        plain = self._plain_key(name, extra)
+        if op.exists(plain) and not self.recompute:
+            return self._load(plain)
         if op.exists(path) and not self.recompute:
-            with open(path, 'rb') as f:
-                return pickle.load(f)
-        out = compute()
+            return self._load(path)
+        return self._save(path, self._at(_config_of(self._reference(name, extra)), compute, name))
+
+    def lookup(self, name, extra=()):
+        """The cached object of `name` (searched, else at the reused configurations), None if absent; never computes."""
+        for p in ([self._plain_key(name, extra)] if self._reusing() else []) + [self._key(name, extra)]:
+            if op.exists(p):
+                return self._load(p)
+        return None
+
+    # -- reused configurations (config_from)
+    def _reusing(self):
+        return bool(self.config_from) and self.config_from != self.kw['controller']
+
+    def _plain_key(self, name, extra=()):
+        self._plain = True
+        try:
+            return self._key(name, extra)
+        finally:
+            self._plain = False
+
+    def _reference(self, name, extra=()):
+        """The config_from controller's cached object of `name`, or None."""
+        if not self.config_from:
+            return None
+        ctl = self.kw['controller']
+        self.kw['controller'] = self.config_from
+        try:
+            p = self._key(name, extra)
+        finally:
+            self.kw['controller'] = ctl
+        return self._load(p) if op.exists(p) else None
+
+    def split_candidates(self, fracs):
+        """The light splits to try: [the reused split] when a configuration is in force, else fracs."""
+        return [self._fx('f_LO')] if self._fx('f_LO') is not None else list(fracs)
+
+    def _fx(self, k):
+        return None if self.fixed is None else self.fixed.get(k)
+
+    def _at(self, cfg, compute, name):
+        if cfg is None:
+            import warnings
+            warnings.warn(f'{name}: no {self.config_from} configuration to reuse: searched')
+            return compute()
+        old, self.fixed = self.fixed, cfg
+        try:
+            return compute()
+        finally:
+            self.fixed = old
+
+    @staticmethod
+    def _load_raw(path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+
+    def _load(self, path):
+        """Cached object; rows cached before 2026-11-15 (no contrast_norm) converted to this Study's normalisation (legacy_contrast)."""
+        return legacy_contrast(self._load_raw(path), self.contrast_norm)
+
+    @staticmethod
+    def _save(path, out):
         with open(path, 'wb') as f:
             pickle.dump(out, f)
         return out
 
+    def _load_or(self, path, compute):
+        if op.exists(path) and not self.recompute:
+            return self._load(path)
+        return self._save(path, compute())
+
     def row(self, r):
         p = r.params
-        return {**r.totals(), 'contrast': self.contrast(r), 'SR': r.strehl(self.sci_nm), 'fs': p['freqUsedInHz'],
+        c, peak = self._contrast_peak(r)
+        return {**r.totals(), 'contrast': c, 'contrast_norm': self.contrast_norm, 'peak': peak, 'SR': r.strehl(self.sci_nm), 'fs': p['freqUsedInHz'],
                 'fs_lo': p.get('freqUsedInHz_lo', np.nan), 'f_LO': p.get('f_LO', np.nan), 'n_unmod': p.get('n_unmod', np.nan),
                 'weight_shift': p.get('weight_shift', np.nan), 'n_subap': p.get('Nsubaps', np.nan),
                 'N': p.get('NmodesUsed', p.get('Nmodes', np.nan))}
@@ -303,7 +438,20 @@ class Study:
     def sweep(self, name, make, mags):
         """make(mag900) -> BudgetResult; one row per magnitude (totals in nm rms, contrast, science Strehl, frame rates, chosen split /
         sampling), cached under `name`: it must describe `make` completely within the band. Each magnitude is also cached on its own
-        (`name | mag <m>`) as soon as it is done: a long sweep shows its progress on disk and an interrupted one resumes."""
+        (`name | mag <m>`) as soon as it is done: a long sweep shows its progress on disk and an interrupted one resumes. With
+        config_from: the searched sweep if complete, else every magnitude at the configuration of the config_from row (a partial
+        searched sweep is not mixed in)."""
+        if self._reusing():
+            plain = self._plain_key(name, tuple(mags))
+            if op.exists(plain) and not self.recompute:
+                return self._load(plain)
+            def row(mg):
+                path = self._key(f'{name} | mag {mg:g}')
+                if op.exists(path) and not self.recompute:
+                    return self._load(path)
+                return self._save(path, self._at(_config_of(self._reference(f'{name} | mag {mg:g}')),
+                                                 lambda: {'mag': mg, **self.row(make(mg))}, f'{name} | mag {mg:g}'))
+            return self._load_or(self._key(name, tuple(mags)), lambda: pd.DataFrame([row(mg) for mg in mags]).set_index('mag'))
         row = lambda mg: self.cached(f'{name} | mag {mg:g}', lambda: {'mag': mg, **self.row(make(mg))})
         return self.cached(name, lambda: pd.DataFrame([row(mg) for mg in mags]).set_index('mag'), extra=tuple(mags))
 
@@ -336,3 +484,47 @@ def summary(C, mags=(6.0, 9.0, 12.0), cols=('total', 'contrast', 'fs')):
     df = pd.DataFrame({(g, k): d.loc[mags, list(cols)].unstack() for g, c in C.items() for k, d in c.items()}).T
     return df.style.format('{:.1f}').format('{:.0f}', subset=[c for c in df.columns if c[0] in ('fs', 'fs_lo', 'n_unmod')]).format(
         '{:.1e}', subset=[c for c in df.columns if c[0] == 'contrast'])
+
+
+_CONFIG_KEYS = {'n_subap': 'Nsubaps', 'fs': 'freqUsedInHz', 'fs_lo': 'freqUsedInHz_lo', 'f_LO': 'f_LO', 'n_unmod': 'n_unmod',
+                'weight_shift': 'weight_shift'}
+
+
+def _config_of(obj):
+    """Configuration of a cached result (a sweep row dict, or a BudgetResult through its params), None if it has none."""
+    if obj is None:
+        return None
+    if hasattr(obj, 'params'):
+        src = {k: obj.params.get(p) for k, p in _CONFIG_KEYS.items()}
+    elif isinstance(obj, dict) and 'fs' in obj:
+        src = {k: obj.get(k) for k in _CONFIG_KEYS}
+    else:
+        return None
+    cfg = {k: float(v) for k, v in src.items() if v is not None and np.isfinite(float(v))}
+    return cfg or None
+
+
+
+LEGACY_NORM = 'ao (legacy: contrast_dl / SR)'
+
+
+def legacy_contrast(obj, norm='ao'):
+    """Ad-hoc conversion of results cached before 2026-11-15 (contrast relative to the diffraction-limited peak, no 'contrast_norm'):
+    with norm 'ao' their contrast is divided by their science SR, which stands for the AO PSF peak (the peak is ~3 % above the SR, so
+    the converted contrast is ~3 % high). Sweep DataFrames, row dicts and dicts of rows (scan points); anything else is returned as is."""
+    if norm != 'ao':
+        return obj
+    if isinstance(obj, pd.DataFrame):
+        if 'contrast' in obj.columns and 'SR' in obj.columns and 'contrast_norm' not in obj.columns:
+            obj = obj.copy()
+            obj['contrast'] = obj['contrast'] / obj['SR']
+            obj['contrast_norm'] = LEGACY_NORM
+        return obj
+    if isinstance(obj, dict):
+        if 'contrast' in obj and 'SR' in obj:
+            if 'contrast_norm' in obj:
+                return obj
+            return {**obj, 'contrast': obj['contrast'] / obj['SR'], 'contrast_norm': LEGACY_NORM}
+        if obj and all(isinstance(v, dict) and 'contrast' in v for v in obj.values()):
+            return {k: legacy_contrast(v, norm) for k, v in obj.items()}
+    return obj

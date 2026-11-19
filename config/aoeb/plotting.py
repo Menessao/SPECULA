@@ -356,20 +356,23 @@ def fusion_gain(ref, fused, sr_min=0.25, col='contrast'):
     return pd.DataFrame({'ratio': ratio, 'dmag': dmag, 'ok': ok}, index=ref.index)
 
 
-def plot_fusion_gains(gains, zone=(2, 5), sr_min=0.25, bands=('VIS', 'NIR'), mags=None, gate=True, sr_gains=None, ylim=None, fontsize=15):
+def plot_fusion_gains(gains, zone=(2, 5), sr_min=0.25, bands=('VIS', 'NIR'), mags=None, gate=True, sr_gains=None, ylim=None, fontsize=15,
+                      colours=None, title=None, sr_ref=1.0):
     """Headline figure: for every advantage (one colour) and variant (solid: main, dashed: alternative) the contrast of the fused system
     relative to its single-sensor reference (top) and the magnitudes gained at equal contrast (bottom), one column per band.
     gains: {(advantage, variant, main): {band: fusion_gain DataFrame}}; faded where a science Strehl < sr_min (gate=True). mags: (lo, hi)
     magnitude range shown; sr_gains: same structure from fusion_gain(..., col='SR'), its ratio replaces the magnitudes gained (bottom);
-    ylim: ((lo, hi) top, (lo, hi) bottom) shared by both bands; fontsize: base font size (y labels on the first column only)."""
+    ylim: ((lo, hi) top, (lo, hi) bottom) shared by both bands; fontsize: base font size (y labels on the first column only); colours:
+    {advantage: colour} (default C0, C1, ... in order); title: suptitle (default: the generic one); sr_ref: reference line of the bottom
+    row with sr_gains (1 for a ratio, 0 for a difference)."""
     with plt.rc_context({'font.size': fontsize}):
-        return _plot_fusion_gains(gains, zone, sr_min, bands, mags, gate, sr_gains, ylim, fontsize)
+        return _plot_fusion_gains(gains, zone, sr_min, bands, mags, gate, sr_gains, ylim, fontsize, colours, title, sr_ref)
 
 
-def _plot_fusion_gains(gains, zone, sr_min, bands, mags, gate, sr_gains, ylim, fontsize):
+def _plot_fusion_gains(gains, zone, sr_min, bands, mags, gate, sr_gains, ylim, fontsize, colours=None, title=None, sr_ref=1.0):
     from matplotlib.lines import Line2D
     fig, axs = plt.subplots(2, len(bands), figsize=(6.8 * len(bands), 8), sharex=True, squeeze=False)
-    colours = {a: f'C{i}' for i, a in enumerate(dict.fromkeys(a for a, _, _ in gains))}
+    colours = {**{a: f'C{i}' for i, a in enumerate(dict.fromkeys(a for a, _, _ in gains))}, **(colours or {})}
     for (adv, var, main), per_band in gains.items():
         for j, band in enumerate(bands):
             if band not in per_band:
@@ -385,7 +388,7 @@ def _plot_fusion_gains(gains, zone, sr_min, bands, mags, gate, sr_gains, ylim, f
                 ax.plot(g.index, g[col].where(~g['ok']), ':', color=colours[adv], lw=1, alpha=0.5)
     for j, band in enumerate(bands):
         axs[0, j].axhline(1.0, color='gray', lw=0.8)
-        axs[1, j].axhline(1.0 if sr_gains else 0.0, color='gray', lw=0.8)
+        axs[1, j].axhline(sr_ref if sr_gains else 0.0, color='gray', lw=0.8)
         axs[0, j].set_title(band)
         if ylim:
             axs[0, j].set_ylim(ylim[0]); axs[1, j].set_ylim(ylim[1])
@@ -400,7 +403,7 @@ def _plot_fusion_gains(gains, zone, sr_min, bands, mags, gate, sr_gains, ylim, f
         h += [Line2D([], [], color='gray', ls=':')]
         l += [f'science Strehl $<$ {sr_min:g}']
     fig.legend(h, l, loc='lower center', ncol=2, fontsize=fontsize - 2, frameon=False)
-    fig.suptitle('Sensor fusion against a single WFS: contrast and Strehl gain per advantage')
+    fig.suptitle(title or 'Sensor fusion against a single WFS: contrast and Strehl gain per advantage')
     fig.tight_layout(rect=(0, 0.02 + 0.035 * ((len(l) + 1) // 2), 1, 1))
     return fig
 

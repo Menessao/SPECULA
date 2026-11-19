@@ -31,7 +31,6 @@ def load(mag, seed=0):
     """Runs {name: (x, y)}: true modes x and the noisy POL measurement y = x + a / og + n (n Gaussian, white, the aoeb variance at the
     magnitude, sampled with a per-run seed), both [nm], means removed; and the per-mode noise variance."""
     sys.path.insert(0, HERE)
-    os.environ['AOEB_ORDER_ALL'] = '1'
     import aoeb_order as A
     I = A.inputs(mags=[mag])
     og = np.array([I['og'][j] for j in range(1, N + 1)])

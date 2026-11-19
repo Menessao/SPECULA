@@ -679,3 +679,165 @@ def plot_best(quantity='contrast', single=REF, extra=('r2',)):
         notes.append(f'hollow markers: science SR < {SR_MASK}')
     fig.text(0.01, -0.01, T(_wrap('; '.join(notes))), fontsize=FS_NOTE, color=MUTED, ha='left', va='top')
     return fig
+
+
+# ----------------------------------------------------------------------------- best single vs best fusion, flux equated and double flux
+EQ_PAIR_REAL = 0          # replay realization the equal-flux splits are paired on where they have no sweep run (mags 5, 6)
+BEST3_COLOR = {'single': INK, 'eq': 'tab:purple', 'double': 'tab:blue'}
+
+
+def _realization(case, mag, j=EQ_PAIR_REAL):
+    """{contrast_vis, contrast_nir, sr_vis, sr_nir} of replay realization j at mag (configuration selected now; mags 5, 6: that of
+    mag 7), None when it is missing or non-finite."""
+    path = op.join(OUT, case, 'replays.csv')
+    sel = selected(case)
+    cur = sel.get(mag, sel.get(REF_MAG))
+    if cur is None or not op.exists(path):
+        return None
+    for r in csv.DictReader(open(path)):
+        if float(r['mag']) == mag and int(r['realization']) == j and r['config'] == cur['config']:
+            d = {k: _float(r, k) for k in ('contrast_vis', 'contrast_nir', 'sr_vis', 'sr_nir')}
+            return d if all(np.isfinite(v) for v in d.values()) else None
+    return None
+
+
+def _realization_tn(case, mag, j=EQ_PAIR_REAL):
+    """TN folder (under <case>/replays) of replay realization j at mag with the configuration selected now, None if missing."""
+    path = op.join(OUT, case, 'replays.csv')
+    sel = selected(case)
+    cur = sel.get(mag, sel.get(REF_MAG))
+    if cur is None or not op.exists(path):
+        return None
+    for r in csv.DictReader(open(path)):
+        if float(r['mag']) == mag and int(r['realization']) == j and r['config'] == cur['config']:
+            return r['tn']
+    return None
+
+
+def _paired_run(case, mag, how):
+    """Run folder of case at mag for a pairing tag of _paired: 'sweep' (selected sweep run) or 'r<j>' (replay realization j)."""
+    if how == 'sweep':
+        return op.join(OUT, case, 'runs', selected(case)[mag]['tn'])
+    return op.join(OUT, case, 'replays', _realization_tn(case, mag, int(how[1:])))
+
+
+def best_eq_split(chrom, band, mag, single_case, notes=None):
+    """(u, pairing tag, paired contrast ratio) of the equal-flux split with the lowest 2-5 lambda/D contrast ratio to single_case on the same
+    realization (_paired), runaways (550 nm SR < RUNAWAY_MEDIAN x the single's) excluded and added to notes; None if no split is paired."""
+    w, stem, _, _ = equal_flux_panels()[(chrom, band)]
+    best = None
+    for u in SPLITS:
+        p = _paired(f'{stem}_u{u}', single_case, mag)
+        if p is None:
+            continue
+        a, b, how = p
+        if not a['sr_vis'] >= RUNAWAY_MEDIAN * b['sr_vis']:
+            if notes is not None:
+                notes.add(f'{stem}_u{u} mag {mag:g} ({how}): ran away, not considered')
+            continue
+        r = a[f'contrast_{band}'] / b[f'contrast_{band}']
+        if best is None or r < best[2]:
+            best = (u, how, r)
+    return best
+
+
+def _paired(case, ref_case, mag):
+    """(values of case, values of ref_case) on the same atmosphere: the sweep runs (nominal realization) where both have one, else replay
+    realization EQ_PAIR_REAL; plus the tag of the pairing. None when no common realization exists."""
+    a, b = selected(case).get(mag), selected(ref_case).get(mag)
+    if a is not None and b is not None and a.get('tn') and b.get('tn'):
+        f = lambda s: {k: float(s[k]) for k in ('contrast_vis', 'contrast_nir', 'sr_vis', 'sr_nir')}
+        return f(a), f(b), 'sweep'
+    a, b = _realization(case, mag), _realization(ref_case, mag)
+    return (a, b, f'r{EQ_PAIR_REAL}') if a is not None and b is not None else None
+
+
+def plot_best3(quantity='contrast'):
+    """Best single stage, best fusion with equal flux (both pyramids share the single-stage band) and best fusion with double flux (each
+    pyramid with a whole band: unmod 900 + rMod 2 1300 nm, or swapped). At each magnitude and panel, best = lowest 2-5 lambda/D contrast in
+    the panel band. Single and double flux: replay mean +- std over the converged replays (as plot_best, single rMod 1 / 2). Equal flux: the
+    splits were not replayed, so each split is compared with the best single stage ON THE SAME REALIZATION (paired: the sweep runs at mags 7-12,
+    replay realization 0 at mag 5) and drawn at that paired ratio (SR: difference) times (plus) the best-single replay mean; the best split is
+    the one with the lowest paired ratio, its band share is written next to the point. Lower row: each fusion wrt the best single."""
+    fl = floors() if quantity == 'contrast' else None
+    fig, gs = _figure(f"{'Contrast' if quantity == 'contrast' else 'Strehl ratio'}: best single vs best fusion, flux equated and double flux")
+    lim = ylim(quantity)
+    CMP_ROWS.clear()
+    op_ = '/' if quantity == 'contrast' else '-'
+    lab = {'single': 'best single', 'eq': 'best fusion (flux equated)', 'double': 'best fusion (double flux)'}
+    eqp = equal_flux_panels()
+    missing, pairing, runaway = set(), set(), set()
+    for (chrom, band), curves in main_panels().items():
+        ax, rx = _axes(fig, gs, int(chrom), 0 if band == 'vis' else 1)
+        k = f'contrast_{band}' if quantity == 'contrast' else f'sr_{band}'
+        kc = f'contrast_{band}'
+        single = {m: p for m in MAGS if (p := _best_replayed(curves, 'single', m, band, 'best')) is not None}
+        double = {m: p for m in MAGS if (p := _best_replayed(curves, 'fusion', m, band)) is not None}
+        ys, yd, ye = {}, {}, {}
+        for m, (_, _, c) in single.items():
+            ys[m] = replays(c)[m]
+        for m, (_, _, c) in double.items():
+            yd[m] = replays(c)[m]
+        w, stem, _, _ = eqp[(chrom, band)]
+        for m in MAGS:
+            if m not in single:
+                continue
+            sc = single[m][2]
+            best = None
+            for u in SPLITS:
+                p = _paired(f'{stem}_u{u}', sc, m)
+                if p is None:
+                    continue
+                a, b, how = p
+                if not a['sr_vis'] >= RUNAWAY_MEDIAN * b['sr_vis']:     # 550 nm SR below half that of the single: the loop ran away
+                    runaway.add(f'{stem}_u{u} mag {m:g} ({how})')
+                    continue
+                r = a[kc] / b[kc]                    # selection: paired contrast ratio
+                if best is None or r < best[0]:
+                    best = (r, u, _cmp(quantity, a[k], b[k]), a[f'sr_{band}'], how)
+            if best is None:
+                missing.add(f'{stem} mag {m:g}')
+                continue
+            _, u, c, sr, how = best
+            pairing.add(how)
+            mean = ys[m][k]
+            ye[m] = dict(y=mean * c if quantity == 'contrast' else mean + c, cmp=c, u=u, sr=sr)
+        for g, data in (('single', ys), ('double', yd)):
+            mags = sorted(data)
+            if not mags:
+                continue
+            y = [data[m][k] for m in mags]
+            err = [data[m][k + '_std'] if np.isfinite(data[m][k + '_std']) else 0.0 for m in mags]
+            hollow = [data[m][f'sr_{band}'] < SR_MASK for m in mags] if quantity == 'contrast' else None
+            _curve(ax, mags, y, err, BEST3_COLOR[g], 'o' if g == 'double' else 'v', lab[g], hollow)
+        mags = sorted(ye)
+        if mags:
+            hollow = [ye[m]['sr'] < SR_MASK for m in mags] if quantity == 'contrast' else None
+            _curve(ax, mags, [ye[m]['y'] for m in mags], None, BEST3_COLOR['eq'], 'D', lab['eq'], hollow,
+                   counts=[f"{ye[m]['u']}/{100 - ye[m]['u']}" for m in mags])
+            _cmp_curve(rx, mags, [ye[m]['cmp'] for m in mags], BEST3_COLOR['eq'], 'D', quantity, chrom, band, f"{lab['eq']} {op_} best single")
+        both = sorted(set(yd) & set(ys))
+        if both:
+            _cmp_curve(rx, both, [_cmp(quantity, yd[m][k], ys[m][k]) for m in both], BEST3_COLOR['double'], 'o', quantity, chrom, band,
+                       f"{lab['double']} {op_} best single")
+        if fl:
+            _floor_lines(ax, chrom, band, fl)
+        _style(ax, quantity == 'contrast')
+        _style(rx, False)
+        _labels(ax, rx, quantity, chrom, band, 'best single', _title(chrom, band).replace('(single stage: ', '(single stage / flux equated: '))
+        ax.set_ylim(*lim)
+        ax.legend(**_LEG)
+    notes = ['best = lowest 2-5 λ/D contrast in the panel band at each magnitude; best single: rMod 1 / 2; double flux: unmod 900 + rMod 2 '
+             '1300 nm or swapped (each pyramid with its own band)',
+             'best single and double flux: replay mean ± std, only where every replay converged',
+             'flux equated (both pyramids at the single-stage WFS wavelength, band split unmod / rMod 2 written next to each point): not replayed; '
+             'ratio to the best single on the same realization (sweep run at mags 7-12, replay realization '
+             f'{EQ_PAIR_REAL} at mag 5) times the best-single replay mean, no error bar']
+    if quantity == 'contrast':
+        notes.append(f'hollow markers: science SR < {SR_MASK}')
+    if runaway:
+        notes.append('flux-equated splits that ran away (550 nm SR < half the best single), not considered: ' + ', '.join(sorted(runaway)))
+    if missing:
+        notes.append('flux equated missing: ' + ', '.join(sorted(missing)))
+    fig.text(0.01, -0.01, T(_wrap('; '.join(notes))), fontsize=FS_NOTE, color=MUTED, ha='left', va='top')
+    return fig

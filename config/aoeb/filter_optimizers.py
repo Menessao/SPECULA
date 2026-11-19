@@ -382,7 +382,7 @@ def evaluate_controllers(fs, latency, gain, ff, turb_var, noise_var, alias_var, 
     if not np.all(og > 0):
         raise ValueError('optical gains must be positive and finite')
     n_m = len(gain)
-    turb, noise, alias = np.zeros(n_m), np.zeros(n_m), np.zeros(n_m)
+    turb, noise, alias_out = np.zeros(n_m), np.zeros(n_m), np.zeros(n_m)   # alias_out: not `alias` (the spectrum)
     for ffv in np.unique(ff):
         sel = np.nonzero(ff == ffv)[0]
         l0, cn = loop_response(f, fs, latency, ffv)
@@ -395,10 +395,10 @@ def evaluate_controllers(fs, latency, gain, ff, turb_var, noise_var, alias_var, 
         turb[sel] = tv[sel] * ((p0 - 2.0 * (k * ww).real + np.abs(k) ** 2 * p1) @ w + below * np.abs(1.0 - k[:, 0]) ** 2)
         hn2 = np.abs(k) ** 2 / og[sel, None] ** 2
         noise[sel] = nv[sel] * (2.0 / fs) * (hn2 @ w_edge)
-        alias[sel] = av[sel] * ((hn2 * s_alias) @ w_edge)
+        alias_out[sel] = av[sel] * ((hn2 * s_alias) @ w_edge)
         bad = x >= critical_x(fs, latency, ffv)
-        turb[sel[bad]] = noise[sel[bad]] = alias[sel[bad]] = np.inf
-    return OptResult(gain, ff, gain * og, turb, noise, alias)
+        turb[sel[bad]] = noise[sel[bad]] = alias_out[sel[bad]] = np.inf
+    return OptResult(gain, ff, gain * og, turb, noise, alias_out)
 
 
 # ----------------------------------------------------------------------------- IIR controllers (global gain only)
