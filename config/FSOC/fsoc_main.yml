@@ -1,15 +1,10 @@
-# Base SPECULA simulation of the Ristretto-like system, Kalman-filter version: VIS modulated pyramid at 500 Hz
-# (reference) fused with an unmodulated NIR pyramid at 2 kHz (its static offset is estimated as a bias). The calib_*.yml files of this folder are applied on top of it
-# (`specula ristretto_main.yml calib_xxx.yml overrides.yml`) by aoeb.generation, which overrides main.root_dir, the pyramid geometry,
-# the sensing wavelength (pyr.wavelengthInNm AND source_ngs.wavelengthInNm: they must be equal), the science wavelength, the DM data
-# objects (from paths.dm_tag), seeing, modes, ... Adapted from the example main yml; the changes are marked with FIX.
 
 # Main simulation parameters
 main:
   class:             'SimulParams'
-  root_dir:          '/raid1/mmenessini/calibration/WFSW'  # CalibManager root directory (all the data are in subdirectories); overridden by aoeb
-  pixel_pupil:       220                   # Must match influence function computation
-  pixel_pitch:       0.03727272727         # [m] 8.2m / 220 pixels = 0.037272 m/pixel (Nyquist sampling of 10cm r0)
+  root_dir:          '/raid1/mmenessini/calibration/FSOC'  # CalibManager root directory (all the data are in subdirectories); overridden by aoeb
+  pixel_pupil:       120                   # Must match influence function computation
+  pixel_pitch:       0.0083         # [m] 1m / 120 pixels = 0.0083 m/pixel (Nyquist sampling of 10cm r0)
   total_time:        1.000                 # [s]
   time_step:         0.0005                # [s] 0.5ms time steps (2 kHz)
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
@@ -18,65 +13,32 @@ main:
 # Atmospheric conditions
 seeing:
   class:             'WaveGenerator'
-  constant:          1.0                  # [arcsec]
+  constant:          2.0                  # [arcsec]
   outputs:           ['output']
 
 wind_speed:
   class:             'WaveGenerator'
   constant:          [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]    # [m/s] Multi-layer wind speeds
-  # constant:          [5.5, 5.5, 5.1, 5.5, 5.6, 5.7, 5.8, 6.0, 6.5, 7.0,
-  #                     7.5, 8.5, 9.5, 11.5, 17.5, 23.0, 26.0, 29.0, 32.0, 27.0,
-  #                     22.0, 14.5, 9.5, 6.3, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0,
-  #                     8.5, 9.0, 9.5, 10.0, 10.0]      # [m/s] Wind speed value
   outputs:           ['output']
 
 wind_direction:
   class:             'WaveGenerator'
   constant:          [38.0, 34.0, 54.0, 42.0, 68.0, 48.0, -102.0, -83.0, -77.0, 34.0] # [deg] Wind directions for each layer
-  # constant:          [277.7, 7.5, 228.1, 269.6, 179.5, 80.9, 71.3, 273.8,
-  #                     60.9, 31.8, 246.7, 343.2, 1.4, 184.4, 292.5, 220.5,
-  #                     259.8, 105.1, 330.4, 257.2, 195.3, 51.2, 134.4,
-  #                     242.7, 159.1, 156.2, 222.4, 184.7, 234.1, 216.4,
-  #                     289.9, 187.8, 327.1, 114.9, 32.6]
   outputs:           ['output']
 
 
-
-# Science source, propagated like the NGS up to the science wavelength (ef_prop_science below)
-science_vis:
-  class:             'Source'
-  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On axis
-  height:            .inf
-  magnitude:         8.15
-  wavelengthInNm:    550                  # [nm] science wavelength
-
 # Natural guide star for the WFS. Its wavelength and the pyramid wavelength must be the same (aoeb sets both).
-source_vis:
+source:
   class:             'Source'
   polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
   height:            .inf                  # Infinite height (star)
-  magnitude:         7.00
-  wavelengthInNm:    900                   # [nm] sensing wavelength
-
-source_nir:
-  class:             'Source'
-  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On-axis NGS
-  height:            .inf                  # Infinite height (star)
-  magnitude:         6.43
-  wavelengthInNm:    1300                   # [nm] sensing wavelength
-
-# Science source, propagated like the NGS up to the science wavelength (ef_prop_science below)
-science_nir:
-  class:             'Source'
-  polar_coordinates: [0.0, 0.0]            # [arcsec, deg] On axis
-  height:            .inf
-  magnitude:         4.97
-  wavelengthInNm:    1650                  # [nm] science wavelength
+  magnitude:         5.00
+  wavelengthInNm:    1550                   # [nm] sensing wavelength
 
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'vlt_pupil_220pixels'
+  tag:               'dm820_1m_120pixels'
 
 # Multi-layer atmospheric model
 atmo:
@@ -85,14 +47,6 @@ atmo:
   L0:                25.0                   # [m] Outer scale
   heights:           [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136] # [m] at 0 zenith angle
   Cn2:               [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]        # Cn2 fractions (sum = 1.0)
-  # heights:              [30.0000, 90.0000, 150.000, 200.000, 245.000, 300.000, 390.000, 601.000, 1130.00, 1880.00,
-  #                        2630.00, 3500.00, 4500.00, 5500.00, 6500.00, 7500.00, 8500.00, 9500.00, 10500.0, 11500.0,
-  #                        12500.0, 13500.0, 14500.0, 15500.0, 16500.0, 17500.0, 18500.0, 19500.0, 20500.0, 21500.0,
-  #                        22500.0, 23500.0, 24500.0, 25500.0, 26500.0] # [m] layer heights at 0 zenith angle
-  # Cn2:                  [0.241954, 0.119977, 0.0968817, 0.0589889, 0.0472911, 0.0472911, 0.0472911, 0.0472911, 0.0398925, 0.0323939,
-  #                        0.0161969, 0.0260951, 0.0155971, 0.0103980, 0.00999811, 0.0119977, 0.00400924, 0.0139974, 0.0129975, 0.00700868,
-  #                        0.0159970, 0.0258951, 0.0190964, 0.00986813, 0.00616883, 0.00400924, 0.00246953, 0.00215959, 0.00184965, 0.00135974,
-  #                        0.00110979, 0.000616883, 0.000925825, 0.000493907, 0.000431918] # Cn2 weights (total must be eq 1)
   fov:               0.0                    # [arcsec] Field of view
   inputs:
     seeing:          'seeing.output'
@@ -104,30 +58,28 @@ atmo:
 prop:
   class:             'AtmoPropagation'
   simul_params_ref:  'main'
-  source_dict_ref:   ['source_vis', 'source_nir', 'science_vis', 'science_nir']
+  source_dict_ref:   ['source']
   inputs:
     atmo_layer_list: ['atmo.layer_list']
     common_layer_list: ['pupilstop','dm.out_layer:-1']       # Pupil + DM correction
-  outputs:           ['out_source_vis_ef', 'out_source_nir_ef', 'out_science_vis_ef', 'out_science_nir_ef']     # FIX: was out_cource_science_ef
+  outputs:           ['out_source_ef']     # FIX: was out_cource_science_ef
 
 
-
-########################### VIS ##############################
-pyr_vis:
+########################### PYR ##############################
+pyr:
   class:             'ModulatedPyramid'
   simul_params_ref:  'main'
-  pup_diam:          48.                     # Pupil diameter in subaps.
-  pup_dist:          60.                     # Separation between pupil centers in subaps.
-  fov:               2.0                     # Requested field-of-view [arcsec]
+  pup_diam:          40.                     # Pupil diameter in subaps.
+  pup_dist:          48.                     # Separation between pupil centers in subaps.
+  fov:               4.0                     # Requested field-of-view [arcsec]
   fov_errsup:        12
   mod_amp:           3.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    900                     # [nm] Pyramid wavelength
+  wavelengthInNm:    1550                     # [nm] Pyramid wavelength
   inputs:
-    in_ef: 'prop.out_source_vis_ef'
-  # Reference sensor of the Kalman filter (no bias estimated): modulated, read at 500 Hz
+    in_ef: 'prop.out_source_ef'
 
-cred_vis:
+cred:
   class:             'CCD'
   simul_params_ref:  'main'
   size:              [120,120]               # Total detector size
@@ -140,43 +92,42 @@ cred_vis:
   emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
   quantum_eff:       0.2                     # QE x transmission
   inputs:
-    in_i:            'pyr_vis.out_i'
+    in_i:            'pyr.out_i'
   outputs:           ['out_pixels']
 
-pyr_slopes_vis:
+pyr_slopes:
   class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata_48x48'
-  # sn_object:            'pyr3.0_48x48_sn'
+  pupdata_object:         'pyr_pupdata_40x40'
+  # sn_object:            'pyr3.0_40x40_sn'
   inputs:
-    in_pixels:        'cred_vis.out_pixels'
+    in_pixels:        'cred.out_pixels'
   outputs:           ['out_slopes', 'out_total_counts']
 
-pyr_modes_vis:
+pyr_modes:
   class:             'Modalrec'
-  recmat_object:     'pyr3.0_48x48_wvl900_bmc2k_vlt_1300modes_rec'
+  recmat_object:     'pyr3.0_40x40_820modes_rec'
   inputs:
-    in_slopes:       'pyr_slopes_vis.out_slopes'
+    in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
 
 
-########################### NIR ##############################
-pyr_nir:
-  class:             'ModulatedPyramid'
-  simul_params_ref:  'main'
-  pup_diam:          48.                     # Pupil diameter in subaps.
-  pup_dist:          60.                     # Separation between pupil centers in subaps.
-  fov:               2.0                     # Requested field-of-view [arcsec]
-  fov_errsup:        12
-  mod_amp:           1.0                     # Unmodulated (its offset is estimated by the Kalman filter)
-  output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
-  wavelengthInNm:    1300                     # [nm] Pyramid wavelength (FIX: equal to source_ngs.wavelengthInNm)
+########################### SH ##############################
+sh:
+  class:             'SH'
+  subap_on_diameter: 40                    # 40x40 subapertures across pupil
+  subap_wanted_fov:  4.0                   # [arcsec] Subaperture field of view
+  sensor_pxscale:    0.6667                # [arcsec/pixel] Pixel scale
+  subap_npx:         6                     # 8x8 pixels per subaperture
+  wavelengthInNm:    1550                   # [nm] R-band sensing
   inputs:
-    in_ef: 'prop.out_source_nir_ef'
+    in_ef:           'prop.out_source_ef'
+  outputs:           ['out_i']
 
-cred_nir:
+
+cred_sh:
   class:             'CCD'
   simul_params_ref:  'main'
-  size:              [120,120]               # Total detector size
+  size:              [240,240]               # Total detector size
   dt:                0.0005                  # [s] Integration time
   bandw:             400                     # [nm]
   photon_noise:      true
@@ -186,7 +137,7 @@ cred_nir:
   emccd_gain:        1                       # conventional readout: RON 0.5 e- applies as is
   quantum_eff:       0.2                     # QE x transmission
   inputs:
-    in_i:            'pyr_nir.out_i'
+    in_i:            'sh.out_i'
   outputs:           ['out_pixels']
 
 pyr_slopes_nir:
