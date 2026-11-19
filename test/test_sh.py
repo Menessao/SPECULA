@@ -1,14 +1,19 @@
 import specula
 specula.init(0)  # Default target device
 
+import tempfile
 import unittest
+from unittest import mock
 
 from specula import np
 from specula import cpuArray
 
+from specula.base_value import BaseValue
 from specula.data_objects.electric_field import ElectricField
+from specula.data_objects.laser_launch_telescope import LaserLaunchTelescope
+from specula.data_objects.simul_params import SimulParams
 from specula.processing_objects.sh import SH
-from test.specula_testlib import cpu_and_gpu
+from test.specula_testlib import cpu_and_gpu, accelerate, graph_captured
 
 
 class TestSH(unittest.TestCase):
@@ -45,12 +50,16 @@ class TestSH(unittest.TestCase):
         Test that pixelscale is correctly handled, by comparing spots from a flat 
         wavefront and from a tilted one. The introduced tilt corresponds to exactly 1 pixel,
         and we verify that the resulting intensity field is indeed shifted by 1 pixel
-        in the correct direction
+        in the correct direction.
+
+        The pupil sampling and fov_ovs_coeff=1 are chosen so that the input field is not
+        interpolated: the interpolation magnifies the field by N/(N-1) (issue #838),
+        which would shift the spot by (N-1)/N pixels only.
         '''
         t = 1
         pxscale_arcsec = 0.5
-        pixel_pupil = 120
-        pixel_pitch = 0.05
+        pixel_pupil = 240
+        pixel_pitch = 0.025
         sh_npix = 6
 
         sh = SH(wavelengthInNm=500,
@@ -58,6 +67,7 @@ class TestSH(unittest.TestCase):
                 sensor_pxscale=pxscale_arcsec,
                 subap_on_diameter=20,
                 subap_npx=sh_npix,
+                fov_ovs_coeff=1.0,
                 target_device_idx=target_device_idx)
 
         # Flat wavefront
@@ -149,9 +159,7 @@ class TestSH(unittest.TestCase):
 
         # Test 1: sh1 and sh2 should share arrays (same geometry, same rank)
         assert id(sh1._wf3) == id(sh2._wf3), "sh1 and sh2 should share _wf3"
-        assert id(sh1.psf) == id(sh2.psf), "sh1 and sh2 should share psf"
-        assert id(sh1.psf_shifted) == id(sh2.psf_shifted), "sh1 and sh2 should share psf_shifted"
-        assert id(sh1.ef_row) == id(sh2.ef_row), "sh1 and sh2 should share ef_row"
+        assert id(sh1._intensity) == id(sh2._intensity), "sh1 and sh2 should share _intensity"
 
         # Test 2: sh3 should NOT share with sh1/sh2 (different geometry)
         assert id(sh1._wf3) != id(sh3._wf3), "sh3 should have different _wf3 (different geometry)"
@@ -163,10 +171,9 @@ class TestSH(unittest.TestCase):
         # We should have entries for:
         # - sh1/sh2 (shared, rank 0, geometry 20)
         # - sh3 (separate, rank 0, geometry 30)
-        # Each geometry allocates 4 arrays
-        #  (_wf3, psf==psf_shifted, ef_row, _psfimage, _psf_reshaped_2d)
-        # So expected: 2 geometries × 5 arrays = 10 entries
-        assert cache_size == 10
+        # Each geometry allocates 4 arrays (_wf3, _intensity, _int_tmp, _int_img)
+        # So expected: 2 geometries × 4 arrays = 8 entries
+        assert cache_size == 8
         print(f"Cache has {cache_size} entries")
 
     @cpu_and_gpu
@@ -210,9 +217,7 @@ class TestSH(unittest.TestCase):
                                msg=f"Expected 120 total pixels, got {calculated_size}")
 
         # 3. Verify internal pixel count
-        # With Lenslet diameter normalization = 2.0 (standard implied by 12!=6):
-        # lens[2] = 2/n_lenses = 0.2
-        # _ovs_np_sub = round(120 * 0.2 * 0.5) = round(12.0) = 12
+        # _ovs_np_sub = 120 // 10 = 12
         # This represents the full subaperture width in pixels (120 pixels / 10 subaps).
         self.assertEqual(sh._ovs_np_sub, 12,
                          "Internal subap pixel count should match total/n_lenses")
@@ -260,3 +265,295 @@ class TestSH(unittest.TestCase):
         final_size = pixel_pupil * sh._fov_ovs
         self.assertAlmostEqual(final_size % 20, 0, places=5,
                                msg="Final size must be divisible by 20")
+
+    @unittest.skipIf(specula.cp is None, 'GPU not available')
+    def test_shared_interpolated_ef_in_cuda_graph(self):
+        '''
+        Two GPU SH objects with the same geometry share the interpolated
+        field, which is computed inside their CUDA graphs. Over several steps
+        with a changing input, each must give the same result as a CPU SH
+        (no graph) running alone.
+        '''
+        n = 40
+        yy, xx = np.mgrid[:n, :n] - (n - 1) / 2
+        pupil = (np.hypot(xx, yy) < n / 2).astype(float)
+        rng = np.random.default_rng(1)
+        phases = [rng.normal(size=(n, n)) * 80 for _ in range(3)]
+
+        def make(target_device_idx, rot):
+            sh = SH(wavelengthInNm=589, subap_wanted_fov=4.0, sensor_pxscale=0.5,
+                    subap_on_diameter=5, subap_npx=8, rotAnglePhInDeg=rot,
+                    target_device_idx=target_device_idx)
+            return sh
+
+        def run(shs, ef):
+            out = []
+            for sh in shs:
+                sh.inputs['in_ef'].set(ef)
+                sh.setup()
+            accelerate(*shs)
+            for t, phase in enumerate(phases):
+                ef.A[:] = ef.to_xp(pupil)
+                ef.phaseInNm[:] = ef.to_xp(phase)
+                ef.generation_time = t
+                for sh in shs:
+                    sh.check_ready(t)
+                    sh.trigger()
+                    sh.post_trigger()
+                    out.append(cpuArray(sh.outputs['out_i'].i).copy())
+            return out
+
+        gpu_shs = [make(0, 0.0), make(0, 7.0)]
+        gpu_ef = ElectricField(n, n, 0.1, S0=10, target_device_idx=0)
+        gpu_out = run(gpu_shs, gpu_ef)
+
+        assert gpu_shs[0].ef_interpolator.interpolated_ef() is \
+               gpu_shs[1].ef_interpolator.interpolated_ef()
+        assert all(graph_captured(sh) for sh in gpu_shs)
+
+        for k, rot in enumerate([0.0, 7.0]):
+            cpu_ef = ElectricField(n, n, 0.1, S0=10, target_device_idx=-1)
+            cpu_out = run([make(-1, rot)], cpu_ef)
+            for t in range(len(phases)):
+                np.testing.assert_allclose(gpu_out[t * 2 + k], cpu_out[t],
+                                           rtol=1e-4, atol=1e-6 * cpu_out[t].max())
+
+    @unittest.skipIf(specula.cp is None, 'GPU not available')
+    def test_cuda_graph_recaptured_after_interpolator_update(self):
+        '''
+        The interpolation parameters are frozen in the CUDA graph: after
+        update_interpolator_parameters(), the GPU SH must give the same result
+        as a CPU SH (no graph) created with the new parameters.
+        '''
+        n = 40
+        yy, xx = np.mgrid[:n, :n] - (n - 1) / 2
+        pupil = (np.hypot(xx, yy) < n / 2).astype(float)
+        phase = np.random.default_rng(2).normal(size=(n, n)) * 80
+
+        def make(target_device_idx, rot):
+            sh = SH(wavelengthInNm=589, subap_wanted_fov=4.0, sensor_pxscale=0.5,
+                    subap_on_diameter=5, subap_npx=8, rotAnglePhInDeg=rot,
+                    target_device_idx=target_device_idx)
+            ef = ElectricField(n, n, 0.1, S0=10, target_device_idx=target_device_idx)
+            ef.A[:] = ef.to_xp(pupil)
+            ef.phaseInNm[:] = ef.to_xp(phase)
+            sh.inputs['in_ef'].set(ef)
+            sh.setup()
+            return sh, ef
+
+        def step(sh, ef, t):
+            ef.generation_time = t
+            sh.check_ready(t)
+            sh.trigger()
+            sh.post_trigger()
+            return cpuArray(sh.outputs['out_i'].i).copy()
+
+        gpu_sh, gpu_ef = make(0, 0.0)
+        out_before = step(gpu_sh, gpu_ef, 0)
+        step(gpu_sh, gpu_ef, 1)
+
+        gpu_sh.update_interpolator_parameters(rotAnglePhInDeg=7.0)
+        out_after = step(gpu_sh, gpu_ef, 2)
+
+        cpu_sh, cpu_ef = make(-1, 7.0)
+        out_ref = step(cpu_sh, cpu_ef, 0)
+
+        np.testing.assert_allclose(out_after, out_ref, rtol=1e-4, atol=1e-6 * out_ref.max())
+        assert not np.allclose(out_before, out_ref, rtol=1e-4, atol=1e-6 * out_ref.max())
+
+    @cpu_and_gpu
+    def test_wf3_not_shared_with_different_subap_size(self, target_device_idx, xp):
+        '''
+        Two SH with the same number of subaps but a different number of pixels
+        per subap must not share the padded _wf3 buffer: the one with the larger
+        subaps would write into the padding of the other. (With the FFT size
+        twice the subap size they also have different FFT sizes, but the cache
+        key includes the subap size anyway.)
+        '''
+        t = 1
+
+        def make(pixel_pupil, fov_ovs_coeff):
+            sh = SH(wavelengthInNm=589,
+                    subap_wanted_fov=3.0,
+                    sensor_pxscale=0.5,
+                    subap_on_diameter=10,
+                    subap_npx=6,
+                    fov_ovs_coeff=fov_ovs_coeff,
+                    target_device_idx=target_device_idx)
+            ef = ElectricField(pixel_pupil, pixel_pupil, 0.05, S0=1,
+                               target_device_idx=target_device_idx)
+            ef.generation_time = t
+            sh.inputs['in_ef'].set(ef)
+            sh.setup()
+            return sh
+
+        def run(sh):
+            sh.check_ready(t)
+            sh.trigger()
+            sh.post_trigger()
+            return cpuArray(sh.outputs['out_i'].i).copy()
+
+        SH._SH__zeros_cache.clear()
+        sh_a = make(40, 3.0)
+        sh_b = make(60, 1.0)
+        assert sh_a._ovs_np_sub > sh_b._ovs_np_sub
+        assert sh_a._wf3 is not sh_b._wf3
+
+        out_b = run(sh_b)
+        run(sh_a)
+        np.testing.assert_array_equal(run(sh_b), out_b)
+
+    @cpu_and_gpu
+    def test_oversampled_size_not_truncated(self, target_device_idx, xp):
+        '''
+        Test that the oversampled size is not truncated by float rounding:
+        with 4 subaps and a 47 pixel pupil, the oversampled size is 96,
+        but int(47 * (96 / 47)) == 95.
+        '''
+        t = 1
+        ref_S0 = 100
+        sh = SH(wavelengthInNm=500,
+                subap_wanted_fov=3,
+                sensor_pxscale=0.5,
+                subap_on_diameter=4,
+                subap_npx=6,
+                target_device_idx=target_device_idx)
+
+        ef = ElectricField(47, 47, 0.05, S0=ref_S0, target_device_idx=target_device_idx)
+        ef.generation_time = t
+        sh.inputs['in_ef'].set(ef)
+
+        sh.setup()
+        self.assertEqual(sh._ovs_ef_size, 96)
+
+        sh.check_ready(t)
+        sh.trigger()
+        sh.post_trigger()
+        intensity = sh.outputs['out_i']
+        np.testing.assert_almost_equal(xp.sum(intensity.i), ref_S0 * ef.masked_area(), decimal=3)
+
+    def test_sensor_pxscale_effective(self):
+        '''
+        The simulated sensor pixel scale is exactly the requested one, with no
+        warning: the pixels are integrated exactly, without rounding the FoV
+        '''
+        for sensor_pxscale in (0.3, 0.7):
+            sh = SH(wavelengthInNm=500,
+                    subap_wanted_fov=6 * sensor_pxscale,
+                    sensor_pxscale=sensor_pxscale,
+                    subap_on_diameter=10,
+                    subap_npx=6,
+                    target_device_idx=-1)
+            ef = ElectricField(80, 80, 0.05, S0=1, target_device_idx=-1)
+            with self.assertNoLogs('specula.SH', level='WARNING'):
+                sh._set_in_ef(ef)
+            self.assertEqual(sh.sensor_pxscale_effective, sensor_pxscale)
+            self.assertAlmostEqual(sh.subap_real_fov_arcsec, 6 * sensor_pxscale)
+
+    def _lgs_sh(self, target_device_idx, xp, data_dir):
+        '''
+        LGS SH with sodium profile inputs, after setup(). Returns the SH, the
+        sodium intensity input and a function that runs one step, refreshing
+        all inputs as generators do, and returns a copy of the kernels.
+        '''
+        llt = LaserLaunchTelescope(simul_params=SimulParams(zenithAngleInDeg=30.0),
+                                   spot_size=1.0, tel_position=[5.0, 0.0, 0.0],
+                                   target_device_idx=target_device_idx)
+        altitude = BaseValue(value=xp.array([85e3, 90e3, 95e3], dtype=xp.float32),
+                             target_device_idx=target_device_idx)
+        intensity = BaseValue(value=xp.array([0.2, 0.6, 0.2], dtype=xp.float32),
+                              target_device_idx=target_device_idx)
+        ef = ElectricField(80, 80, 0.1, S0=100, target_device_idx=target_device_idx)
+
+        sh = SH(wavelengthInNm=589,
+                subap_wanted_fov=6,
+                sensor_pxscale=0.5,
+                subap_on_diameter=10,
+                subap_npx=12,
+                laser_launch_tel=llt,
+                data_dir=data_dir,
+                target_device_idx=target_device_idx)
+        sh.inputs['in_ef'].set(ef)
+        sh.inputs['sodium_altitude'].set(altitude)
+        sh.inputs['sodium_intensity'].set(intensity)
+        sh.setup()
+        accelerate(sh)
+
+        def step(t):
+            for obj in (ef, altitude, intensity):
+                obj.generation_time = t
+            sh.check_ready(t)
+            sh.trigger()
+            sh.post_trigger()
+            return cpuArray(sh._kernelobj.kernels).copy()
+
+        return sh, intensity, step
+
+    @cpu_and_gpu
+    def test_kernels_follow_in_place_sodium_update(self, target_device_idx, xp):
+        '''
+        Generators update the sodium profile in place at every step. The SH must
+        detect the new values and recompute its kernels. On CPU, cpuArray() does
+        not copy: the SH must keep its own copy of the last profile to compare with.
+        '''
+        with tempfile.TemporaryDirectory() as data_dir:
+            _, intensity, step = self._lgs_sh(target_device_idx, xp, data_dir)
+            kernels1 = step(1)
+            intensity.value[:] = xp.array([0.5, 0.3, 0.2], dtype=xp.float32)
+            kernels2 = step(2)
+
+        self.assertFalse(np.allclose(kernels1, kernels2))
+
+    @cpu_and_gpu
+    def test_kernels_not_prepared_if_sodium_unchanged(self, target_device_idx, xp):
+        '''
+        Generators refresh the sodium profile at every step, even if its values
+        do not change: the kernels must be prepared only at the first step.
+        '''
+        with tempfile.TemporaryDirectory() as data_dir:
+            sh, _, step = self._lgs_sh(target_device_idx, xp, data_dir)
+            with mock.patch.object(sh._kernelobj, 'prepare_for_sh',
+                                   wraps=sh._kernelobj.prepare_for_sh) as prepare:
+                for t in range(1, 5):
+                    step(t)
+
+        self.assertEqual(prepare.call_count, 1)
+
+    @cpu_and_gpu
+    def test_shared_kernels(self, target_device_idx, xp):
+        '''
+        Two SH objects with the same kernel share it. When the sodium
+        profile of one of them changes, it gets new kernels and, on GPU,
+        must capture its CUDA graph again: its output must match an SH
+        created with the new profile, while the other one is unaffected.
+        '''
+        new_profile = xp.array([0.5, 0.3, 0.2], dtype=xp.float32)
+
+        def out(sh):
+            return cpuArray(sh.outputs['out_i'].i).copy()
+
+        with tempfile.TemporaryDirectory() as data_dir:
+            sh1, _, step1 = self._lgs_sh(target_device_idx, xp, data_dir)
+            sh2, intensity2, step2 = self._lgs_sh(target_device_idx, xp, data_dir)
+            for t in (1, 2):
+                step1(t)
+                step2(t)
+            self.assertIs(sh1._kernelobj.kernels, sh2._kernelobj.kernels)
+            if target_device_idx >= 0:  # pragma: gpu
+                self.assertTrue(graph_captured(sh2))
+            out1 = out(sh1)
+
+            intensity2.value[:] = new_profile
+            for t in (3, 4):
+                step1(t)
+                step2(t)
+            self.assertIsNot(sh1._kernelobj.kernels, sh2._kernelobj.kernels)
+
+            ref_sh, ref_intensity, ref_step = self._lgs_sh(target_device_idx, xp, data_dir)
+            ref_intensity.value[:] = new_profile
+            ref_step(1)
+
+            np.testing.assert_allclose(out(sh1), out1, rtol=1e-5)
+            np.testing.assert_allclose(out(sh2), out(ref_sh), rtol=1e-4,
+                                       atol=1e-6 * out(ref_sh).max())
+            self.assertFalse(np.allclose(out(sh2), out1, rtol=1e-4))

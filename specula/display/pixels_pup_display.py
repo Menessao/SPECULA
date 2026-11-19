@@ -1,12 +1,10 @@
 import numpy as np
 
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Circle
 
 from specula import cpuArray
 
-from specula.base_value import BaseValue
 from specula.display.base_display import BaseDisplay
 from specula.connections import InputValue
 from specula.data_objects.pixels import Pixels
@@ -34,12 +32,14 @@ class PixelsPupDisplay(BaseDisplay):
                  crop_mode="slice",
                  window: int=None,
                  subplot: int=111,
+                 window_xy=None,
                  ):
 
         super().__init__(title=title,
                          figsize=figsize,
                          window=window,
                          subplot=subplot,
+                         window_xy=window_xy,
                          )
 
         self._log_scale = log_scale
@@ -56,6 +56,7 @@ class PixelsPupDisplay(BaseDisplay):
         self.circles = []
         self.center_points = []
         self.text_block = None
+        self.img = None
 
 
     def _apply_crop(self, image):
@@ -174,7 +175,7 @@ class PixelsPupDisplay(BaseDisplay):
             if img_max <= 0:
                 img_max = 1
 
-            if img_min >= img_max*ratio or img_min <= 0:
+            if img_min < img_max*ratio:
                 img_min = img_max*ratio
 
             norm = mcolors.LogNorm(vmin=img_min, vmax=img_max)

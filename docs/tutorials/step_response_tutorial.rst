@@ -1,12 +1,15 @@
 .. _step_response_tutorial:
 
-Step Response Tutorial: Simulating the Step Response of a DM Actuator
-=====================================================================
+Step Response Tutorial: Simulating the Step Response of an Actuator
+===================================================================
 
-This tutorial demonstrates how to set up and analyze the **step response** of a simplified deformable mirror (DM) actuator model using SPECULA.
+This tutorial demonstrates how to set up and analyze the **step response** of a simplified actuator model,
+for example a deformable mirror (DM) actuator.
+It uses only the generic objects of iteras, the simulation framework of SPECULA, and runs with the
+``iteras`` command as well as with ``specula``.
 
 **Goals:**
-- Simulate the dynamic response of a DM actuator to a step input in closed-loop control
+- Simulate the dynamic response of an actuator to a step input in closed-loop control
 - Model the control chain with sample&hold, integrator, and low-pass filter
 - Visualize the response in real time (no data is saved to disk)
 
@@ -33,9 +36,7 @@ Create a configuration file, for example ``params_control_lpf.yml``:
 .. code-block:: yaml
 
    main:
-     class:             'SimulParams'
-     pixel_pupil:       160
-     pixel_pitch:       0.05
+     class:             'SimParams'
      total_time:        1.0
      time_step:         0.0001
 
@@ -50,7 +51,10 @@ Create a configuration file, for example ``params_control_lpf.yml``:
      sub:               True
      inputs:
          in_value1: 'disturbance.output'
-         in_value2: 'lowpass.out_comm:-1'
+         in_value2: 'lowpass.out_comm:-1'  # previous-step feedback: one-frame loop lag
+
+   # ``:-1`` and ``delay`` are different: the former enforces the causal feedback delay,
+   # while the latter is the controller/filter latency itself.
 
    sampHold:
      class:             'WindowedIntegration'
@@ -62,7 +66,7 @@ Create a configuration file, for example ``params_control_lpf.yml``:
 
    control:
      class:             'Integrator'
-     delay:             1
+     delay:             1  # controller latency [frames]; the loop also already has the 1-step feedback lag from lowpass.out_comm:-1
      int_gain:          [0.3]
      inputs:
          delta_comm: 'sampHold.output'
@@ -104,7 +108,9 @@ To run the simulation, use:
 
 .. code-block:: bash
 
-   specula params_control_lpf.yml
+   iteras params_control_lpf.yml
+
+(or ``specula params_control_lpf.yml``, which runs the same simulation).
 
 During the simulation, a real-time plot will show:
 - Input (step)
@@ -135,8 +141,8 @@ Customizations and Experiments
 
 **Conclusion**
 
-You have simulated and visualized the step response of a DM actuator with digital control and realistic dynamics.  
-This setup is a foundation for testing and optimizing controllers and actuator models in adaptive optics systems.
+You have simulated and visualized the step response of an actuator with digital control and realistic dynamics.  
+This setup is a foundation for testing and optimizing controllers and actuator models, for example in adaptive optics systems.
 
 .. seealso::
 

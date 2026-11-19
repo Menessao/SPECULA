@@ -64,59 +64,37 @@ def _calculate_extrapolation_indices_coeffs(mask, threshold=1e-3):
 
     # Iterate over each edge pixel
     for i, (y, x) in enumerate(zip(*edge_pixels)):
-        valid_directions = 0
-
-        # Examine the 4 directions
-        for dir_idx, (dy, dx) in enumerate(directions):
-            # Coordinates of reference points at distance 1 and 2
+        # Linear indices of the reference points at distance 1 and 2 in each
+        # direction, -1 where they are outside the image or the mask
+        refs = []
+        for dy, dx in directions:
             y1, x1 = y + dy, x + dx
             y2, x2 = y + 2*dy, x + 2*dx
-
-            # Check if the points are valid (inside the image and inside the mask)
             valid_ref1 = (0 <= y1 < mask.shape[0] and
                           0 <= x1 < mask.shape[1] and
                           binary_mask[y1, x1])
-
-            valid_ref2 = (0 <= y2 < mask.shape[0] and
+            valid_ref2 = (valid_ref1 and
+                          0 <= y2 < mask.shape[0] and
                           0 <= x2 < mask.shape[1] and
                           binary_mask[y2, x2])
+            refs.append((y1 * mask.shape[1] + x1 if valid_ref1 else -1,
+                         y2 * mask.shape[1] + x2 if valid_ref2 else -1))
 
-            if valid_ref1:
-                # Index of the first reference point (linear index)
-                ref_idx1 = y1 * mask.shape[1] + x1
-                reference_indices_fixed[i, 2*dir_idx] = ref_idx1
-
-                if valid_ref2:
-                    # Index of the second reference point (linear index)
-                    ref_idx2 = y2 * mask.shape[1] + x2
-                    reference_indices_fixed[i, 2*dir_idx + 1] = ref_idx2
-
-                    # Coefficients for linear extrapolation: 2*P₁ - P₂
-                    coefficients_fixed[i, 2*dir_idx] = 2.0
-                    coefficients_fixed[i, 2*dir_idx + 1] = -1.0
-                    valid_directions += 1
-                else:
-                    # If the second point is invalid, check if it's the only valid pixel
-                    if valid_directions == 0:
-                        coefficients_fixed[i, 2*dir_idx] = 1.0
-                        valid_directions += 1
-                    else:
-                        # Set coefficients to 0
-                        coefficients_fixed[i, 2*dir_idx] = 0.0
-                        coefficients_fixed[i, 2*dir_idx + 1] = 0.0
-            else:
-                # Set coefficients to 0 if the first reference is invalid
-                coefficients_fixed[i, 2*dir_idx] = 0.0
-                coefficients_fixed[i, 2*dir_idx + 1] = 0.0
-
-        # Normalize coefficients based on the number of valid directions
-        if valid_directions > 1:
-            factor = 1.0 / valid_directions
-            for dir_idx in range(4):
-                if coefficients_fixed[i, 2*dir_idx] != 0:
-                    coefficients_fixed[i, 2*dir_idx] *= factor
-                    if coefficients_fixed[i, 2*dir_idx + 1] != 0:
-                        coefficients_fixed[i, 2*dir_idx + 1] *= factor
+        # Linear extrapolation 2*P1 - P2, averaged over the directions with both
+        # reference points; the value of the first valid neighbour only if there
+        # is none. Averaging the two kinds would bias the result (by half a step
+        # for a linear phase), so they are never mixed.
+        coefficients_fixed[i, :] = 0.0
+        linear = [d for d, (_, ref2) in enumerate(refs) if ref2 >= 0]
+        if linear:
+            for d in linear:
+                reference_indices_fixed[i, 2*d:2*d + 2] = refs[d]
+                coefficients_fixed[i, 2*d] = 2.0 / len(linear)
+                coefficients_fixed[i, 2*d + 1] = -1.0 / len(linear)
+        else:
+            d = next(d for d, (ref1, _) in enumerate(refs) if ref1 >= 0)
+            reference_indices_fixed[i, 2*d] = refs[d][0]
+            coefficients_fixed[i, 2*d] = 1.0
 
     # Calculate valid indices here
     valid_edge_mask = (edge_pixels_fixed >= 0) & ~np.isnan(coefficients_fixed[:, 0])
@@ -252,9 +230,9 @@ class EFInterpolator():
             If True, enables caching of output ElectricField objects to save memory and
             allocation time (default: False).
             WARNING: when enabled, output ElectricField objects are cached and saving them
-                     with dataStore (or similar mechanisms) will not work. Only the last
-                     output ElectricField created with a specific shape and parameters will
-                     be valid, all the others will be overwritten by the cache.
+            with dataStore (or similar mechanisms) will not work. Only the last
+            output ElectricField created with a specific shape and parameters will
+            be valid, all the others will be overwritten by the cache.
         target_device_idx : int, optional
             Target device index for GPU computation (default: None).
         precision : int, optional
@@ -270,20 +248,27 @@ class EFInterpolator():
         if magnification < 1e-6:
             raise ValueError("Magnification must be greater than 1e-6 to avoid numerical issues.")
 
-        oversampling_factor = out_shape[0] / in_ef.size[0]
-
         self.debug_output = False
         self.mask_threshold = mask_threshold
         self.in_ef = in_ef
         self.force_extrapolation = force_extrapolation
         self.target_device_idx = target_device_idx
+        self.precision = precision
         self.use_out_ef_cache = use_out_ef_cache
+
+        self._build(out_shape, rotAnglePhInDeg, xShiftPhInPixel, yShiftPhInPixel, magnification)
+
+    def _build(self, out_shape, rotAnglePhInDeg, xShiftPhInPixel, yShiftPhInPixel, magnification):
+        '''The output field and the interpolator for the given parameters, or none
+        of them if the parameters need no interpolation'''
+        in_ef, target_device_idx, precision = self.in_ef, self.target_device_idx, self.precision
+        oversampling_factor = out_shape[0] / in_ef.size[0]
 
         if (in_ef.size == out_shape and
             rotAnglePhInDeg == 0 and
             xShiftPhInPixel == 0 and
             yShiftPhInPixel == 0 and
-            magnification == 1.0 and force_extrapolation is False):
+            magnification == 1.0 and self.force_extrapolation is False):
             self.do_interpolation = False
             self.out_ef = in_ef
             return
@@ -347,8 +332,18 @@ class EFInterpolator():
                           rotAnglePhInDeg=None, magnification=None):
         """Re-initialize the internal Interp2D object with new misalignment parameters."""
 
-        if magnification < 1e-6:
+        if magnification is not None and magnification < 1e-6:
             raise ValueError("Magnification must be greater than 1e-6 to avoid numerical issues.")
+
+        if not self.do_interpolation:
+            # No interpolator yet (the initial parameters needed none, so the
+            # output shape is the input one): build it with the new parameters
+            self._build(self.in_ef.size,
+                        rotAnglePhInDeg or 0,
+                        xShiftPhInPixel or 0,
+                        yShiftPhInPixel or 0,
+                        1.0 if magnification is None else magnification)
+            return
 
         # Retrieve current parameters if not provided
         current_rot = -self.interp.rot_angle * 180.0 / np.pi
@@ -377,6 +372,45 @@ class EFInterpolator():
         '''
         return self.out_ef
 
+    def initialize_extrapolation(self):
+        '''
+        Calculate the extrapolation data from the current input amplitude.
+
+        This is done only once, and is called automatically by the first
+        interpolate(). It can be called explicitly before that, for example
+        to capture interpolate() in a CUDA graph, which requires that no
+        host operations are performed.
+        '''
+        if not self.do_interpolation or self.extrapolation_initialized:
+            return
+
+        (edge_pixels, reference_indices,
+         coefficients, valid_indices) = \
+            _calculate_extrapolation_indices_coeffs(
+                cpuArray(self.in_ef.A),
+                threshold=self.mask_threshold
+            )
+
+        # Convert to xp
+        self.edge_pixels = to_xp(self.xp, edge_pixels)
+        self.reference_indices = to_xp(self.xp, reference_indices)
+        self.coefficients = to_xp(self.xp, coefficients)
+        self.valid_indices = to_xp(self.xp, valid_indices)
+
+        # Check if input amplitude is binary (all values close to 0 or 1) with tolerance
+        unique_values = self.xp.unique(self.in_ef.A)
+        tol = 1e-3
+        is_binary = self.xp.all(
+            self.xp.logical_or(
+                self.xp.abs(unique_values - 0) < tol,
+                self.xp.abs(unique_values - 1) < tol
+            )
+        )
+        # Python bool: testing a GPU array in interpolate() would be a
+        # host synchronization at every call
+        self.amplitude_is_binary = bool(is_binary)
+        self.extrapolation_initialized = True
+
     def interpolate(self):
         '''
         Perform interpolation with edge extrapolation.
@@ -386,34 +420,12 @@ class EFInterpolator():
             return
 
         if self.extrapolation_initialized is False:
-            # Calculate extrapolation data only once
-            (edge_pixels, reference_indices,
-             coefficients, valid_indices) = \
-                _calculate_extrapolation_indices_coeffs(
-                    cpuArray(self.in_ef.A),
-                    threshold=self.mask_threshold
-                )
-
-            # Convert to xp
-            self.edge_pixels = to_xp(self.xp, edge_pixels)
-            self.reference_indices = to_xp(self.xp, reference_indices)
-            self.coefficients = to_xp(self.xp, coefficients)
-            self.valid_indices = to_xp(self.xp, valid_indices)
-
-            # Check if input amplitude is binary (all values close to 0 or 1) with tolerance
-            unique_values = self.xp.unique(self.in_ef.A)
-            tol = 1e-3
-            is_binary = self.xp.all(
-                self.xp.logical_or(
-                    self.xp.abs(unique_values - 0) < tol,
-                    self.xp.abs(unique_values - 1) < tol
-                )
-            )
-            self.amplitude_is_binary = is_binary
-            self.extrapolation_initialized = True
+            self.initialize_extrapolation()
 
         # Amplitude: simple interpolation
-        self.interp.interpolate(self.in_ef.A, out=self.out_ef.A)
+        # Outside the array there is no light: zero, not the edge value, which a
+        # shift or a rotation would copy over the whole out-of-array band
+        self.interp.interpolate(self.in_ef.A, out=self.out_ef.A, outside='zero')
 
         # Apply binary threshold if input amplitude was binary
         if self.amplitude_is_binary:
@@ -456,7 +468,10 @@ class EFInterpolator():
             plt.colorbar()
             plt.show()
 
-        self.interp.interpolate(self.phase_extrapolated, out=self.out_ef.phaseInNm)
+        # The phase continues linearly for one pixel beyond the array, where the
+        # amplitude goes to zero (it matters only if the pupil touches the edge)
+        self.interp.interpolate(self.phase_extrapolated, out=self.out_ef.phaseInNm,
+                                outside='linear')
 
         # Copy other properties
         self.out_ef.S0 = self.in_ef.S0

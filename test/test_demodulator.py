@@ -502,6 +502,53 @@ class TestDemodulateSignal(unittest.TestCase):
         # Both should give similar results for clean signal
         self.assertAlmostEqual(amp_cum, amp_sim, delta=0.1)
 
+    def test_demodulate_cumulated_dtype_follows_argument(self):
+        """
+        With cumulated=True, the internal qa/pa arrays (and thus the output) must
+        follow the requested `dtype`, not be hardcoded to float32.
+        """
+        duration = 0.05
+        dt = 0.001
+        sampling_freq = 1.0 / dt
+        carrier_freq = 10.0
+
+        time = np.arange(0, duration, dt)
+        nsignals = 2
+        signals_2d = np.zeros((len(time), nsignals))
+        for i in range(nsignals):
+            signals_2d[:, i] = (i + 1) * np.sin(2 * np.pi * carrier_freq * time)
+
+        amp64, phase64 = demodulate_signal(signals_2d, carrier_freq, sampling_freq,
+                                          cumulated=True, xp=np, dtype=np.float64)
+        self.assertEqual(amp64.dtype, np.float64)
+        self.assertEqual(phase64.dtype, np.float64)
+
+        amp32, phase32 = demodulate_signal(signals_2d, carrier_freq, sampling_freq,
+                                          cumulated=True, xp=np, dtype=np.float32)
+        self.assertEqual(amp32.dtype, np.float32)
+        self.assertEqual(phase32.dtype, np.float32)
+
+    @cpu_and_gpu
+    def test_demodulate_cumulated_with_offset_and_drift(self, target_device_idx, xp):
+        """A DC offset and a linear drift must not change the cumulated result"""
+        dt = 0.001
+        sampling_freq = 1.0 / dt
+        carrier_freq = 10.0
+        amplitudes = xp.array([0.5, 2.0])
+
+        time = xp.arange(0, 1.0, dt)[:, xp.newaxis]
+        signals = amplitudes * xp.sin(2 * xp.pi * carrier_freq * time + 0.3)
+        offset_and_drift = 5.0 + 3.0 * time
+
+        amp_ref, phase_ref = demodulate_signal(signals, carrier_freq, sampling_freq,
+                                               cumulated=True, xp=xp, dtype=np.float32)
+        amp, phase = demodulate_signal(signals + offset_and_drift, carrier_freq, sampling_freq,
+                                       cumulated=True, xp=xp, dtype=np.float32)
+
+        np.testing.assert_allclose(cpuArray(amp), cpuArray(amplitudes), rtol=5e-2)
+        np.testing.assert_allclose(cpuArray(amp), cpuArray(amp_ref), rtol=1e-4)
+        np.testing.assert_allclose(cpuArray(phase), cpuArray(phase_ref), atol=1e-4)
+
     def test_demodulate_multiple_modes(self):
         """Demodulate 2d vectors"""
 

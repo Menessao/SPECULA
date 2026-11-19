@@ -3,16 +3,19 @@ specula.init(0)  # Default target device
 
 import unittest
 
+import numpy as np
+
 from specula.base_value import BaseValue
 from specula.processing_objects.dm import DM
 from specula.data_objects.ifunc import IFunc
+from specula.data_objects.m2c import M2C
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.simul_params import SimulParams
 
 from test.specula_testlib import cpu_and_gpu
 
 from specula import cpuArray
-from numpy.testing import assert_array_almost_equal
+from numpy.testing import assert_array_almost_equal, assert_array_equal
 
 
 class TestDM(unittest.TestCase):
@@ -120,7 +123,40 @@ class TestDM(unittest.TestCase):
         with self.assertRaises(ValueError):
             dm4 = DM(simul_params, height=0, type_str='zernike', start_mode=3, idx_modes=idx_modes, target_device_idx=target_device_idx)
 
-    
+
+    @cpu_and_gpu
+    def test_dm_sparse_ifunc(self, target_device_idx, xp):
+        '''Segment-like influence functions (each actuator moves a 2x2 block) use
+        the sparse product, with and without m2c, and give the dense result'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=6, pixel_pitch=1)
+        rng = np.random.default_rng(3)
+        ifunc_np = np.zeros((9, 6, 6))
+        for a in range(9):
+            y, x = divmod(a, 3)
+            ifunc_np[a, 2 * y:2 * y + 2, 2 * x:2 * x + 2] = rng.uniform(0.5, 1.5, (2, 2))
+        ifunc_np = ifunc_np.reshape(9, 36)
+        m2c_np = rng.standard_normal((9, 5))
+        t = 1
+        for use_m2c in (False, True):
+            with self.subTest(use_m2c=use_m2c):
+                ifunc = IFunc(xp.asarray(ifunc_np), mask=xp.ones((6, 6)), target_device_idx=target_device_idx)
+                m2c = M2C(xp.asarray(m2c_np), target_device_idx=target_device_idx) if use_m2c else None
+                nmodes = 5 if use_m2c else 9
+                cmd = rng.standard_normal(nmodes)
+                in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+                in_dm.generation_time = t
+                dm = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, nmodes=nmodes,
+                        target_device_idx=target_device_idx)
+                dm.inputs['in_command'].set(in_dm)
+                dm.setup()
+                self.assertIsNotNone(dm._ifunc_sparse)
+                dm.check_ready(t)
+                dm.trigger()
+                dm.post_trigger()
+                act = m2c_np @ cmd if use_m2c else cmd
+                expected = (-act @ ifunc_np).reshape(6, 6)
+                assert_array_almost_equal(cpuArray(dm.outputs['out_layer'].phaseInNm), expected, decimal=5)
+
     @cpu_and_gpu
     def test_dm_stroke_clipping(self, target_device_idx, xp):
         """ Test command clipping """
@@ -160,5 +196,726 @@ class TestDM(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = DM(simul_params, height=0, type_str='zernike', nmodes=6, target_device_idx=target_device_idx, stroke=[0.3,0.2,0.1])
 
+    @cpu_and_gpu
+    def test_dm_output_phase_vs_reference(self, target_device_idx, xp):
+        '''Test out_layer.phaseInNm against an explicit reference, for the three
+        mode-selection paths: (start_mode, nmodes) slice, idx_modes, and m2c.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        t = 1
+        sign = -1
+
+        def run_dm(dm, cmd):
+            in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+            in_dm.generation_time = t
+            dm.inputs['in_command'].set(in_dm)
+            dm.setup()
+            dm.check_ready(t)
+            dm.trigger()
+            dm.post_trigger()
+
+        # (a) start_mode + nmodes (slice path)
+        start_mode, nmodes = 2, 6
+        cmd_a = np.array([0.3, -0.5, 0.2, -0.1])
+        dm_a = DM(simul_params, height=0, type_str='zernike', nmodes=nmodes, start_mode=start_mode,
+                  target_device_idx=target_device_idx)
+        run_dm(dm_a, cmd_a)
+
+        ifunc_a = cpuArray(dm_a.ifunc)
+        idx_a = dm_a.ifunc_obj.idx_inf_func
+        ref_a = sign * cmd_a @ ifunc_a[start_mode:nmodes, :]
+        got_a = cpuArray(dm_a.outputs['out_layer'].phaseInNm[idx_a])
+        assert_array_almost_equal(got_a, ref_a)
+
+        # values outside the mask must be zero
+        mask_a = cpuArray(dm_a.mask)
+        outside_a = np.where(mask_a == 0)
+        assert_array_almost_equal(cpuArray(dm_a.outputs['out_layer'].phaseInNm)[outside_a], 0)
+
+        # (b) idx_modes
+        idx_modes = [1, 3, 4]
+        cmd_b = np.array([0.4, 0.15, -0.25])
+        dm_b = DM(simul_params, height=0, type_str='zernike', idx_modes=idx_modes,
+                  target_device_idx=target_device_idx)
+        run_dm(dm_b, cmd_b)
+
+        ifunc_b = cpuArray(dm_b.ifunc)
+        idx_b = dm_b.ifunc_obj.idx_inf_func
+        ref_b = sign * cmd_b @ ifunc_b[idx_modes, :]
+        got_b = cpuArray(dm_b.outputs['out_layer'].phaseInNm[idx_b])
+        assert_array_almost_equal(got_b, ref_b)
+
+        # (c) m2c, combined with start_mode/nmodes as in MORFEO configs
+        start_mode_c, nmodes_c = 1, 4
+        rng = np.random.RandomState(42)
+        m2c_arr = rng.randn(6, 5)  # (n_ifunc_modes, n_m2c_modes)
+        cmd_c = np.array([0.2, -0.3, 0.05])
+
+        ifunc_c = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c_obj = M2C(m2c_arr, target_device_idx=target_device_idx)
+        dm_c = DM(simul_params, height=0, ifunc=ifunc_c, m2c=m2c_obj,
+                  nmodes=nmodes_c, start_mode=start_mode_c, target_device_idx=target_device_idx)
+        run_dm(dm_c, cmd_c)
+
+        ifunc_c_full = cpuArray(dm_c.ifunc)
+        idx_c = dm_c.ifunc_obj.idx_inf_func
+        actuator_cmd = m2c_arr[:, start_mode_c:nmodes_c] @ cmd_c
+        ref_c = sign * actuator_cmd @ ifunc_c_full
+        got_c = cpuArray(dm_c.outputs['out_layer'].phaseInNm[idx_c])
+        assert_array_almost_equal(got_c, ref_c)
+
+    @cpu_and_gpu
+    def test_dm_precision(self, target_device_idx, xp):
+        '''Test that phaseInNm, out_clipped_command and stroke dtype follow the
+        requested precision (0=double, 1=single), regardless of the input command dtype.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=8, pixel_pitch=1)
+        t = 1
+        nmodes = 4
+        cmd = np.array([0.5, -0.5, 0.25, -0.25], dtype=np.float64)
+
+        for precision in (0, 1):
+            expected_dtype = np.float64 if precision == 0 else np.float32
+            for stroke in (None, 0.3, [0.3, 0.2, 0.1, 0.05]):
+                with self.subTest(precision=precision, stroke=stroke):
+                    # Input command is always float64, to verify the DM does not
+                    # let it promote the (possibly single-precision) output.
+                    in_dm = BaseValue(value=xp.asarray(cmd, dtype=xp.float64),
+                                      target_device_idx=target_device_idx, precision=0)
+                    in_dm.generation_time = t
+                    dm = DM(simul_params, height=0, type_str='zernike', nmodes=nmodes,
+                            target_device_idx=target_device_idx, precision=precision, stroke=stroke)
+                    dm.inputs['in_command'].set(in_dm)
+                    dm.setup()
+                    dm.check_ready(t)
+                    dm.trigger()
+                    dm.post_trigger()
+
+                    self.assertEqual(cpuArray(dm.outputs['out_layer'].phaseInNm).dtype, expected_dtype)
+                    self.assertEqual(cpuArray(dm.outputs['out_clipped_command'].value).dtype, expected_dtype)
+                    if stroke is not None:
+                        self.assertEqual(cpuArray(dm.stroke).dtype, expected_dtype)
 
 
+    @cpu_and_gpu
+    def test_dm_force_limiting_diagonal(self, target_device_idx, xp):
+        '''Force limiting with a diagonal stiffness and m2c=identity: each mode
+        drives a single actuator, so the expected number of kept modes and the
+        resulting forces can be derived analytically.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        t = 1
+        nmodes = 6
+
+        def run_dm(dm, cmd):
+            in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+            in_dm.generation_time = t
+            dm.inputs['in_command'].set(in_dm)
+            dm.setup()
+            dm.check_ready(t)
+            dm.trigger()
+            dm.post_trigger()
+
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=nmodes, target_device_idx=target_device_idx)
+        m2c = M2C(np.eye(nmodes), target_device_idx=target_device_idx)
+        k = np.array([1., 2., 3., 4., 5., 6.])
+        K = np.diag(k)
+        cmd = np.ones(nmodes)
+
+        # Scalar max_force: mode index 5 alone (force=6) violates fmax=5 -> keep 5 modes
+        dm1 = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=5.0,
+                 target_device_idx=target_device_idx)
+        run_dm(dm1, cmd)
+
+        expected_cmd = cmd.copy()
+        expected_cmd[5:] = 0
+        expected_forces = K @ expected_cmd
+
+        self.assertEqual(int(cpuArray(dm1.outputs['out_force_nmodes'].value)[0]), 5)
+        assert_array_almost_equal(cpuArray(dm1.outputs['out_clipped_command'].value), expected_cmd)
+        assert_array_almost_equal(cpuArray(dm1.outputs['out_forces'].value), expected_forces)
+        self.assertTrue(np.all(np.abs(cpuArray(dm1.outputs['out_forces'].value)) <= 5.0 + 1e-6))
+
+        # Per-actuator max_force list: violation appears at mode index 3 (force=4 > 3.5)
+        max_force_list = [1.5, 2.5, 3.5, 3.5, 5.5, 6.5]
+        dm2 = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=max_force_list,
+                 target_device_idx=target_device_idx)
+        run_dm(dm2, cmd)
+
+        expected_cmd2 = cmd.copy()
+        expected_cmd2[3:] = 0
+        expected_forces2 = K @ expected_cmd2
+
+        self.assertEqual(int(cpuArray(dm2.outputs['out_force_nmodes'].value)[0]), 3)
+        assert_array_almost_equal(cpuArray(dm2.outputs['out_clipped_command'].value), expected_cmd2)
+        assert_array_almost_equal(cpuArray(dm2.outputs['out_forces'].value), expected_forces2)
+        self.assertTrue(np.all(np.abs(cpuArray(dm2.outputs['out_forces'].value)) <= np.array(max_force_list) + 1e-6))
+
+    @cpu_and_gpu
+    def test_dm_force_limiting_realistic_stiffness(self, target_device_idx, xp):
+        '''Force limiting with a physically-motivated stiffness: squared graph
+        Laplacian of a 4x4 actuator grid, m2c = eigenvectors sorted by increasing
+        eigenvalue (modes ordered by increasing spatial frequency/stiffness, as
+        force limiting assumes). The expected number of kept modes is computed
+        independently by brute force, without reusing the dm.py logic.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        t = 1
+        n_side = 4
+        n_act = n_side * n_side
+
+        # Graph Laplacian of the 4x4 grid (4-connectivity), squared for a
+        # curvature-like force cost that grows with spatial frequency.
+        adj = np.zeros((n_act, n_act))
+        for i in range(n_side):
+            for j in range(n_side):
+                idx = i * n_side + j
+                for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < n_side and 0 <= nj < n_side:
+                        adj[idx, ni * n_side + nj] = 1.0
+        lap = np.diag(adj.sum(axis=1)) - adj
+        K = lap @ lap
+
+        eigvals, eigvecs = np.linalg.eigh(K)  # ascending eigenvalues
+        m2c_arr = eigvecs
+
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=n_act, target_device_idx=target_device_idx)
+        m2c = M2C(m2c_arr, target_device_idx=target_device_idx)
+
+        rng = np.random.RandomState(123)
+        cmd = rng.uniform(-1, 1, n_act)
+        fmax = 0.5
+
+        # Independent brute-force reference: largest n with max|K m2c[:, :n] c[:n]| <= fmax
+        n_keep_expected = 0
+        applied_expected = np.zeros(n_act)
+        for n in range(n_act + 1):
+            applied_cmd = m2c_arr[:, :n] @ cmd[:n]
+            forces = K @ applied_cmd
+            if np.max(np.abs(forces)) <= fmax:
+                n_keep_expected = n
+                applied_expected = applied_cmd
+        assert n_keep_expected not in (0, n_act)  # sanity check: the test is non-trivial
+
+        dm = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=fmax,
+                target_device_idx=target_device_idx)
+
+        in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+        in_dm.generation_time = t
+        dm.inputs['in_command'].set(in_dm)
+        dm.setup()
+        dm.check_ready(t)
+        dm.trigger()
+        dm.post_trigger()
+
+        self.assertEqual(int(cpuArray(dm.outputs['out_force_nmodes'].value)[0]), n_keep_expected)
+        assert_array_almost_equal(cpuArray(dm.outputs['out_clipped_command'].value), applied_expected, decimal=5)
+        assert_array_almost_equal(cpuArray(dm.outputs['out_forces'].value), K @ applied_expected, decimal=5)
+
+    @cpu_and_gpu
+    def test_dm_force_and_stroke_combinations(self, target_device_idx, xp):
+        '''out_forces / out_force_nmodes in the four combinations of stroke
+        and stiffness/max_force: only stroke, only force limiting, both
+        (force limiting first, then stroke clipping), and stiffness without
+        max_force (forces monitored but never truncated).'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        t = 1
+        nmodes = 4
+
+        def run_dm(dm, cmd):
+            in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+            in_dm.generation_time = t
+            dm.inputs['in_command'].set(in_dm)
+            dm.setup()
+            dm.check_ready(t)
+            dm.trigger()
+            dm.post_trigger()
+
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=nmodes, target_device_idx=target_device_idx)
+        m2c = M2C(np.eye(nmodes), target_device_idx=target_device_idx)
+        K = np.diag([1., 2., 3., 4.])
+        cmd = np.array([1.0, 1.0, 1.0, 1.0])
+
+        # (a) only stroke: out_forces is empty, out_force_nmodes reports all modes
+        dm_a = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stroke=0.5,
+                  target_device_idx=target_device_idx)
+        run_dm(dm_a, cmd)
+        self.assertEqual(cpuArray(dm_a.outputs['out_forces'].value).size, 0)
+        self.assertEqual(int(cpuArray(dm_a.outputs['out_force_nmodes'].value)[0]), nmodes)
+        assert_array_almost_equal(cpuArray(dm_a.outputs['out_clipped_command'].value), np.full(nmodes, 0.5))
+
+        # (b) only force limiting: mode index 3 (force=4) violates fmax=3.5 -> keep 3 modes
+        dm_b = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=3.5,
+                  target_device_idx=target_device_idx)
+        run_dm(dm_b, cmd)
+        expected_cmd_b = np.array([1., 1., 1., 0.])
+        self.assertEqual(int(cpuArray(dm_b.outputs['out_force_nmodes'].value)[0]), 3)
+        assert_array_almost_equal(cpuArray(dm_b.outputs['out_clipped_command'].value), expected_cmd_b)
+        assert_array_almost_equal(cpuArray(dm_b.outputs['out_forces'].value), K @ expected_cmd_b)
+
+        # (c) force limiting + stroke: truncation happens first, stroke then clips the survivors
+        dm_c = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=3.5,
+                  stroke=0.8, target_device_idx=target_device_idx)
+        run_dm(dm_c, cmd)
+        expected_cmd_c = np.array([0.8, 0.8, 0.8, 0.])
+        self.assertEqual(int(cpuArray(dm_c.outputs['out_force_nmodes'].value)[0]), 3)
+        assert_array_almost_equal(cpuArray(dm_c.outputs['out_clipped_command'].value), expected_cmd_c)
+        assert_array_almost_equal(cpuArray(dm_c.outputs['out_forces'].value), K @ expected_cmd_c)
+
+        # (d) stiffness without max_force: forces are monitored, but never truncated
+        dm_d = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, stroke=0.8,
+                  target_device_idx=target_device_idx)
+        run_dm(dm_d, cmd)
+        expected_cmd_d = np.full(nmodes, 0.8)
+        self.assertEqual(int(cpuArray(dm_d.outputs['out_force_nmodes'].value)[0]), nmodes)
+        assert_array_almost_equal(cpuArray(dm_d.outputs['out_clipped_command'].value), expected_cmd_d)
+        assert_array_almost_equal(cpuArray(dm_d.outputs['out_forces'].value), K @ expected_cmd_d)
+
+    @cpu_and_gpu
+    def test_dm_force_limiting_edge_cases(self, target_device_idx, xp):
+        '''A command already within the force limits is left unchanged; a
+        command that already violates the limit at the very first mode
+        zeroes the whole applied command (out_force_nmodes == 0).'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        t = 1
+        nmodes = 4
+
+        def run_dm(dm, cmd):
+            in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+            in_dm.generation_time = t
+            dm.inputs['in_command'].set(in_dm)
+            dm.setup()
+            dm.check_ready(t)
+            dm.trigger()
+            dm.post_trigger()
+
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=nmodes, target_device_idx=target_device_idx)
+        m2c = M2C(np.eye(nmodes), target_device_idx=target_device_idx)
+        K = np.diag([1., 2., 3., 4.])
+        cmd = np.array([1., 1., 1., 1.])
+
+        # Within limits: nothing is discarded
+        dm1 = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=100.,
+                 target_device_idx=target_device_idx)
+        run_dm(dm1, cmd)
+        self.assertEqual(int(cpuArray(dm1.outputs['out_force_nmodes'].value)[0]), nmodes)
+        assert_array_almost_equal(cpuArray(dm1.outputs['out_clipped_command'].value), cmd)
+
+        # First mode alone already exceeds the limit -> whole command is zeroed
+        dm2 = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=0.5,
+                 target_device_idx=target_device_idx)
+        run_dm(dm2, cmd)
+        self.assertEqual(int(cpuArray(dm2.outputs['out_force_nmodes'].value)[0]), 0)
+        assert_array_almost_equal(cpuArray(dm2.outputs['out_clipped_command'].value), np.zeros(nmodes))
+        assert_array_almost_equal(cpuArray(dm2.outputs['out_forces'].value), np.zeros(nmodes))
+
+    @cpu_and_gpu
+    def test_dm_force_limiting_errors(self, target_device_idx, xp):
+        '''stiffness/max_force parameter validation.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        nmodes = 4
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=nmodes, target_device_idx=target_device_idx)
+        m2c = M2C(np.eye(nmodes), target_device_idx=target_device_idx)
+        K = np.eye(nmodes)
+
+        # stiffness requires m2c
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, stiffness=K, target_device_idx=target_device_idx)
+
+        # stiffness must be (nact, nact), with nact = m2c rows
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=np.eye(nmodes + 1),
+               target_device_idx=target_device_idx)
+
+        # max_force requires stiffness
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, max_force=1.0, target_device_idx=target_device_idx)
+
+        # max_force list length must match the number of actuators
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=[1.0, 2.0],
+               target_device_idx=target_device_idx)
+
+    @cpu_and_gpu
+    def test_dm_precision_with_stiffness(self, target_device_idx, xp):
+        '''out_forces and out_clipped_command dtype follow precision (0=double,
+        1=single) when stiffness/max_force are active.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        t = 1
+        nmodes = 4
+        cmd = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float64)
+        K = np.diag([1., 2., 3., 4.])
+
+        for precision in (0, 1):
+            expected_dtype = np.float64 if precision == 0 else np.float32
+            ifunc = IFunc(type_str='zernike', npixels=16, nmodes=nmodes,
+                          target_device_idx=target_device_idx, precision=precision)
+            m2c = M2C(np.eye(nmodes), target_device_idx=target_device_idx, precision=precision)
+
+            # Input command is always float64, to verify the DM does not let it
+            # promote the (possibly single-precision) outputs.
+            in_dm = BaseValue(value=xp.asarray(cmd, dtype=xp.float64),
+                              target_device_idx=target_device_idx, precision=0)
+            in_dm.generation_time = t
+            dm = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stiffness=K, max_force=3.5,
+                    target_device_idx=target_device_idx, precision=precision)
+            dm.inputs['in_command'].set(in_dm)
+            dm.setup()
+            dm.check_ready(t)
+            dm.trigger()
+            dm.post_trigger()
+
+            self.assertEqual(cpuArray(dm.outputs['out_forces'].value).dtype, expected_dtype)
+            self.assertEqual(cpuArray(dm.outputs['out_clipped_command'].value).dtype, expected_dtype)
+
+    @cpu_and_gpu
+    def test_dm_m2c_rows_must_match_ifunc_modes(self, target_device_idx, xp):
+        '''m2c with a number of rows different from the ifunc modes raises ValueError'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c = M2C(np.ones((5, 4)), target_device_idx=target_device_idx)
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, target_device_idx=target_device_idx)
+
+    # ---- Mode selection resolved at init (issue #796) ----
+
+    def _run_dm(self, dm, cmd, t, xp, target_device_idx):
+        '''Feed cmd to the DM with generation time t and run one step.'''
+        in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+        in_dm.generation_time = t
+        dm.inputs['in_command'].set(in_dm)
+        dm.setup()
+        dm.check_ready(t)
+        dm.trigger()
+        dm.post_trigger()
+
+    @cpu_and_gpu
+    def test_dm_nmodes_is_input_length_with_m2c(self, target_device_idx, xp):
+        '''With m2c, dm.nmodes is the number of selected m2c columns, and the layer
+        is sign * (m2c[:, sel] @ cmd) @ ifunc.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        sign = -1
+        m2c_arr = np.random.RandomState(0).randn(6, 4)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c = M2C(m2c_arr, target_device_idx=target_device_idx)
+
+        # No nmodes / start_mode: all the m2c columns
+        dm1 = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, target_device_idx=target_device_idx)
+        self.assertEqual(dm1.nmodes, 4)
+        cmd = np.array([0.3, -0.5, 0.2, -0.1])
+        self._run_dm(dm1, cmd, 1, xp, target_device_idx)
+        ifunc_arr = cpuArray(dm1.ifunc)
+        idx = dm1.ifunc_obj.idx_inf_func
+        ref = sign * (m2c_arr @ cmd) @ ifunc_arr
+        assert_array_almost_equal(cpuArray(dm1.outputs['out_layer'].phaseInNm[idx]), ref, decimal=5)
+
+        # start_mode only: the end index is the number of m2c columns
+        dm2 = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, start_mode=1, target_device_idx=target_device_idx)
+        self.assertEqual(dm2.nmodes, 3)
+        cmd2 = np.array([0.2, -0.3, 0.05])
+        self._run_dm(dm2, cmd2, 1, xp, target_device_idx)
+        ref2 = sign * (m2c_arr[:, 1:4] @ cmd2) @ ifunc_arr
+        assert_array_almost_equal(cpuArray(dm2.outputs['out_layer'].phaseInNm[idx]), ref2, decimal=5)
+
+    @cpu_and_gpu
+    def test_dm_nmodes_is_input_length_without_m2c(self, target_device_idx, xp):
+        '''Without m2c, dm.nmodes is the number of selected influence function rows.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        dm1 = DM(simul_params, height=0, type_str='zernike', idx_modes=[2, 3, 4],
+                 target_device_idx=target_device_idx)
+        self.assertEqual(dm1.nmodes, 3)
+        dm2 = DM(simul_params, height=0, type_str='zernike', nmodes=6, start_mode=2,
+                 target_device_idx=target_device_idx)
+        self.assertEqual(dm2.nmodes, 4)
+
+    @cpu_and_gpu
+    def test_dm_short_input_is_zero_filled(self, target_device_idx, xp):
+        '''A shorter command at a later step does not keep stale values from the
+        previous step: it is zero-padded, with and without m2c.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        sign = -1
+
+        # Without m2c
+        dm = DM(simul_params, height=0, type_str='zernike', nmodes=5, target_device_idx=target_device_idx)
+        self._run_dm(dm, np.array([1., -2., 3., -4., 5.]), 1, xp, target_device_idx)
+        short = np.array([0.5, -0.25])
+        in_dm = dm.inputs['in_command'].get(target_device_idx)
+        in_dm.value = xp.asarray(short)
+        in_dm.generation_time = 2
+        dm.check_ready(2)
+        dm.trigger()
+        dm.post_trigger()
+
+        padded = np.zeros(5)
+        padded[:2] = short
+        ifunc_arr = cpuArray(dm.ifunc)
+        idx = dm.ifunc_obj.idx_inf_func
+        ref = sign * padded @ ifunc_arr[:5]
+        assert_array_almost_equal(cpuArray(dm.outputs['out_layer'].phaseInNm[idx]), ref, decimal=5)
+        clipped = cpuArray(dm.outputs['out_clipped_command'].value)
+        assert_array_almost_equal(clipped, padded, decimal=5)
+        self.assertTrue(np.all(clipped[2:] == 0))
+
+        # With m2c
+        m2c_arr = np.random.RandomState(1).randn(6, 4)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c = M2C(m2c_arr, target_device_idx=target_device_idx)
+        dm = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, target_device_idx=target_device_idx)
+        self._run_dm(dm, np.array([1., -2., 3., -4.]), 1, xp, target_device_idx)
+        in_dm = dm.inputs['in_command'].get(target_device_idx)
+        in_dm.value = xp.asarray(short)
+        in_dm.generation_time = 2
+        dm.check_ready(2)
+        dm.trigger()
+        dm.post_trigger()
+
+        padded = np.zeros(4)
+        padded[:2] = short
+        act = m2c_arr @ padded
+        ifunc_arr = cpuArray(dm.ifunc)
+        idx = dm.ifunc_obj.idx_inf_func
+        assert_array_almost_equal(cpuArray(dm.outputs['out_layer'].phaseInNm[idx]),
+                                  sign * act @ ifunc_arr, decimal=5)
+        assert_array_almost_equal(cpuArray(dm.outputs['out_clipped_command'].value), act, decimal=5)
+
+    @cpu_and_gpu
+    def test_dm_long_input_is_truncated(self, target_device_idx, xp):
+        '''Input values beyond dm.nmodes are ignored.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        idx_modes = [1, 3, 4]
+        dm = DM(simul_params, height=0, type_str='zernike', idx_modes=idx_modes,
+                target_device_idx=target_device_idx)
+        cmd = np.array([0.4, 0.15, -0.25, 9., -7.])
+        self._run_dm(dm, cmd, 1, xp, target_device_idx)
+        ifunc_arr = cpuArray(dm.ifunc)
+        idx = dm.ifunc_obj.idx_inf_func
+        ref = -1 * cmd[:3] @ ifunc_arr[idx_modes]
+        assert_array_almost_equal(cpuArray(dm.outputs['out_layer'].phaseInNm[idx]), ref, decimal=5)
+
+    @cpu_and_gpu
+    def test_dm_nmodes_exceeding_available_raises(self, target_device_idx, xp):
+        '''nmodes larger than the available modes raises ValueError, with and without m2c.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c = M2C(np.random.RandomState(0).randn(6, 4), target_device_idx=target_device_idx)
+
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, nmodes=5, target_device_idx=target_device_idx)
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, nmodes=7, target_device_idx=target_device_idx)
+
+    @cpu_and_gpu
+    def test_dm_ifunc_setter_updates_selection(self, target_device_idx, xp):
+        '''Setting dm.ifunc refreshes the cached selection (copy without m2c,
+        view with m2c): doubling the influence functions doubles the layer.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        m2c = M2C(np.random.RandomState(2).randn(6, 4), target_device_idx=target_device_idx)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+
+        dm_a = DM(simul_params, height=0, type_str='zernike', idx_modes=[1, 3, 4],
+                  target_device_idx=target_device_idx)
+        dm_b = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, target_device_idx=target_device_idx)
+        for dm, cmd in ((dm_a, np.array([0.4, 0.15, -0.25])),
+                        (dm_b, np.array([0.3, -0.5, 0.2, -0.1]))):
+            self._run_dm(dm, cmd, 1, xp, target_device_idx)
+            idx = dm.ifunc_obj.idx_inf_func
+            before = cpuArray(dm.outputs['out_layer'].phaseInNm[idx]).copy()
+            self.assertTrue(np.any(before != 0))
+
+            dm.ifunc = 2 * dm.ifunc
+            in_dm = dm.inputs['in_command'].get(target_device_idx)
+            in_dm.generation_time = 2
+            dm.check_ready(2)
+            dm.trigger()
+            dm.post_trigger()
+            after = cpuArray(dm.outputs['out_layer'].phaseInNm[idx])
+            assert_array_almost_equal(after, 2 * before, decimal=5)
+
+    @cpu_and_gpu
+    def test_dm_stroke_list_is_per_actuator_with_m2c(self, target_device_idx, xp):
+        '''With m2c the stroke list has one element per m2c row (actuator), not per mode.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c = M2C(np.random.RandomState(0).randn(6, 4), target_device_idx=target_device_idx)
+
+        # 6 actuators: accepted
+        DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stroke=[1.] * 6, target_device_idx=target_device_idx)
+        # 4 modes: rejected
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, stroke=[1.] * 4, target_device_idx=target_device_idx)
+
+    @cpu_and_gpu
+    def test_dm_modal_ifunc(self, target_device_idx, xp):
+        '''modal_ifunc() row j is the shape of DM input element j:
+        the selected m2c columns times the ifunc with m2c, the selected ifunc rows without.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        ifunc_arr = cpuArray(ifunc.influence_function)
+
+        # With m2c and start_mode: input element j drives m2c column start_mode + j
+        m2c_arr = np.random.RandomState(0).randn(6, 4)
+        dm = DM(simul_params, height=0, ifunc=ifunc, m2c=M2C(m2c_arr, target_device_idx=target_device_idx),
+                start_mode=1, target_device_idx=target_device_idx)
+        self.assertEqual(dm.nmodes, 3)
+        modes = dm.modal_ifunc()
+        assert_array_almost_equal(cpuArray(modes.influence_function), m2c_arr[:, 1:4].T @ ifunc_arr, decimal=5)
+        assert_array_equal(cpuArray(modes.mask_inf_func), cpuArray(dm.mask))
+        # Subsets of the input command
+        assert_array_almost_equal(cpuArray(dm.modal_ifunc(start_mode=1).influence_function),
+                                  m2c_arr[:, 2:4].T @ ifunc_arr, decimal=5)
+        assert_array_almost_equal(cpuArray(dm.modal_ifunc(idx_modes=[2, 0]).influence_function),
+                                  m2c_arr[:, [3, 1]].T @ ifunc_arr, decimal=5)
+
+        # Without m2c and idx_modes: the selected ifunc rows
+        idx_modes = [1, 3, 4]
+        dm2 = DM(simul_params, height=0, ifunc=ifunc, idx_modes=idx_modes,
+                 target_device_idx=target_device_idx)
+        self.assertEqual(dm2.nmodes, 3)
+        assert_array_almost_equal(cpuArray(dm2.modal_ifunc().influence_function), ifunc_arr[idx_modes])
+        assert_array_almost_equal(cpuArray(dm2.modal_ifunc(start_mode=1).influence_function),
+                                  ifunc_arr[[3, 4]])
+
+        # Same layer as the DM for the same command (apart from the sign)
+        for d in (dm, dm2):
+            cmd = np.array([1.0, -0.5, 2.0], dtype=np.float32)
+            in_dm = BaseValue(value=xp.asarray(cmd), target_device_idx=target_device_idx)
+            in_dm.generation_time = 1
+            d.inputs['in_command'].set(in_dm)
+            d.setup()
+            d.check_ready(1)
+            d.trigger()
+            d.post_trigger()
+            idx = cpuArray(d.mask) > 0
+            expected = d.sign * cmd @ cpuArray(d.modal_ifunc().influence_function)
+            assert_array_almost_equal(cpuArray(d.outputs['out_layer'].phaseInNm)[idx], expected, decimal=4)
+
+        # Not shared with the DM, also without m2c and with a slice selection
+        dm3 = DM(simul_params, height=0, ifunc=ifunc, target_device_idx=target_device_idx)
+        modes3 = dm3.modal_ifunc()
+        modes3.influence_function[:] = 0
+        assert_array_almost_equal(cpuArray(dm3.ifunc), ifunc_arr)
+
+        # On another device
+        modes_cpu = dm.modal_ifunc(target_device_idx=-1)
+        self.assertIsInstance(modes_cpu.influence_function, np.ndarray)
+        assert_array_almost_equal(modes_cpu.influence_function, cpuArray(modes.influence_function))
+
+        # Caller precision, with and without m2c
+        for d in (dm, dm2):
+            self.assertEqual(d.modal_ifunc(precision=0).influence_function.dtype, np.float64)
+            self.assertEqual(d.modal_ifunc(precision=1, target_device_idx=-1).influence_function.dtype,
+                             np.float32)
+
+        # Full basis modes driven by the input command
+        self.assertEqual(dm.selected_modes, [1, 2, 3])
+        self.assertEqual(dm2.selected_modes, idx_modes)
+        self.assertEqual(dm3.selected_modes, list(range(6)))
+
+        with self.assertRaises(ValueError):
+            dm.modal_ifunc(start_mode=3)
+        with self.assertRaises(ValueError):
+            dm.modal_ifunc(idx_modes=[])
+
+    @cpu_and_gpu
+    def test_dm_empty_selection_raises(self, target_device_idx, xp):
+        '''An empty mode selection raises ValueError, with and without m2c.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        ifunc = IFunc(type_str='zernike', npixels=16, nmodes=6, target_device_idx=target_device_idx)
+        m2c = M2C(np.random.RandomState(0).randn(6, 4), target_device_idx=target_device_idx)
+
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, nmodes=4, start_mode=4,
+               target_device_idx=target_device_idx)
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, start_mode=4,
+               target_device_idx=target_device_idx)
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, idx_modes=[], target_device_idx=target_device_idx)
+        with self.assertRaises(ValueError):
+            DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, idx_modes=[],
+               target_device_idx=target_device_idx)
+
+    @cpu_and_gpu
+    def test_dm_ifunc_setter_checks_shape(self, target_device_idx, xp):
+        '''Setting an ifunc with a different shape raises ValueError and leaves the DM unchanged.'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=16, pixel_pitch=1)
+        dm = DM(simul_params, height=0, type_str='zernike', nmodes=6, target_device_idx=target_device_idx)
+        ifunc = dm.ifunc
+        with self.assertRaises(ValueError):
+            dm.ifunc = ifunc[:5]
+        with self.assertRaises(ValueError):
+            dm.ifunc = ifunc[:, :-1]
+        self.assertIs(dm.ifunc, ifunc)
+
+
+@unittest.skipIf(specula.cp is None, 'Cupy not found')
+class TestDMAccelerated(unittest.TestCase):
+
+    @staticmethod
+    def _sparse_ifunc():
+        '''Segment-like influence functions: each actuator moves a 2x2 block'''
+        rng = np.random.default_rng(3)
+        ifunc = np.zeros((9, 6, 6))
+        for a in range(9):
+            y, x = divmod(a, 3)
+            ifunc[a, 2 * y:2 * y + 2, 2 * x:2 * x + 2] = rng.uniform(0.5, 1.5, (2, 2))
+        return ifunc.reshape(9, 36)
+
+    def _make_dm(self, sparse, use_m2c):
+        '''DM in single precision, with IFunc and M2C in double precision'''
+        simul_params = SimulParams(time_step=1, pixel_pupil=6, pixel_pitch=1)
+        rng = np.random.default_rng(4)
+        ifunc_np = self._sparse_ifunc() if sparse else rng.standard_normal((9, 36))
+        ifunc = IFunc(ifunc_np, mask=np.ones((6, 6)), target_device_idx=0, precision=0)
+        m2c = M2C(rng.standard_normal((9, 5)), target_device_idx=0, precision=0) if use_m2c else None
+        nmodes = 5 if use_m2c else 9
+        dm = DM(simul_params, height=0, ifunc=ifunc, m2c=m2c, nmodes=nmodes,
+                target_device_idx=0, precision=1)
+        in_dm = BaseValue(value=np.zeros(nmodes), target_device_idx=0, precision=0)
+        dm.inputs['in_command'].set(in_dm)
+        return dm, in_dm
+
+    def _steps(self, dm, in_dm, steps, t0=0, seed=5):
+        rng = np.random.default_rng(seed)
+        out = []
+        for step in range(t0, t0 + steps):
+            t = dm.seconds_to_t(1e-3 * step)
+            in_dm.value[:] = specula.cp.asarray(rng.standard_normal(in_dm.value.shape[0]))
+            in_dm.generation_time = t
+            dm.check_ready(t)
+            dm.trigger()
+            dm.post_trigger()
+            out.append(cpuArray(dm.outputs['out_layer'].phaseInNm).copy())
+        return np.array(out)
+
+    def _run(self, accel, sparse, use_m2c, steps=4):
+        from test.specula_testlib import accelerate
+        dm, in_dm = self._make_dm(sparse, use_m2c)
+        if accel:
+            accelerate(dm)
+        dm.setup()
+        return self._steps(dm, in_dm, steps), dm, in_dm
+
+    def test_accelerated_with_ifunc_in_other_precision(self):
+        from test.specula_testlib import graph_captured
+        for sparse in (False, True):
+            for use_m2c in (False, True):
+                with self.subTest(sparse=sparse, use_m2c=use_m2c):
+                    ref, dm_ref, _ = self._run(False, sparse, use_m2c)
+                    self.assertEqual(dm_ref._ifunc_sparse is not None, sparse)
+                    out, dm, _ = self._run(True, sparse, use_m2c)
+                    self.assertTrue(graph_captured(dm))
+                    np.testing.assert_allclose(out, ref, rtol=1e-5, atol=1e-5)
+
+    def test_ifunc_setter_after_capture(self):
+        '''A new ifunc after the capture: the graph is captured again, and uses it'''
+        from test.specula_testlib import graph_captured
+        for use_m2c in (False, True):
+            with self.subTest(use_m2c=use_m2c):
+                ref, dm_ref, in_ref = self._run(False, False, use_m2c)
+                out, dm, in_dm = self._run(True, False, use_m2c)
+                self.assertTrue(graph_captured(dm))
+                dm_ref.ifunc = 2 * dm_ref.ifunc
+                dm.ifunc = 2 * dm.ifunc
+                ref2 = self._steps(dm_ref, in_ref, 4, t0=4, seed=6)
+                out2 = self._steps(dm, in_dm, 4, t0=4, seed=6)
+                self.assertTrue(graph_captured(dm))
+                self.assertEqual(dm._accel.status, 'accelerated')
+                np.testing.assert_allclose(out2, ref2, rtol=1e-5, atol=1e-5)

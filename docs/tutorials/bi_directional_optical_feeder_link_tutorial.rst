@@ -1,7 +1,7 @@
 .. _bi_directional_optical_feeder_link_tutorial:
 
 Bi-directional Optical Feeder Link Tutorial
-=========================================
+===========================================
 
 This tutorial guides you through creating and running a bi-directional optical feeder link simulation in SPECULA.
 
@@ -36,7 +36,7 @@ We'll simulate a simple bi-directional optical feeder link setting with:
 
 
 Part 1: System configuration
------------------
+----------------------------
 In order to calculate the PAA, time delays, effective wind speeds and directions the SPECULA functions ``calc_paa``, ``calc_timing_uplink_downlink`` and ``calc_effective_wind_speed`` in ``lib/fsoc_lib.py`` can be used. Those functions require as input atmospheric parameters, such as Cn2, wind speed and directions, as well as space object specific parameters such as height and speed.
 
 The calculated PAA is used in ``polar_coordinates`` of the ``Source`` class. The effective wind speeds and directions are set as input for the ``AtmoInfiniteEvolutionUpDown`` class and the time delays are set via ``extra_delta_time_up`` and ``extra_delta_time_down`` for the ``AtmoInfiniteEvolutionUpDown`` class.
@@ -130,7 +130,7 @@ To set up the main SPECULA parameter file, create a YAML configuration file, for
       wavelengthInNm:    1064
       inputs:
         atmo_layer_list: ['atmo.layer_list']
-        common_layer_list: ['pupilstop', 'dm.out_layer:-1']
+        common_layer_list: ['pupilstop', 'dm.out_layer:-1']  # previous-step DM correction; 1-frame causal feedback lag, separate from the explicit block delay below
       outputs:           ['out_source_down_ef']
     prop_up:
       class:             'AtmoPropagation'
@@ -142,7 +142,7 @@ To set up the main SPECULA parameter file, create a YAML configuration file, for
       wavelengthInNm:    1550
       inputs:
         atmo_layer_list: ['atmo.layer_list']
-        common_layer_list: ['pupilstop', 'dm.out_layer:-1']
+        common_layer_list: ['pupilstop', 'dm.out_layer:-1']  # previous-step DM correction; 1-frame causal feedback lag, separate from the explicit block delay below
       outputs:           ['out_source_up_ef']
 
    # The Pyramid WFS block simulates the Pyramid wavefront sensor.
@@ -206,7 +206,7 @@ To set up the main SPECULA parameter file, create a YAML configuration file, for
    # The full list of parameters can be found in the init method of the Integrator class.
     control:
       class:                'Integrator'
-      delay:                1
+      delay:                1  # explicit controller/plant delay [frames]; this is additional to the 1-step causal feedback lag already introduced by dm.out_layer:-1
       int_gain:             [0.,0.]
       n_modes:              [2,28]
       inputs:
@@ -262,19 +262,19 @@ To set up the main SPECULA parameter file, create a YAML configuration file, for
 .. note::
     * **Pupilstop**: The pupilstop block defines a circular aperture mask for both paths, though alternative geometries, such as a Gaussian profile for simulating uplink laser beams, can also be configured. If the beam for upwards propagation is not centered, it is required to set the ``beam_center`` parameter for the ``AtmoPropagation`` class.
     * **Fresnel propagation**: When ``doFresnel=True`` SPECULA employs the Angular Spectrum Method (ASM) for step-by-step propagation between consecutive phase screens. When evaluating beam propagation across long vacuum distances such as from the top of the atmospheric turbulence layer to a GEO or LEO satellite receiver the propagation distance satisfies the far-field condition. In this regime, SPECULA transitions from ASM to Fraunhofer diffraction. In this case also ``wavelegnthInNm`` has to be set. If the output of the propagation is used as input for a WFS, make sure that the wavelengths match.
-    * **Phase wrapping**: While phase extraction following these propagation methods naturally yields a wrapped field, SPECULA incorporates a dedicated 2D phase unwrapping function ``unwrap_2d`` to reconstruct continuous, smooth phase maps in ``modal_analysis.py``. If you perform a modal analysis of a Fresnel propagated electric field, you have to set the ``wavelengthInNm`` to perform an automatic unwrapping.
+    * **Phase wrapping**: While phase extraction following these propagation methods naturally yields a wrapped field, SPECULA incorporates a dedicated 2D phase unwrapping function ``unwrap_ls`` to reconstruct continuous, smooth phase maps in ``modal_analysis.py``. If you perform a modal analysis of a Fresnel propagated electric field, you have to set the ``wavelengthInNm`` to perform an automatic unwrapping.
     * **Zero padding**: To mitigate circular wrapping artifacts arising from the Fast Fourier Transforms (FFTs) inherent to ASM and Fraunhofer implementations, setting a large enough ``padding_factor`` is highly recommended. If the padding factor is too small, SPECULA will automatically reduce the propagation distance and output a warning.
     * **Power loss computation**: The ``power_loss`` block takes as input the upwards propagated electric field and computes the power loss in dB, normalized to the diffraction limited case, i.e., 0 dB is the diffraction limit. Negative values indicate a loss, i.e., smaller values correspond to a higher power loss.
 
 
 Part 2: Running the Simulation
------------------
+------------------------------
 Before running the full closed-loop simulation, we need to calibrate several components of the AO system.
 
 The calibration process has two main steps:
 
 Wavefront Sensor Geometry Calibration
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We need to identify which part of the Pyramid WFS contains enough light from the guide star to provide reliable slope measurements, excluding those outside the pupil or with insufficient illumination.
 
 Create a YAML configuration file, for example ``calib_pyr_pupdata.yml``:
@@ -328,7 +328,7 @@ Now run the WFS calibration:
    specula params_leo_satellite.yml calib_pyr_pupdata.yml
 
 Interaction Matrix and Reconstructor Calibration
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Create a YAML configuration file, for example ``calib_im_rec.yml``:
 
 .. code-block:: yaml
@@ -407,6 +407,7 @@ Create a YAML configuration file, for example ``calib_im_rec.yml``:
         "psf_down",
         "data_store",
     ]
+
 Now run the interaction and reconstruction matrix calibration:
 
 .. code-block:: bash

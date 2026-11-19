@@ -2,8 +2,9 @@ import numpy as np
 from astropy.io import fits
 
 from specula.base_data_obj import BaseDataObj
-from specula.lib.n_phot import n_phot
+from specula.lib.source_flux import phot_density_from_source_params
 from specula import ASEC2RAD
+from iteras.lib import storage
 
 degree2rad = np.pi / 180.
 
@@ -145,22 +146,14 @@ class Source(BaseDataObj):
         """
         Get the photometric density of the source.
         """
-        if self.zero_point > 0:
-            e0 = self.zero_point
-        else:
-            e0 = None
-        if self.band:
-            band = self.band
-        else:
-            band = None
-
-        res = n_phot(self.magnitude, band=band, lambda_=self.wavelengthInNm/1e9, width=1e-9, e0=e0)
-        self.logger.info(f'source.phot_density: magnitude is {self.magnitude}, and flux (output of n_phot with width=1e-9, surf=1) is {res[0]}')
-        return res[0]
+        res = phot_density_from_source_params(self.magnitude, self.wavelengthInNm,
+                                              band=self.band, zero_point=self.zero_point)
+        self.logger.info(f'source.phot_density: magnitude is {self.magnitude}, and flux (output of n_phot with width=1e-9, surf=1) is {res}')
+        return res
 
     def save(self, filename, overwrite=False):
-        hdr = self.get_fits_header()
-        fits.writeto(filename, np.zeros(2), hdr, overwrite=overwrite)
+        storage.write_object(filename, self.get_fits_header(), {}, layout='placeholder',
+                             overwrite=overwrite)
 
     @staticmethod
     def from_header(hdr, target_device_idx=None):
@@ -178,5 +171,6 @@ class Source(BaseDataObj):
 
     @staticmethod
     def restore(filename, target_device_idx=None):
-        hdr = fits.getheader(filename)
+        with storage.read_object(filename) as f:
+            hdr = f.header
         return Source.from_header(hdr, target_device_idx=target_device_idx)

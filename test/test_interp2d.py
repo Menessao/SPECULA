@@ -92,13 +92,13 @@ class TestInterp2D(unittest.TestCase):
         )
         output_zoom = interp_zoom.interpolate(phase_in)
 
-        # Check center values. 
-        # For a 10x10 array, index 5 maps to coordinate x = 5 * 9/10 = 4.5.
-        # Since 4.5 is the exact center (xc = 10/2 - 0.5 = 4.5), zooming
-        # around the center leaves this coordinate unchanged. The interpolated
-        # value of our gradient (phase_in(x) = x) should be exactly 4.5.
-        center_val = output_zoom[5, 5]
-        np.testing.assert_allclose(float(center_val), 4.5, atol=1e-5)
+        # Check center values.
+        # With equal input and output size, output index j maps to x = j, and
+        # zooming by 2x around the center xc = (10 - 1) / 2 = 4.5 gives
+        # x = (j - 4.5) / 2 + 4.5: the two pixels next to the center go to
+        # 4.25 and 4.75, symmetric about it.
+        np.testing.assert_allclose(float(output_zoom[5, 4]), 4.25, atol=1e-5)
+        np.testing.assert_allclose(float(output_zoom[5, 5]), 4.75, atol=1e-5)
 
         # The edge (0,0) originally mapped to 0. Zooming in by 2x around
         # the center (4.5) moves the sampling coordinate closer to the center:
@@ -167,8 +167,8 @@ class TestInterp2D(unittest.TestCase):
                     yy, xx = xp.mgrid[0:output_shape[0], 0:output_shape[1]]
                     yy = yy.astype(xp.float32)
                     xx = xx.astype(xp.float32)
-                    yy *= (input_shape[0]-1) / output_shape[0]
-                    xx *= (input_shape[1]-1) / output_shape[1]
+                    yy = (yy + 0.5) * (input_shape[0] / output_shape[0]) - 0.5
+                    xx = (xx + 0.5) * (input_shape[1] / output_shape[1]) - 0.5
 
                     # Apply rotation and magnification
                     if rot != 0 or magnification != 1.0:
@@ -246,6 +246,80 @@ class TestInterp2D(unittest.TestCase):
         else:
             self.skipTest("This test only runs on GPU with CuPy")
 
+    @staticmethod
+    def _with_nan_sentinel(xp, data):
+        '''
+        Return a contiguous copy of data followed in memory by a NaN, so that
+        any kernel read past the end of the array poisons the result.
+        '''
+        buf = xp.full(data.size + 1, xp.nan, dtype=data.dtype)
+        buf[:-1] = data.ravel()
+        return buf[:-1].reshape(data.shape)
+
+    @cpu_and_gpu
+    @unittest.skipIf(cp is None, "This test requires CuPy (GPU)")
+    def test_precomputed_corner_no_out_of_bounds_read(self, target_device_idx, xp):
+        '''
+        Sampling the last row and column exactly must not read past the end
+        of the input array (bottom-right corner).
+        '''
+        if xp == cp: # pragma: no cover
+            input_shape = (20, 30)
+            for dtype in (xp.float32, xp.float64):
+                with self.subTest(dtype=dtype):
+                    data = xp.arange(input_shape[0] * input_shape[1], dtype=dtype).reshape(input_shape)
+                    phase_in = self._with_nan_sentinel(xp, data)
+                    yy, xx = xp.mgrid[0:input_shape[0], 0:input_shape[1]].astype(dtype)
+                    interp = Interp2D(input_shape, input_shape, xx=xx, yy=yy, xp=xp, dtype=dtype)
+                    output = interp.interpolate(phase_in)
+                    np.testing.assert_array_equal(cpuArray(output), cpuArray(data))
+        else:
+            self.skipTest("This test only runs on GPU with CuPy")
+
+    @cpu_and_gpu
+    @unittest.skipIf(cp is None, "This test requires CuPy (GPU)")
+    def test_onthefly_corner_no_out_of_bounds_read(self, target_device_idx, xp):
+        '''
+        A shift clamping all coordinates to the bottom-right corner must not
+        read past the end of the input array.
+        '''
+        if xp == cp: # pragma: no cover
+            input_shape = (20, 30)
+            for dtype in (xp.float32, xp.float64):
+                with self.subTest(dtype=dtype):
+                    data = xp.arange(input_shape[0] * input_shape[1], dtype=dtype).reshape(input_shape)
+                    phase_in = self._with_nan_sentinel(xp, data)
+                    interp = Interp2D(input_shape, input_shape,
+                                      rowShiftInPixels=1000, colShiftInPixels=1000,
+                                      xp=xp, dtype=dtype)
+                    assert not interp.use_precomputed
+                    output = cpuArray(interp.interpolate(phase_in))
+                    np.testing.assert_array_equal(output, np.full(input_shape, cpuArray(data[-1, -1])))
+        else:
+            self.skipTest("This test only runs on GPU with CuPy")
+
+    @cpu_and_gpu
+    @unittest.skipIf(cp is None, "This test requires CuPy (GPU)")
+    def test_right_edge_no_row_wraparound(self, target_device_idx, xp):
+        '''
+        Sampling the last column must not pick up the first element of the
+        next row, even with zero weight: a NaN there would leak into the output.
+        '''
+        if xp == cp: # pragma: no cover
+            input_shape = (20, 30)
+            for dtype in (xp.float32, xp.float64):
+                with self.subTest(dtype=dtype):
+                    data = xp.arange(input_shape[0] * input_shape[1], dtype=dtype).reshape(input_shape)
+                    data[:, 0] = xp.nan
+                    yy = xp.repeat(xp.arange(input_shape[0], dtype=dtype)[:, None], 5, axis=1)
+                    xx = xp.full_like(yy, input_shape[1] - 1)
+                    interp = Interp2D(input_shape, yy.shape, xx=xx, yy=yy, xp=xp, dtype=dtype)
+                    output = cpuArray(interp.interpolate(data))
+                    expected = np.repeat(cpuArray(data[:, -1])[:, None], 5, axis=1)
+                    np.testing.assert_array_equal(output, expected)
+        else:
+            self.skipTest("This test only runs on GPU with CuPy")
+
     @cpu_and_gpu
     @unittest.skipIf(cp is None, "This test requires CuPy (GPU)")
     def test_onthefly_float64(self, target_device_idx, xp):
@@ -277,3 +351,307 @@ class TestInterp2D(unittest.TestCase):
             assert not xp.isnan(output).any(), "Output should not contain NaN"
         else:
             self.skipTest("This test only runs on GPU with CuPy")
+
+    # ------------------------------------------------------------------
+    # Pixel-centre convention: pixel j is centred at j, output pixel j maps
+    # to x_in = (j + 0.5) * N_in / N_out - 0.5 (bilinear, edges replicated).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ramp(xp, shape, axis):
+        '''Float32 image whose value equals the pixel index along `axis` (1 = x, 0 = y).'''
+        idx = np.arange(shape[axis], dtype=np.float32)
+        img = np.tile(idx[None, :], (shape[0], 1)) if axis == 1 else np.tile(idx[:, None], (1, shape[1]))
+        return xp.asarray(img, dtype=xp.float32)
+
+    @cpu_and_gpu
+    def test_upsample_ramp(self, target_device_idx, xp):
+        '''
+        Upsampling a linear ramp N -> 2N is exact: out[j] = (j + 0.5)/2 - 0.5
+        (slope N_in/N_out per output pixel), the image centre is preserved,
+        and the first/last pixels (mapped outside [0, N-1]) replicate the edges.
+        '''
+        n = 16
+        for axis in (1, 0):
+            with self.subTest(axis=axis):
+                interp = Interp2D((n, n), (2 * n, 2 * n), xp=xp, dtype=xp.float32)
+                out = cpuArray(interp.interpolate(self._ramp(xp, (n, n), axis)))
+                prof = out[0, :] if axis == 1 else out[:, 0]
+                # The other axis must be constant
+                other = out[:, 0] if axis == 1 else out[0, :]
+                np.testing.assert_allclose(other, other[0], atol=1e-6)
+                if axis == 1:
+                    np.testing.assert_allclose(out, np.tile(prof, (2 * n, 1)), atol=1e-5)
+                else:
+                    np.testing.assert_allclose(out, np.tile(prof[:, None], (1, 2 * n)), atol=1e-5)
+
+                j = np.arange(1, 2 * n - 1)
+                np.testing.assert_allclose(prof[1:-1], (j + 0.5) / 2 - 0.5, atol=1e-5)
+                np.testing.assert_allclose(0.5 * (prof[n - 1] + prof[n]), (n - 1) / 2, atol=1e-5)
+                np.testing.assert_allclose(prof[0], 0.0, atol=1e-6)
+                np.testing.assert_allclose(prof[-1], n - 1, atol=1e-5)
+
+    @cpu_and_gpu
+    def test_downsample_ramp(self, target_device_idx, xp):
+        '''
+        Downsampling a linear ramp 2N -> N gives the mean of each input pixel
+        pair, out[j] = 2j + 0.5, for all pixels (no clamping involved).
+        '''
+        n = 16
+        for axis in (1, 0):
+            with self.subTest(axis=axis):
+                interp = Interp2D((2 * n, 2 * n), (n, n), xp=xp, dtype=xp.float32)
+                out = cpuArray(interp.interpolate(self._ramp(xp, (2 * n, 2 * n), axis)))
+                expected = 2 * np.arange(n) + 0.5
+                expected = np.tile(expected[None, :], (n, 1)) if axis == 1 \
+                    else np.tile(expected[:, None], (1, n))
+                np.testing.assert_allclose(out, expected, atol=1e-4)
+
+    @cpu_and_gpu
+    def test_equal_size_shift_ramp(self, target_device_idx, xp):
+        '''
+        With equal sizes, a shift s along an axis moves a ramp by exactly s
+        (out = ramp + s), clamped to [0, N-1] at the edges. The tiny shift
+        1e-6 must be continuous with the unshifted identity (no 0.5 px jump).
+        '''
+        n = 16
+        for axis in (1, 0):
+            for s in (1e-6, 0.3, 1.0, -0.7):
+                with self.subTest(axis=axis, shift=s):
+                    kw = dict(colShiftInPixels=s) if axis == 1 else dict(rowShiftInPixels=s)
+                    interp = Interp2D((n, n), (n, n), xp=xp, dtype=xp.float32, **kw)
+                    img = self._ramp(xp, (n, n), axis)
+                    out = cpuArray(interp.interpolate(img))
+                    ref = cpuArray(img)
+                    expected = np.clip(ref + s, 0, n - 1)
+                    np.testing.assert_allclose(out, expected, atol=1e-5)
+                    # Interior pixels, where no clamping happens, are exactly ramp + s
+                    sl = [slice(None), slice(None)]
+                    sl[axis] = slice(1, n - 1)
+                    np.testing.assert_allclose(out[tuple(sl)], ref[tuple(sl)] + s, atol=1e-5)
+                    if s == 1e-6:
+                        assert np.max(np.abs(out - ref)) < 1e-5
+
+    @cpu_and_gpu
+    def test_integer_shift_random_image(self, target_device_idx, xp):
+        '''
+        An integer shift (row 2, col 3) samples out[i, j] = in[i + 2, j + 3]
+        (x_in = x + shift), i.e. np.roll by (-2, -3), exactly, wherever no
+        clamping happens.
+        '''
+        n = 16
+        img = np.random.default_rng(1234).random((n, n)).astype(np.float32)
+        interp = Interp2D((n, n), (n, n), rowShiftInPixels=2, colShiftInPixels=3,
+                          xp=xp, dtype=xp.float32)
+        out = cpuArray(interp.interpolate(xp.asarray(img)))
+        expected = np.roll(img, (-2, -3), axis=(0, 1))
+        np.testing.assert_allclose(out[:n - 2, :n - 3], expected[:n - 2, :n - 3], atol=1e-5)
+        np.testing.assert_allclose(out[:n - 2, :n - 3], img[2:, 3:], atol=1e-5)
+
+    @cpu_and_gpu
+    def test_rotation_90_deg_random_image(self, target_device_idx, xp):
+        '''
+        Rotation about the input centre (N-1)/2 by +90 deg maps onto pixel
+        centres exactly, for even and odd N. With x_in = -(y - c) + c and
+        y_in = (x - c) + c one gets out[i, j] = in[j, N-1-i] = np.rot90(img, 1).
+        -90 deg is the opposite direction (k=-1) and 180 deg is k=2.
+        '''
+        for n in (16, 15):
+            img = np.random.default_rng(n).random((n, n)).astype(np.float32)
+            for angle, k in ((90, 1), (-90, -1), (180, 2)):
+                with self.subTest(n=n, angle=angle):
+                    interp = Interp2D((n, n), (n, n), rotInDeg=angle, xp=xp, dtype=xp.float32)
+                    out = cpuArray(interp.interpolate(xp.asarray(img)))
+                    np.testing.assert_allclose(out, np.rot90(img, k), atol=1e-5)
+
+    @cpu_and_gpu
+    def test_upsample_random_no_overshoot(self, target_device_idx, xp):
+        '''
+        Bilinear upsampling 8 -> 24 is a convex combination of input pixels
+        (edges replicated): the output must stay within [min, max] of the input.
+        '''
+        img = np.random.default_rng(7).random((8, 8)).astype(np.float32)
+        interp = Interp2D((8, 8), (24, 24), xp=xp, dtype=xp.float32)
+        out = cpuArray(interp.interpolate(xp.asarray(img)))
+        assert out.shape == (24, 24)
+        assert out.min() >= img.min() - 1e-6
+        assert out.max() <= img.max() + 1e-6
+
+    @cpu_and_gpu
+    def test_default_vs_explicit_coordinates(self, target_device_idx, xp):
+        '''
+        Explicit xx/yy built with the pixel-centre formula must reproduce the
+        default mapping (on GPU: precomputed kernel vs on-the-fly kernel).
+        '''
+        in_shape, out_shape = (8, 12), (24, 18)
+        img = xp.asarray(np.random.default_rng(3).random(in_shape).astype(np.float32))
+        yy, xx = np.mgrid[0:out_shape[0], 0:out_shape[1]].astype(np.float32)
+        yy = np.clip((yy + 0.5) * in_shape[0] / out_shape[0] - 0.5, 0, in_shape[0] - 1)
+        xx = np.clip((xx + 0.5) * in_shape[1] / out_shape[1] - 0.5, 0, in_shape[1] - 1)
+        default = Interp2D(in_shape, out_shape, xp=xp, dtype=xp.float32)
+        explicit = Interp2D(in_shape, out_shape, xx=xp.asarray(xx), yy=xp.asarray(yy),
+                            xp=xp, dtype=xp.float32)
+        assert explicit.use_precomputed
+        np.testing.assert_allclose(cpuArray(explicit.interpolate(img)),
+                                   cpuArray(default.interpolate(img)), atol=1e-5)
+
+    # ------------------------------------------------------------------
+    # Rules for the coordinates outside the array (outside='edge'|'zero'|'linear')
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ramp_along_x(n, xp):
+        # a[i, j] = j + 1 (rows identical)
+        return xp.asarray(np.tile(np.arange(n, dtype=np.float64) + 1, (n, 1)))
+
+    @cpu_and_gpu
+    def test_outside_zero_ramp(self, target_device_idx, xp):
+        '''
+        outside='zero': the input is extended by a ring of zeros, so beyond the
+        last pixel the value goes linearly from a[N-1] to 0 within one pixel
+        ((N - x_in) * a[N-1] for N-1 < x_in <= N) and is 0 beyond; on the low
+        side (1 + x_in) * a[0] for -1 <= x_in < 0, and 0 below -1.
+        Old behaviour (clamp to the edge): the edge value everywhere outside.
+        '''
+        n = 16
+        a = self._ramp_along_x(n, xp)
+        j = np.arange(n, dtype=np.float64)
+        for s in (0.5, 1.0, 3.0, -0.5, -1.0, -3.0):
+            interp = Interp2D((n, n), (n, n), colShiftInPixels=s, xp=xp, dtype=xp.float64)
+            out = cpuArray(interp.interpolate(a, outside='zero'))
+            x_in = j + s
+            expected = np.where(x_in <= n - 1, x_in + 1, 0.0)           # inside the ramp
+            expected = np.where((x_in > n - 1) & (x_in <= n), (n - x_in) * n, expected)
+            expected = np.where((x_in >= -1) & (x_in < 0), 1 + x_in, expected)
+            expected = np.where(x_in < -1, 0.0, expected)
+            np.testing.assert_allclose(out, np.tile(expected, (n, 1)), atol=1e-12,
+                                       err_msg=f'shift {s}')
+
+    @cpu_and_gpu
+    def test_outside_linear_ramp(self, target_device_idx, xp):
+        '''
+        outside='linear': a linear ramp continues exactly for one pixel beyond
+        the edge (value x_in + 1 up to x_in = N and down to x_in = -1), and is
+        held beyond (N + 1 on the high side, 0 on the low side).
+        Old behaviour (clamp to the edge): held at a[N-1] = N (or a[0] = 1).
+        '''
+        n = 16
+        a = self._ramp_along_x(n, xp)
+        j = np.arange(n, dtype=np.float64)
+        for s in (0.5, 1.0, 3.0, -0.5, -1.0, -3.0):
+            interp = Interp2D((n, n), (n, n), colShiftInPixels=s, xp=xp, dtype=xp.float64)
+            out = cpuArray(interp.interpolate(a, outside='linear'))
+            expected = np.clip(j + s, -1, n) + 1
+            np.testing.assert_allclose(out, np.tile(expected, (n, 1)), atol=1e-12,
+                                       err_msg=f'shift {s}')
+
+    @cpu_and_gpu
+    def test_outside_linear_corner(self, target_device_idx, xp):
+        '''
+        outside='linear' is separable (corner = 4 a00 - 2 a01 - 2 a10 + a11), so
+        it reproduces exactly a bilinear field c0 + c1 i + c2 j + c3 i j on the
+        ring, corners included. A shift of -0.5 (or +0.5) in both directions
+        samples the corner pixel at (-0.5, -0.5) (or (N-0.5, N-0.5)).
+        Old behaviour (clamp to the edge): the corner value was a[0, 0].
+        '''
+        n = 12
+        c0, c1, c2, c3 = 1.0, 2.0, 3.0, 0.5
+        i, j = np.mgrid[0:n, 0:n].astype(np.float64)
+        field = lambda y, x: c0 + c1 * y + c2 * x + c3 * y * x
+        a = xp.asarray(field(i, j))
+        for s in (-0.5, 0.5):
+            interp = Interp2D((n, n), (n, n), rowShiftInPixels=s, colShiftInPixels=s,
+                              xp=xp, dtype=xp.float64)
+            out = cpuArray(interp.interpolate(a, outside='linear'))
+            np.testing.assert_allclose(out, field(i + s, j + s), atol=1e-10,
+                                       err_msg=f'shift {s}')
+
+    @cpu_and_gpu
+    def test_outside_edge_unchanged(self, target_device_idx, xp):
+        '''
+        outside='edge' is the default and gives exactly the same result as the
+        call without the argument (shift, rotation, magnification, upsampling,
+        default grid and explicit xx/yy partly outside the array).
+        '''
+        rng = np.random.default_rng(11)
+        img = xp.asarray(rng.random((20, 20)).astype(np.float32))
+        cases = [
+            dict(output_shape=(20, 20), rowShiftInPixels=2.7, colShiftInPixels=-3.1),
+            dict(output_shape=(20, 20), rotInDeg=25),
+            dict(output_shape=(20, 20), magnification=0.7),
+            dict(output_shape=(50, 50), rotInDeg=10, colShiftInPixels=1.5),
+        ]
+        for kw in cases:
+            interp = Interp2D((20, 20), xp=xp, dtype=xp.float32, **kw)
+            np.testing.assert_array_equal(cpuArray(interp.interpolate(img)),
+                                          cpuArray(interp.interpolate(img, outside='edge')),
+                                          err_msg=str(kw))
+
+        yy, xx = np.mgrid[0:20, 0:20].astype(np.float32)
+        interp = Interp2D((20, 20), (20, 20), xx=xp.asarray(xx * 1.5 - 6),
+                          yy=xp.asarray(yy * 1.5 - 4), xp=xp, dtype=xp.float32)
+        np.testing.assert_array_equal(cpuArray(interp.interpolate(img)),
+                                      cpuArray(interp.interpolate(img, outside='edge')))
+
+    def test_outside_cpu_equals_gpu(self):
+        '''
+        CPU (scipy, padded input) and GPU (CUDA kernels, virtual ring) agree
+        within 1e-12 in double precision, for each rule and a few geometries.
+        '''
+        if cp is None:
+            self.skipTest('GPU not available')
+        rng = np.random.default_rng(5)
+        geometries = [
+            dict(in_n=40, out_n=40, colShiftInPixels=3.3, rowShiftInPixels=-2.6),
+            dict(in_n=40, out_n=40, rotInDeg=30),
+            dict(in_n=40, out_n=40, magnification=0.7),
+            dict(in_n=40, out_n=100),
+            dict(in_n=40, out_n=100, rotInDeg=30, magnification=0.7, colShiftInPixels=3.3),
+        ]
+        img = rng.random((40, 40))
+        for outside in ('edge', 'zero', 'linear'):
+            for g in geometries:
+                g = dict(g)
+                shape_in, shape_out = (g.pop('in_n'),) * 2, (g.pop('out_n'),) * 2
+                res = []
+                for xp in (np, cp):
+                    interp = Interp2D(shape_in, shape_out, xp=xp, dtype=xp.float64, **g)
+                    res.append(cpuArray(interp.interpolate(xp.asarray(img), outside=outside)))
+                np.testing.assert_allclose(res[1], res[0], atol=1e-12, rtol=0,
+                                           err_msg=f'{outside} {g} {shape_out}')
+
+    @cpu_and_gpu
+    def test_outside_invalid(self, target_device_idx, xp):
+        '''
+        An unknown rule raises ValueError, and so does outside='linear' with
+        an input of one row (the extrapolation needs two pixels).
+        '''
+        interp = Interp2D((8, 8), (8, 8), colShiftInPixels=1, xp=xp, dtype=xp.float32)
+        with self.assertRaises(ValueError):
+            interp.interpolate(xp.zeros((8, 8), dtype=xp.float32), outside='foo')
+
+        interp = Interp2D((1, 8), (1, 8), colShiftInPixels=1, xp=xp, dtype=xp.float32)
+        with self.assertRaises(ValueError):
+            interp.interpolate(xp.zeros((1, 8), dtype=xp.float32), outside='linear')
+
+    @cpu_and_gpu
+    def test_shifted_pupil_has_no_tongue(self, target_device_idx, xp):
+        '''
+        A circular pupil touching the array edge (N = 160), shifted by 10 pixels
+        along x. Old behaviour (outside='edge'): the edge column was copied over
+        the 10 columns coming from outside the array, a "tongue" of amplitude 1
+        (about 18 x 10 pixels). With outside='zero' those columns are exactly 0.
+        '''
+        n, shift = 160, 10
+        y, x = np.mgrid[0:n, 0:n].astype(np.float64)
+        c = (n - 1) / 2
+        pupil = xp.asarray((np.hypot(x - c, y - c) <= n / 2).astype(np.float64))
+
+        interp = Interp2D((n, n), (n, n), colShiftInPixels=shift, xp=xp, dtype=xp.float64)
+        edge = cpuArray(interp.interpolate(pupil, outside='edge'))
+        zero = cpuArray(interp.interpolate(pupil, outside='zero'))
+
+        assert (edge[:, -shift:] > 0.5).sum() > 100
+        assert np.all(zero[:, -shift:] == 0)
+        # Inside the array the two rules agree
+        np.testing.assert_allclose(zero[:, :-shift], edge[:, :-shift], atol=1e-12)

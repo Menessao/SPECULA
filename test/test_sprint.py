@@ -166,7 +166,7 @@ def generate_reference_im(simul_params, source, dm, wfs, slopec):
     pup_mask = np.array(dm.mask)
 
     # Get 3D influence functions
-    ifunc_3d = np.array(dm._ifunc.ifunc_2d_to_3d(normalize=True))
+    ifunc_3d = np.array(dm._ifunc.ifunc_2d_to_3d(normalize=False))
 
     # Get valid subapertures from slopec
     subapdata = slopec.subapdata
@@ -204,7 +204,7 @@ def generate_reference_im(simul_params, source, dm, wfs, slopec):
         specula_convention=True
     )
 
-    return im_ref
+    return specula.cpuArray(im_ref)
 
 
 def generate_misregistered_im(simul_params, source, dm, wfs, slopec,
@@ -214,7 +214,7 @@ def generate_misregistered_im(simul_params, source, dm, wfs, slopec,
     # Extract parameters (same as generate_reference_im)
     pup_diam_m = simul_params.pixel_pupil * simul_params.pixel_pitch
     pup_mask = np.array(dm.mask)
-    ifunc_3d = np.array(dm._ifunc.ifunc_2d_to_3d(normalize=True))
+    ifunc_3d = np.array(dm._ifunc.ifunc_2d_to_3d(normalize=False))
 
     subapdata = slopec.subapdata
     display_map = np.array(subapdata.display_map)
@@ -249,7 +249,7 @@ def generate_misregistered_im(simul_params, source, dm, wfs, slopec,
         specula_convention=True
     )
 
-    return im_misreg
+    return specula.cpuArray(im_misreg)
 
 
 def generate_sinusoidal_slopes(im, carrier_frequencies, duration, dt, noise_level=0.0):
@@ -311,7 +311,10 @@ class TestSprintShSynim(unittest.TestCase):
     @cpu_and_gpu
     def test_sprint_estimation_small(self, target_device_idx, xp):
         """Test SPRINT estimation with small mis-registration"""
-        self._run_sprint_test(2.0, 1.0, 1.0, 0.0, target_device_idx, xp)
+        # Non-integer shifts: with integer shifts and a small rotation most samples
+        # fall on the input pixel centres, where the bilinear IM has a kink in the
+        # shift and the fit may fail to converge
+        self._run_sprint_test(2.3, 1.3, 1.0, 0.0, target_device_idx, xp)
 
     @cpu_and_gpu
     def test_sprint_estimation_medium(self, target_device_idx, xp):

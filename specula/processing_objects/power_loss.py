@@ -28,7 +28,6 @@ class PowerLoss(BaseProcessingObj):
                              'propagation.')
 
         self.first = True
-        self.total_power_ref = 0
         self.pixel_pupil = simul_params.pixel_pupil
         self.pixel_pitch = simul_params.pixel_pitch
         self.pad_size = int(self.pixel_pupil * prop.padding_factor)
@@ -37,12 +36,12 @@ class PowerLoss(BaseProcessingObj):
         self.psf_ref = 0.0
 
         self.inputs['in_ef'] = InputValue(type=ElectricField)
-        self.power_loss = BaseValue(target_device_idx=self.target_device_idx)
+        self.power_loss = BaseValue(target_device_idx=self.target_device_idx, precision=self.precision)
         self.outputs['out_power_loss'] = self.power_loss
-        self.sr = BaseValue(target_device_idx=self.target_device_idx)
+        self.sr = BaseValue(target_device_idx=self.target_device_idx, precision=self.precision)
         self.outputs['out_sr'] = self.sr
-        self.psf = BaseValue(target_device_idx=self.target_device_idx)
-        self.psf.value = self.xp.zeros([self.pad_size, self.pad_size])
+        self.psf = BaseValue(target_device_idx=self.target_device_idx, precision=self.precision)
+        self.psf.value = self.xp.zeros([self.pad_size, self.pad_size], dtype=self.dtype)
         self.outputs['out_psf'] = self.psf
 
     @classmethod
@@ -82,18 +81,20 @@ class PowerLoss(BaseProcessingObj):
 
             tmp_ef = ef_in[s + self.prop_obj.beam_center[0]:s + self.prop_obj.beam_center[0] + self.pixel_pupil,
                      s + self.prop_obj.beam_center[1]:s + self.prop_obj.beam_center[1] + self.pixel_pupil]
-            self.psf.value[:] = calc_psf(self.xp.angle(tmp_ef), abs(tmp_ef), xp=self.xp, imwidth=self.pad_size,
-                                         complex_dtype=self.complex_dtype)
+            calc_psf(self.xp.angle(tmp_ef), abs(tmp_ef), xp=self.xp, imwidth=self.pad_size,
+                     complex_dtype=self.complex_dtype, out=self.psf.value)
             self.psf_ref = self.psf.value[self.pad_size // 2, self.pad_size // 2].copy()
 
     def trigger_code(self):
         in_ef = self.local_inputs['in_ef']
-        self.psf.value[:] = calc_psf(in_ef.phi_at_lambda(self.prop_obj.wavelengthInNm), in_ef.A, imwidth=self.pad_size,
-                                     xp=self.xp, complex_dtype=self.complex_dtype)
+        calc_psf(in_ef.phi_at_lambda(self.prop_obj.wavelengthInNm), in_ef.A, imwidth=self.pad_size,
+                 xp=self.xp, complex_dtype=self.complex_dtype, out=self.psf.value)
 
-        self.sr.value = self.psf.value[self.pad_size // 2, self.pad_size // 2] / self.psf_ref
+        # In place (set_value()) after the first trigger: a new array at each step would
+        # fail the check of the arrays of an accelerated reader
+        self.sr.set_value(self.psf.value[self.pad_size // 2, self.pad_size // 2] / self.psf_ref)
         self.logger.info(f'SR at {int(self.prop_obj.wavelengthInNm)}nm : {self.sr.value}')
-        self.power_loss.value = 10 * np.log10(self.psf.value[self.pad_size // 2, self.pad_size // 2] / self.psf_ref)
+        self.power_loss.set_value(10 * np.log10(self.psf.value[self.pad_size // 2, self.pad_size // 2] / self.psf_ref))
         self.logger.info(f'Power loss at {int(self.prop_obj.wavelengthInNm)}nm : {self.power_loss.value}')
 
     def post_trigger(self):

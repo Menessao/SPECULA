@@ -35,6 +35,24 @@ class TestZWFSlopec(unittest.TestCase):
         np.testing.assert_equal(cpuArray(slopec.nsubaps()),9)
 
     @cpu_and_gpu
+    def test_slopes_written_in_place(self, target_device_idx, xp):
+        """The output slopes array stays the same from one trigger to the next (an
+        accelerated reader checks that its input arrays are not reallocated)"""
+        pixels = Pixels(5, 5, target_device_idx=target_device_idx)
+        slopec = ZwfsSlopec(pup_diam=3, ccd_size=5, target_device_idx=target_device_idx)
+        slopec.inputs['in_pixels'].set(pixels)
+        out = slopec.outputs['out_slopes'].slopes
+        for step in range(2):
+            pixels.pixels[:] = xp.arange(25, dtype=xp.uint16).reshape((5, 5)) ** (step + 1)
+            pixels.generation_time = step + 1
+            slopec.check_ready(step + 1)
+            slopec.trigger()
+            slopec.post_trigger()
+            self.assertIs(slopec.outputs['out_slopes'].slopes, out)
+            pix_in_pupil = cpuArray(pixels.pixels[1:4, 1:4]).flatten().astype(np.float64)
+            np.testing.assert_allclose(cpuArray(out), pix_in_pupil / pix_in_pupil.mean(), rtol=1e-5)
+
+    @cpu_and_gpu
     def test_zernslopec_slopesnull(self, target_device_idx, xp):
         pixels = Pixels(5, 5, target_device_idx=target_device_idx)
         pixels.pixels = xp.arange(25,  dtype=xp.uint16).reshape((5,5))
@@ -54,8 +72,10 @@ class TestZWFSlopec(unittest.TestCase):
         slopes1 = slopec1.outputs['out_slopes']
         slopes2 = slopec2.outputs['out_slopes']
 
-        np.testing.assert_equal(cpuArray(sn.xslopes),np.arange(9)[:4]/9) # ensure sn can handle an odd number of elements
-        np.testing.assert_equal(cpuArray(sn.yslopes),np.arange(9)[4:]/9) # ensure sn can handle an odd number of elements
+        # ensure sn can handle an odd number of elements (values in the precision of sn)
+        expected = (np.arange(9)/9).astype(cpuArray(sn.slopes).dtype)
+        np.testing.assert_equal(cpuArray(sn.xslopes), expected[:4])
+        np.testing.assert_equal(cpuArray(sn.yslopes), expected[4:])
         np.testing.assert_array_almost_equal(cpuArray(slopes2.slopes),
                                              cpuArray(slopes1.slopes - sn.slopes))
 

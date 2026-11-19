@@ -34,7 +34,7 @@ class Coronagraph(BaseProcessingObj):
         wavelengthInNm: float
             Wavelength in nm
         fov: float
-            Desired field of view in lambda/D on focal plane
+            Desired field of view on the focal plane, in arcsec
         fov_errinf: float, optional
             Relative error allowed on the inner part of the FOV (default: 0.1)
         fov_errsup: float, optional
@@ -84,7 +84,7 @@ class Coronagraph(BaseProcessingObj):
         self.ef_pad = None  # padded electric field in pupil plane
 
         # Prepare centered focal plane mask
-        self.fp_mask_centered = self.xp.fft.fftshift(self.fp_mask)
+        self.fp_mask_centered = self.fft.fftshift(self.fp_mask)
 
         # Allocate padded array once
         self.ef_pad = self.xp.zeros((self.fft_totsize, self.fft_totsize),
@@ -130,7 +130,7 @@ class Coronagraph(BaseProcessingObj):
         # it depends on self.phase_shift
         self.ef_pad *= self.phase_shift
 
-        return self.xp.fft.fft2(self.ef_pad)
+        return self.fft.fft2(self.ef_pad)
 
     def prepare_trigger(self, t):
         super().prepare_trigger(t)
@@ -150,7 +150,7 @@ class Coronagraph(BaseProcessingObj):
         ef_fp_masked = ef_fp * self.fp_mask_centered
 
         # Step 4: Return to the pupil plane with IFFT
-        self.ef_pad[:] = self.xp.fft.ifft2(ef_fp_masked)
+        self.ef_pad[:] = self.fft.ifft2(ef_fp_masked)
         self.ef_pad *= self.xp.conj(self.phase_shift)
 
         pad_start = self.fft_padding // 2
@@ -225,5 +225,5 @@ class Coronagraph(BaseProcessingObj):
         else:
             self.phase_shift = 1.0
 
-        # Cannot be used if self._pupil_to_focal_plane is called in trigger_code()
-        # super().build_stream()
+        # Not accelerated (no can_accelerate()): self._pupil_to_focal_plane
+        # cannot be called in a CUDA graph

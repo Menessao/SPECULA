@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-from specula.loop_control import LoopControl, process_rank
+from specula.loop_control import LoopControl
 from specula.base_processing_obj import BaseProcessingObj
 
 from test.specula_testlib import cpu_and_gpu
@@ -99,6 +99,24 @@ class TestLoopControlTiming(unittest.TestCase):
         loop.t0 = loop.seconds_to_t(0.5)
         assert loop.niters() == 10  # run_time/dt only, t0 not added
 
+    def test_niters_is_the_number_of_iterations_run(self):
+        """
+        Also when the run time is not a multiple of the time step: the last
+        iteration does not send the delayed outputs, and with MPI a receiver
+        waiting for them in one more iteration would wait forever
+        """
+        for run_time, dt in [(0.2, 0.1), (0.25, 0.1), (0.6000000006, 0.002), (0.0019, 0.002)]:
+            with self.subTest(run_time=run_time, dt=dt):
+                loop = LoopControl()
+                p = MockProcessingObjReady()
+                loop.add(p, idx=0)
+                calls = []
+                p.send_outputs = lambda skip_delayed=False, **kw: calls.append(skip_delayed)
+                loop.run(run_time=run_time, dt=dt)
+                self.assertEqual(loop.niters(), loop.iter_counter)
+                # The delayed outputs are skipped only in the last iteration
+                self.assertEqual(calls[-loop.iter_counter:], [False] * (loop.iter_counter - 1) + [True])
+
     @cpu_and_gpu
     def test_run_with_t0_starts_at_correct_time_and_iteration_count(self, target_device_idx, xp):
         """With t0 > 0, first check_ready receives t0 and total iterations equals run_time/dt"""
@@ -115,6 +133,23 @@ class TestLoopControlTiming(unittest.TestCase):
 
         assert times_seen[0] == loop.seconds_to_t(0.5)
         assert len(times_seen) == 2  # run_time/dt = 0.2/0.1
+
+    def test_speed_report_handles_zero_elapsed_time(self):
+        loop = LoopControl()
+        loop.logger = MagicMock()
+        loop.speed_report = True
+        loop.iter_counter = 10
+        loop.last_reported_counter = 0
+        loop.report_interval = 10
+        loop.last_reported_time = 123.0
+        loop.run_time = loop.seconds_to_t(2.0)
+        loop.t = loop.seconds_to_t(0.0)
+        loop.dt = loop.seconds_to_t(0.1)
+
+        with patch('specula.loop_control.time.time', return_value=123.0):
+            loop.iter()
+
+        loop.logger.info.assert_called_once_with('t=0.000000 0.00 Hz,  0.000 ms')
 
 
 class TestSteppingFeature(unittest.TestCase):
@@ -138,7 +173,7 @@ class TestSteppingFeature(unittest.TestCase):
     # Case 1: default stepping = 1 step
     # -----------------------------
     @patch("builtins.input", return_value="")
-    @patch("specula.process_rank", 0)
+    @patch("iteras.process_rank", 0)
     def test_stepping_default_one_step(self, mock_input):
         """
         If user presses Enter, should advance exactly 1 timestep.
@@ -160,7 +195,7 @@ class TestSteppingFeature(unittest.TestCase):
     # -----------------------------
     # Case 2: stepping disabled skips input
     # -----------------------------
-    @patch("specula.process_rank", 0)
+    @patch("iteras.process_rank", 0)
     @patch("builtins.input")
     def test_no_input_when_not_stepping(self, mock_input):
         """
@@ -182,7 +217,7 @@ class TestSteppingFeature(unittest.TestCase):
     # Case 3: invalid input defaults to 1
     # -----------------------------
     @patch("builtins.input", return_value="invalid")
-    @patch("specula.process_rank", 0)
+    @patch("iteras.process_rank", 0)
     def test_invalid_input_defaults_to_one(self, mock_input):
         """
         Non-integer input should fallback to 1 timestep.
@@ -202,7 +237,7 @@ class TestSteppingFeature(unittest.TestCase):
     # Case 4: stepping only triggers after next_time_to_stop
     # -----------------------------
     @patch("builtins.input", return_value="5")
-    @patch("specula.process_rank", 0)
+    @patch("iteras.process_rank", 0)
     def test_next_time_to_stop_controls_prompt(self, mock_input):
         """
         Ensure next_time_to_stop logic is applied.
@@ -218,3 +253,24 @@ class TestSteppingFeature(unittest.TestCase):
         # should have updated threshold
         self.assertNotEqual(self.obj.next_time_to_stop, 0)
 
+
+class MockProcessingObjFinalize(BaseProcessingObj):
+    '''Remembers the current CUDA device when finalize() is called'''
+    def finalize(self):
+        import cupy
+        self.finalize_device = cupy.cuda.Device().id
+
+
+class TestFinalizeDevice(unittest.TestCase):
+
+    @unittest.skipIf(specula.cp is None or specula.cp.cuda.runtime.getDeviceCount() < 2,
+                     'at least 2 GPUs are needed')
+    def test_finalize_on_the_device_of_the_object(self):
+        obj = MockProcessingObjFinalize(target_device_idx=1)
+        loop = LoopControl()
+        loop.add(obj, 0)
+        specula.cp.cuda.Device(0).use()
+        loop.finish()
+        self.assertEqual(obj.finalize_device, 1)
+        # The current device is restored
+        self.assertEqual(specula.cp.cuda.Device().id, 0)

@@ -5,6 +5,7 @@ import unittest
 
 from specula.processing_objects.mvm import MVM
 from specula.data_objects.recmat import Recmat
+from iteras.data_objects.matrix import Matrix
 from specula.base_value import BaseValue
 
 from test.specula_testlib import cpu_and_gpu
@@ -45,6 +46,7 @@ class TestMVM(unittest.TestCase):
         expected = matrix @ input_vector
 
         xp.testing.assert_allclose(mvm.output.value, expected, rtol=1e-10, atol=1e-12)
+        self.assertTrue(mvm.can_accelerate())
 
     @cpu_and_gpu
     def test_mvm_wrong_input_size(self, target_device_idx, xp):
@@ -96,7 +98,7 @@ class TestMVM(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             MVM(recmat=None, target_device_idx=target_device_idx)
 
-        self.assertIn("recmat must be provided!", str(cm.exception))
+        self.assertIn("matrix must be provided!", str(cm.exception))
 
     @cpu_and_gpu
     def test_mvm_square_matrix(self, target_device_idx, xp):
@@ -260,3 +262,100 @@ class TestMVM(unittest.TestCase):
                 # Output should have n_rows elements
                 self.assertEqual(len(mvm.output.value), n_rows)
                 self.assertEqual(mvm.output.value.shape, (n_rows,))
+
+    @cpu_and_gpu
+    def test_matrix_parameter(self, target_device_idx, xp):
+        """matrix is the parameter name, recmat its previous name: only one can be given"""
+        matrix = Matrix(xp.eye(3, dtype=xp.float32), target_device_idx=target_device_idx)
+        self.assertIs(MVM(matrix=matrix, target_device_idx=target_device_idx).matrix, matrix)
+        self.assertIs(MVM(recmat=matrix, target_device_idx=target_device_idx).matrix, matrix)
+        with self.assertRaisesRegex(ValueError, 'Only one'):
+            MVM(matrix=matrix, recmat=matrix, target_device_idx=target_device_idx)
+
+
+class TestMVMParameterFiles(unittest.TestCase):
+
+    def test_matrix_object_and_recmat_object(self):
+        """
+        The matrix is restored from the calibration files with matrix_object,
+        or recmat_object as before, from the rec/ subdirectory in SPECULA
+        """
+        import os
+        import tempfile
+        import numpy as np
+        import yaml
+        from iteras.simul import Simul
+        from iteras.lib import storage
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, 'rec'))
+            Recmat(np.array([[1, 0], [0, 2], [1, 1]], dtype=np.float32),
+                   target_device_idx=-1).save(os.path.join(tmp, 'rec', 'm1.fits'))
+            for parname in ('matrix_object', 'recmat_object'):
+                with self.subTest(parname=parname):
+                    store_dir = os.path.join(tmp, f'store_{parname}')
+                    params = {
+                        'main': {'class': 'SimParams', 'root_dir': tmp,
+                                 'total_time': 0.002, 'time_step': 0.001},
+                        'gen': {'class': 'WaveGenerator', 'constant': [1.0, 2.0],
+                                'target_device_idx': -1},
+                        'mvm': {'class': 'MVM', parname: 'm1', 'target_device_idx': -1,
+                                'inputs': {'in_vector': 'gen.output'}},
+                        'store': {'class': 'DataStore', 'store_dir': store_dir, 'create_tn': False,
+                                  'data_format': 'npz',
+                                  'inputs': {'input_list': ['out-mvm.out_vector']}},
+                    }
+                    yml = os.path.join(tmp, f'{parname}.yml')
+                    with open(yml, 'w') as f:
+                        yaml.dump(params, f)
+                    Simul(yml, speed_report=False).run()
+                    with storage.read_object(os.path.join(store_dir, 'out.npz')) as f:
+                        np.testing.assert_allclose(f.read('data', 0)[-1], [1, 4, 3])
+
+
+@unittest.skipIf(specula.cp is None, 'Cupy not found')
+class TestMVMAccelerated(unittest.TestCase):
+    '''The product uses graph_matmul.matmul(): MVM is captured in a CUDA graph'''
+
+    def _run(self, accelerate, matrix_dtype, vector_dtype, precision):
+        import numpy as np
+        from iteras import cpuArray
+        from iteras.accelerator import Accelerator
+        from iteras.data_objects.accelerator import Accelerator as AcceleratorOptions
+        rng = np.random.default_rng(1)
+        matrix = Matrix(rng.standard_normal((30, 70)).astype(matrix_dtype), target_device_idx=0,
+                        precision=int(matrix_dtype == np.float32))
+        vector = BaseValue(value=np.zeros(70, dtype=vector_dtype), target_device_idx=0,
+                           precision=int(vector_dtype == np.float32))
+        mvm = MVM(matrix=matrix, target_device_idx=0, precision=precision)
+        mvm.inputs['in_vector'].set(vector)
+        accelerator = None
+        if accelerate:
+            accelerator = Accelerator(AcceleratorOptions(on_error='raise'))
+            accelerator.apply([mvm])
+        mvm.setup()
+        outputs = []
+        for step in range(5):
+            t = mvm.seconds_to_t(0.001 * step)
+            vector.value[:] = specula.cp.asarray(rng.standard_normal(70))
+            vector.generation_time = t
+            mvm.check_ready(t)
+            mvm.trigger()
+            mvm.post_trigger()
+            outputs.append(cpuArray(mvm.output.value).copy())
+        return np.array(outputs), mvm
+
+    def test_accelerated(self):
+        '''Also with a matrix and an input in a different precision from the object:
+        both are used in the precision of the object, with and without the accelerator'''
+        import numpy as np
+        for matrix_dtype, vector_dtype, precision in ((np.float32, np.float32, 1),
+                                                      (np.float64, np.float32, 1),
+                                                      (np.float32, np.float64, 1),
+                                                      (np.float32, np.float32, 0),
+                                                      (np.float64, np.float32, 0)):
+            with self.subTest(matrix_dtype=matrix_dtype, vector_dtype=vector_dtype, precision=precision):
+                ref, _ = self._run(False, matrix_dtype, vector_dtype, precision)
+                with self.assertNoLogs('iteras.accelerator', level='WARNING'):
+                    out, mvm = self._run(True, matrix_dtype, vector_dtype, precision)
+                np.testing.assert_allclose(out, ref, rtol=1e-5, atol=1e-5)
+                self.assertEqual(mvm._accel.status, 'accelerated')

@@ -3,6 +3,16 @@ specula.init(0)  # Default target device
 
 import pytest
 import unittest
+import inspect
+import os
+import sys
+import time
+import queue
+import signal
+import multiprocessing as mp
+import threading
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import matplotlib
@@ -14,16 +24,71 @@ from specula.data_objects.electric_field import ElectricField
 from specula.processing_objects.psf import PSF
 from specula.data_objects.pixels import Pixels
 from specula.data_objects.slopes import Slopes
+from specula.display import display_process
+from specula.display.base_display import BaseDisplay
 from specula.display.phase_display import PhaseDisplay
 from specula.display.pixels_display import PixelsDisplay
+from specula.display.pixels_pup_display import PixelsPupDisplay
 from specula.display.slopec_display import SlopecDisplay
 from specula.display.psf_display import PsfDisplay
+from specula.display.plot_display import PlotDisplay
+from specula.display.modes_display import ModesDisplay
+from iteras.display.vector_values_display import VectorValuesDisplay
 from specula.display.plot_vector_display import PlotVectorDisplay
+from specula.display.double_phase_display import DoublePhaseDisplay
+from specula.display.display_recorder import DisplayRecorder
 from specula.base_value import BaseValue
 from test.specula_testlib import cpu_and_gpu
 
+# Classes that accept a window_xy constructor argument (all BaseDisplay
+# subclasses except DoublePhaseDisplay)
+DISPLAY_CLASSES_WITH_WINDOW_XY = [
+    PixelsDisplay, PixelsPupDisplay, PlotDisplay, SlopecDisplay,
+    PhaseDisplay, PsfDisplay, ModesDisplay, PlotVectorDisplay, VectorValuesDisplay,
+]
+
 
 matplotlib.use('Agg')  # Use non-interactive backend for GitHub CI
+
+
+def _simulation_killed_with_display(conn):
+    """Body of a fake simulation process: start the display process, then die with SIGKILL"""
+    os.environ['MPLBACKEND'] = 'Agg'    # inherited by the display process: no GUI windows
+    display_process.init(True)
+    PhaseDisplay(title='Orphan test')
+    display_process.start(precision=specula.global_precision, log_level='INFO')
+    conn.send(display_process._process.pid)
+    time.sleep(1)   # let the display process enter its loop
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def _process_is_gone(pid):
+    """True if *pid* does not exist (a zombie, e.g. under a subreaper, counts as gone)"""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        with open(f'/proc/{pid}/status') as f:
+            return any(line.startswith('State:') and 'Z' in line.split()[1] for line in f)
+    except OSError:
+        return True
+
+
+class _RecordingPhaseDisplay(PhaseDisplay):
+    '''PhaseDisplay that records the calls made by the display loop'''
+    calls = []
+
+    def setup(self):
+        super().setup()
+        self.calls.append('setup')
+
+    def _update_display(self, phase):
+        super()._update_display(phase)
+        self.calls.append('update')
+
+    def finalize(self):
+        self.calls.append('finalize')
 
 
 class TestDisplays(unittest.TestCase):
@@ -34,6 +99,120 @@ class TestDisplays(unittest.TestCase):
         self.pixel_pupil = 64
         self.pixel_pitch = 0.1
         self.S0 = 1.0
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_default_window_numbers_are_progressive(self):
+        saved_plot_completed = dict(BaseDisplay._BaseDisplay__plot_completed)
+        BaseDisplay._BaseDisplay__plot_completed = {}
+
+        try:
+            d1 = PhaseDisplay(title='Window 1')
+            d2 = PhaseDisplay(title='Window 2')
+            d3 = PhaseDisplay(title='Window 3', window=10)
+            d4 = PhaseDisplay(title='Window 4')
+            d5 = PhaseDisplay(title='Window 5', window=np.int64(20))
+            d6 = PhaseDisplay(title='Window 6')
+            with self.assertRaises(ValueError):
+                PhaseDisplay(title='Invalid Window 0', window=0)
+            with self.assertRaises(ValueError):
+                PhaseDisplay(title='Invalid Window True', window=True)
+            with self.assertRaises(ValueError):
+                PhaseDisplay(title='Invalid Window String', window='abc')
+
+            self.assertEqual(d1.window, 1)
+            self.assertEqual(d2.window, 2)
+            self.assertEqual(d3.window, 10)
+            self.assertEqual(d4.window, 11)
+            self.assertEqual(d5.window, 20)
+            self.assertEqual(d6.window, 21)
+        finally:
+            BaseDisplay._BaseDisplay__plot_completed = saved_plot_completed
+            matplotlib.pyplot.close('all')
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_existing_window_number_raises(self):
+        saved_plot_completed = dict(BaseDisplay._BaseDisplay__plot_completed)
+        BaseDisplay._BaseDisplay__plot_completed = {}
+
+        try:
+            d1 = PhaseDisplay(title='Window 1', window=7)
+            with self.assertRaises(ValueError):
+                PhaseDisplay(title='Window 2', window=7)
+            self.assertEqual(d1.window, 7)
+        finally:
+            BaseDisplay._BaseDisplay__plot_completed = saved_plot_completed
+            matplotlib.pyplot.close('all')
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_displays_grouped_in_one_window(self):
+        saved_plot_completed = dict(BaseDisplay._BaseDisplay__plot_completed)
+        BaseDisplay._BaseDisplay__plot_completed = {}
+
+        try:
+            d1 = PhaseDisplay(title='Left', window=3, subplot=121)
+            d2 = PlotDisplay(title='Right', window=3, subplot=122)
+            with self.assertRaises(ValueError):
+                PhaseDisplay(title='Same subplot', window=3, subplot=122)
+            d4 = PhaseDisplay(title='Next free window')
+
+            self.assertIs(d1.fig, d2.fig)
+            self.assertIsNot(d1.ax, d2.ax)
+            self.assertEqual(len(d1.fig.axes), 2)
+            self.assertEqual(d4.window, 4)
+        finally:
+            BaseDisplay._BaseDisplay__plot_completed = saved_plot_completed
+            matplotlib.pyplot.close('all')
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_reset_windows(self):
+        saved_plot_completed = dict(BaseDisplay._BaseDisplay__plot_completed)
+        BaseDisplay._BaseDisplay__plot_completed = {}
+
+        try:
+            d1 = PhaseDisplay(title='First simulation', window=3)
+            BaseDisplay.reset_windows()
+            self.assertFalse(matplotlib.pyplot.fignum_exists(d1.fig.number))
+
+            # A new simulation can use the same window
+            d2 = PhaseDisplay(title='Second simulation', window=3)
+            self.assertEqual(d2.window, 3)
+            self.assertEqual(len(d2.fig.axes), 1)
+        finally:
+            BaseDisplay._BaseDisplay__plot_completed = saved_plot_completed
+            matplotlib.pyplot.close('all')
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    @cpu_and_gpu
+    def test_double_phase_display_trigger(self, target_device_idx, xp):
+        """DoublePhaseDisplay draws both phases and accumulates the PSD"""
+        ef1 = ElectricField(self.pixel_pupil, self.pixel_pupil, self.pixel_pitch,
+                            S0=self.S0, target_device_idx=target_device_idx)
+        ef2 = ElectricField(self.pixel_pupil, self.pixel_pupil, self.pixel_pitch,
+                            S0=self.S0, target_device_idx=target_device_idx)
+        ef1.phaseInNm[:] = xp.arange(self.pixel_pupil)[None, :]
+        ef2.phaseInNm[:] = xp.arange(self.pixel_pupil)[:, None]
+        ef1.generation_time = ef1.seconds_to_t(1)
+        ef2.generation_time = ef2.seconds_to_t(1)
+
+        display = DoublePhaseDisplay()
+        display.inputs['phase1'].set(ef1)
+        display.inputs['phase2'].set(ef2)
+
+        loop = LoopControl()
+        loop.add(display, idx=0)
+        loop.run(run_time=1, dt=1)
+
+        self.assertEqual(display.nframes, 1)
+        self.assertIsNotNone(display.img1)
+        self.assertIsNotNone(display.img2)
+        self.assertEqual(display.ax4.get_title(), 'PSD Average (n=1)')
+
+        matplotlib.pyplot.close(display.fig)
 
     @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
     @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
@@ -58,6 +237,163 @@ class TestDisplays(unittest.TestCase):
         self.assertIsNotNone(display.fig)
 
         matplotlib.pyplot.close(display.fig)
+
+    @cpu_and_gpu
+    def test_phase_display_in_display_process(self, target_device_idx, xp):
+        """With async displays, drawing happens in the display process"""
+        ef = ElectricField(self.pixel_pupil, self.pixel_pupil, self.pixel_pitch,
+                          S0=self.S0, target_device_idx=target_device_idx)
+        ef.generation_time = ef.seconds_to_t(1)
+
+        value = BaseValue(value=xp.array(1.0), target_device_idx=target_device_idx)
+        value.generation_time = value.seconds_to_t(1)
+
+        display_process.init(True)
+        try:
+            display = PhaseDisplay(title='Async Phase Display')
+            display.inputs['phase'].set(ef)
+            self.assertIsNone(display.fig)
+            plot = PlotDisplay(title='Async Plot Display')
+            plot.inputs['value_list'].set([value])   # 'value' input left unset
+
+            # The display process inherits the environment: no GUI windows
+            with mock.patch.dict('os.environ', {'MPLBACKEND': 'Agg'}):
+                display_process.start(precision=specula.global_precision, log_level='INFO')
+            process = display_process._process
+
+            loop = LoopControl()
+            loop.add(display, idx=0)
+            loop.add(plot, idx=0)
+            loop.run(run_time=1, dt=1)
+            self.assertEqual(display.outputs['out_window_id'].value, display.window)
+
+            # More updates than the queue can hold: phase updates are skipped,
+            # history plot updates never
+            for _ in range(10):
+                display_process.send(display)
+                display_process.send(plot)
+            self.assertGreater(display_process._dropped, 0)
+            self.assertLessEqual(display_process._dropped, 10)
+        finally:
+            display_process.stop(display.logger)
+            display_process.init(False)
+
+        self.assertEqual(process.exitcode, 0)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'uses SIGKILL and /proc')
+    # The killed simulation cannot release its semaphores: harmless
+    @pytest.mark.filterwarnings('ignore:.*resource_tracker.*:UserWarning')
+    def test_display_process_exits_when_simulation_is_killed(self):
+        """The display process exits by itself if the simulation dies abruptly.
+
+        daemon=True only terminates the display process when the simulation exits
+        normally; after SIGKILL (or a segfault, or the OOM killer) nobody does it,
+        and the display process used to poll its queue forever. Now the display
+        loop notices that its parent is dead and returns: the process must be
+        gone within a few seconds (about 0.2 s when measured).
+        """
+        ctx = mp.get_context('spawn')
+        parent_conn, child_conn = ctx.Pipe(duplex=False)
+        sim = ctx.Process(target=_simulation_killed_with_display, args=(child_conn,))
+        sim.start()
+        child_conn.close()
+        display_pid = None
+        try:
+            self.assertTrue(parent_conn.poll(60), 'the simulation did not start the display process')
+            display_pid = parent_conn.recv()
+            sim.join(60)
+            self.assertEqual(sim.exitcode, -signal.SIGKILL)
+
+            # Bounded wait for the orphaned display process to exit
+            deadline = time.monotonic() + 10
+            while not _process_is_gone(display_pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(_process_is_gone(display_pid),
+                            'the display process is still alive after the simulation was killed')
+        finally:
+            if sim.is_alive():
+                sim.kill()
+            sim.join()
+            if display_pid is not None and not _process_is_gone(display_pid):
+                os.kill(display_pid, signal.SIGKILL)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_display_worker_loop(self):
+        """Display loop of the display process, run here to check the display calls"""
+        saved_plot_completed = dict(BaseDisplay._BaseDisplay__plot_completed)
+        BaseDisplay._BaseDisplay__plot_completed = {}
+        _RecordingPhaseDisplay.calls = []
+
+        ef = ElectricField(self.pixel_pupil, self.pixel_pupil, self.pixel_pitch,
+                           S0=self.S0, target_device_idx=-1)
+        value = BaseValue(value=np.array(1.0), target_device_idx=-1)
+        specs = display_process._dumps([('phase_disp', _RecordingPhaseDisplay, (), {'title': 'Phase'}),
+                                        ('plot_disp', PlotDisplay, (), {'title': 'Plot'})])
+        q = queue.Queue()
+        slots = threading.Semaphore(0)
+        for t in [1, 2]:
+            q.put((True, display_process._dumps(('phase_disp', t, {'phase': ef}))))
+            q.put((False, display_process._dumps(('plot_disp', t, {'value': value, 'value_list': None}))))
+
+        # The terminator arrives later: the loop also waits on an empty queue
+        timer = threading.Timer(0.1, lambda: q.put(None))
+        timer.start()
+        try:
+            display_process._worker_loop(q, slots, specs, log_level='INFO')
+        finally:
+            timer.join()
+            BaseDisplay._BaseDisplay__plot_completed = saved_plot_completed
+            matplotlib.pyplot.close('all')
+
+        self.assertEqual(_RecordingPhaseDisplay.calls, ['setup', 'update', 'update', 'finalize'])
+        # A queue slot is freed for each phase update, not for the history plot updates
+        self.assertTrue(slots.acquire(blocking=False))
+        self.assertTrue(slots.acquire(blocking=False))
+        self.assertFalse(slots.acquire(blocking=False))
+
+    def test_display_process_not_started_without_displays(self):
+        display_process.init(True)
+        try:
+            display_process.start(precision=specula.global_precision, log_level='INFO')
+            self.assertIsNone(display_process._process)
+            self.assertFalse(display_process.enabled)
+        finally:
+            display_process.stop(None)
+            display_process.init(False)
+
+    def test_display_recorder_with_async_displays(self):
+        display_process.init(True)
+        try:
+            with self.assertRaises(ValueError):
+                DisplayRecorder(filename='unused.mp4')
+        finally:
+            display_process.init(False)
+
+    def test_display_process_dead(self):
+        """If the display process dies, the simulation goes on and stop() does not wait"""
+        ef = ElectricField(self.pixel_pupil, self.pixel_pupil, self.pixel_pitch,
+                          S0=self.S0, target_device_idx=-1)
+        ef.generation_time = ef.seconds_to_t(1)
+
+        display_process.init(True)
+        try:
+            display = PhaseDisplay(title='Async Phase Display')
+            display.inputs['phase'].set(ef)
+            with mock.patch.dict('os.environ', {'MPLBACKEND': 'Agg'}):
+                display_process.start(precision=specula.global_precision, log_level='INFO')
+            display_process._process.kill()
+            display_process._process.join()
+
+            loop = LoopControl()
+            loop.add(display, idx=0)
+            loop.run(run_time=3, dt=1)
+        finally:
+            t0 = time.time()
+            display_process.stop(display.logger, timeout=30)
+            display_process.init(False)
+
+        self.assertLess(time.time() - t0, 5)
 
     @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
     @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
@@ -165,6 +501,29 @@ class TestDisplays(unittest.TestCase):
 
         matplotlib.pyplot.close(display.fig)
 
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    @cpu_and_gpu
+    def test_vector_values_display(self, target_device_idx, xp):
+        """VectorValuesDisplay of iteras, of which ModesDisplay is a SPECULA version"""
+        from iteras.display.vector_values_display import VectorValuesDisplay
+        from specula.display.modes_display import ModesDisplay
+        self.assertTrue(issubclass(ModesDisplay, VectorValuesDisplay))
+        self.assertIn('modes', ModesDisplay().inputs)
+
+        vector = BaseValue(value=xp.arange(10, dtype=xp.float32) - 3, target_device_idx=target_device_idx)
+        display = VectorValuesDisplay(title='Test Vector Values', ylabel='Speed')
+        display.inputs['value'].set(vector)
+        loop = LoopControl()
+        loop.add(display, idx=0)
+        for t in (1, 2):    # the first update creates the line, the second updates it
+            vector.generation_time = vector.seconds_to_t(t)
+            loop.run(run_time=1, dt=1, t0=t)
+        self.assertEqual(display.ax.get_ylabel(), 'Speed')
+        self.assertEqual(display.ax.get_xlabel(), 'Index')
+        # Scaled to the data, since no yrange is given
+        self.assertAlmostEqual(display.ax.get_ylim()[0], -3.3, places=5)
+        matplotlib.pyplot.close(display.fig)
+
     @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
     @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     @cpu_and_gpu
@@ -194,12 +553,16 @@ class TestDisplays(unittest.TestCase):
 
         matplotlib.pyplot.close(display.fig)
 
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     def test_display_figsize_parameter(self):
         """Test that figsize parameter is properly handled"""
         figsize = (8, 6)
         display = PhaseDisplay(figsize=figsize)
         self.assertEqual(display.figsize, figsize)
 
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     def test_display_log_scale_parameter(self):
         """Test log_scale parameter for PixelsDisplay"""
         display = PixelsDisplay(log_scale=True)
@@ -208,6 +571,8 @@ class TestDisplays(unittest.TestCase):
         display = PixelsDisplay(log_scale=False)
         self.assertFalse(display._log_scale)
 
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     @cpu_and_gpu
     def test_display_data_consistency(self, target_device_idx, xp):
         """Test that display maintains data consistency"""
@@ -220,6 +585,8 @@ class TestDisplays(unittest.TestCase):
         retrieved_ef = display.inputs['phase'].get(target_device_idx)
         np.testing.assert_array_equal(cpuArray(ef.phaseInNm), cpuArray(retrieved_ef.phaseInNm))
 
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     @cpu_and_gpu
     def test_multiple_displays_same_data(self, target_device_idx, xp):
         """Test that multiple displays can use the same data source"""
@@ -237,6 +604,8 @@ class TestDisplays(unittest.TestCase):
 
         np.testing.assert_array_equal(cpuArray(ef1.phaseInNm), cpuArray(ef2.phaseInNm))
 
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     def test_display_title_customization(self):
         """Test custom titles for displays"""
         custom_titles = [
@@ -626,6 +995,54 @@ class TestDisplays(unittest.TestCase):
         self.assertTrue(np.all(displayed >= 1.0))  # Data is unchanged
 
         matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_psf_display_log_scale_vmin_floor(self):
+        """In log scale, a tiny image minimum is clamped at max*1e-6"""
+        from specula.base_value import BaseValue
+
+        display = PsfDisplay(log_scale=True)
+        image = np.full((8, 8), 1e-12)
+        image[4, 4] = 2.0
+        display._update_display(BaseValue(value=image))
+
+        self.assertAlmostEqual(display.img.norm.vmin, 2e-6)
+        self.assertAlmostEqual(display.img.norm.vmax, 2.0)
+
+        matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_pixels_pup_display_log_scale_vmin_floor(self):
+        """In log scale, a tiny image minimum is clamped at max*1e-6"""
+        display = PixelsPupDisplay(log_scale=True)
+        image = np.full((8, 8), 1e-12)
+        image[4, 4] = 2.0
+        pix = Pixels(8, 8, target_device_idx=-1)
+        pix.set_value(image)
+        display.local_inputs = {'in_pixels': pix, 'in_pupdata': None}
+        display._update_display(pix)
+
+        self.assertAlmostEqual(display.img.norm.vmin, 2e-6)
+        self.assertAlmostEqual(display.img.norm.vmax, 2.0)
+
+        matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_pixels_display_rescales_on_update(self):
+        """In linear scale, the color limits follow the data of each frame"""
+        display = PixelsDisplay()
+        pix = Pixels(8, 8, target_device_idx=-1)
+        for vmax in (10.0, 1000.0):
+            image = np.full((8, 8), 1.0)
+            image[4, 4] = vmax
+            pix.set_value(image)
+            display._update_display(pix)
+            self.assertEqual(display.img.get_clim(), (1.0, vmax))
+
+        matplotlib.pyplot.close(display.fig)
     @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
     @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
     @cpu_and_gpu
@@ -779,3 +1196,149 @@ class TestDisplays(unittest.TestCase):
         self.assertIsNone(legend)
 
         matplotlib.pyplot.close(display.fig)
+
+    def test_window_xy_signature_present(self):
+        """All BaseDisplay subclasses except DoublePhaseDisplay accept window_xy"""
+        for cls in DISPLAY_CLASSES_WITH_WINDOW_XY:
+            with self.subTest(cls=cls.__name__):
+                sig = inspect.signature(cls.__init__)
+                self.assertIn('window_xy', sig.parameters)
+
+        # DoublePhaseDisplay is explicitly excluded from this feature
+        sig = inspect.signature(DoublePhaseDisplay.__init__)
+        self.assertNotIn('window_xy', sig.parameters)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_construct_with_valid_window_xy_does_not_raise(self):
+        """Constructing with a valid window_xy must not raise, even though the
+        Agg backend used in tests has no real window to move"""
+        figs_to_close = []
+        try:
+            for cls in DISPLAY_CLASSES_WITH_WINDOW_XY:
+                with self.subTest(cls=cls.__name__):
+                    display = cls(window_xy=(100, 200))
+                    figs_to_close.append(display.fig)
+        finally:
+            for fig in figs_to_close:
+                matplotlib.pyplot.close(fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_invalid_window_xy_logs_warning_and_does_not_raise(self):
+        """Invalid window_xy values must be rejected with a warning, not an exception"""
+        invalid_values = ['abc', [1], (1, 'x'), 5]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertLogs('specula.PhaseDisplay', level='WARNING') as log:
+                    display = PhaseDisplay(window_xy=value)
+                self.assertTrue(any('window_xy' in msg for msg in log.output))
+                matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_set_window_position_tk_backend(self):
+        """_set_window_position uses wm_geometry() when available (Tk-like manager)"""
+        display = PhaseDisplay()
+        try:
+            fake_window = SimpleNamespace(wm_geometry=mock.MagicMock())
+            display.fig.canvas.manager.window = fake_window
+
+            display._set_window_position([10, 20])
+
+            fake_window.wm_geometry.assert_called_once_with('+10+20')
+        finally:
+            matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_set_window_position_qt_backend(self):
+        """_set_window_position uses move() when wm_geometry is not available (Qt/GTK-like manager)"""
+        display = PhaseDisplay()
+        try:
+            fake_window = SimpleNamespace(move=mock.MagicMock())
+            display.fig.canvas.manager.window = fake_window
+
+            display._set_window_position((10, 20))
+
+            fake_window.move.assert_called_once_with(10, 20)
+        finally:
+            matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_set_window_position_swallows_window_manager_exceptions(self):
+        """An exception raised while moving the window must not propagate"""
+        display = PhaseDisplay()
+        try:
+            class RaisingWindow:
+                def wm_geometry(self, *args, **kwargs):
+                    raise RuntimeError('boom')
+
+            display.fig.canvas.manager.window = RaisingWindow()
+
+            # Should not raise
+            display._set_window_position([10, 20])
+        finally:
+            matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_pixels_pup_display_img_is_none_after_init(self):
+        """PixelsPupDisplay.img must be initialized to None (it used to be read
+        before being assigned)"""
+        display = PixelsPupDisplay()
+        try:
+            self.assertIsNone(display.img)
+        finally:
+            matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_safe_draw_skipped_with_non_interactive_backend(self):
+        """With a non-interactive backend (Agg) nobody sees the figure,
+        so it must not be rendered"""
+        display = PhaseDisplay()
+        try:
+            with mock.patch.object(display.fig.canvas, 'draw_idle') as draw_idle:
+                display._safe_draw()
+            draw_idle.assert_not_called()
+        finally:
+            matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_safe_draw_done_with_open_interactive_window(self):
+        """An open GUI window must be redrawn"""
+        display = PhaseDisplay()
+        try:
+            display.fig.canvas.required_interactive_framework = 'tk'
+            with mock.patch.object(display.fig.canvas, 'draw_idle') as draw_idle:
+                display._safe_draw()
+            draw_idle.assert_called_once()
+        finally:
+            matplotlib.pyplot.close(display.fig)
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_safe_draw_skipped_with_closed_window(self):
+        """A GUI window closed by the user must not be redrawn"""
+        display = PhaseDisplay()
+        display.fig.canvas.required_interactive_framework = 'tk'
+        matplotlib.pyplot.close(display.fig)
+        with mock.patch.object(display.fig.canvas, 'draw_idle') as draw_idle:
+            display._safe_draw()
+        draw_idle.assert_not_called()
+
+    @pytest.mark.filterwarnings('ignore:.*FigureCanvasAgg is non-interactive.*:UserWarning')
+    @pytest.mark.filterwarnings('ignore:.*Matplotlib is currently using agg*:UserWarning')
+    def test_safe_draw_done_on_notebook(self):
+        """On notebooks the figure is drawn even with a non-interactive backend"""
+        display = PhaseDisplay()
+        try:
+            display.onNotebook = True
+            with mock.patch.object(display.fig.canvas, 'draw_idle') as draw_idle:
+                display._safe_draw()
+            draw_idle.assert_called_once()
+        finally:
+            matplotlib.pyplot.close(display.fig)

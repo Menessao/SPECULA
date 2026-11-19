@@ -1,9 +1,8 @@
 import numpy as np
 
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-from specula import xp
+import specula
 from specula import cpuArray
 
 from specula.display.base_display import BaseDisplay
@@ -47,6 +46,7 @@ class PixelsDisplay(BaseDisplay):
                  crop_mode='slice',
                  window: int=None,
                  subplot: int=111,
+                 window_xy=None,
                  ):
 
         super().__init__(
@@ -54,6 +54,7 @@ class PixelsDisplay(BaseDisplay):
             figsize=figsize,
             window=window,
             subplot=subplot,
+            window_xy=window_xy,
         )
         self.img = None
 
@@ -148,7 +149,7 @@ class PixelsDisplay(BaseDisplay):
             ratio = 1e-6
             if img_max <= 0:
                 img_max = 1.0
-            if img_min >= img_max*ratio or img_min <= 0:
+            if img_min < img_max*ratio:
                 img_min = img_max*ratio
             norm = mcolors.LogNorm(vmin=img_min, vmax=img_max)
             # clip image to avoid issues with LogNorm
@@ -158,13 +159,13 @@ class PixelsDisplay(BaseDisplay):
             self.img = self.ax.imshow(image, norm=norm)
             self._add_colorbar_if_needed(self.img, unit='counts')
         else:
-            self.img.set_data(image)
+            self._update_image_data(self.img, image)
             if norm is not None:
                 self.img.set_norm(norm)
 
     def _reformat_as_pyramid(self, pixels, subapdata):    
         pupil = subapdata.copyTo(-1).single_mask()
-        idx2d = xp.unravel_index(subapdata.idxs, pixels.shape)
+        idx2d = specula.xp.unravel_index(subapdata.idxs, pixels.shape)
         A, B, C, D = pupil.copy(), pupil.copy(), pupil.copy(), pupil.copy()
         pix_idx = subapdata.display_map
         half_sub = subapdata.np_sub // 2

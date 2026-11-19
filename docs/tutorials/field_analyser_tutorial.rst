@@ -65,7 +65,7 @@ To enable efficient field analysis, you need to configure your simulation's ``Da
     data_store:
       class: 'DataStore'
       store_dir: './output/'
-      data_format: 'fits'  # or 'pickle'
+      data_format: 'fits'  # or 'npz', 'npy', 'hdf5', 'pickle'
       inputs:
         input_list: 
           - 'comm-control.out_comm'                   # Save DM commands (essential!)
@@ -205,7 +205,6 @@ Below is an example script that loads the latest simulation output and computes 
             'nmodes': 50,           # Number of modes
             'obsratio': 0.0,        # Pupil obstruction ratio
             'diaratio': 1.0,        # Pupil diameter ratio
-            'dorms': True           # Compute RMS and not standard deviation
         }
     )
     modes = modal_results['modal_coeffs'][0]
@@ -252,7 +251,6 @@ parameters explicitly:
             'npixels': 160,         # pupil sampling (required if no ifunc/ifunc_ref/ifunc_object is used)
             'obsratio': 0.12,       # central obstruction ratio
             'diaratio': 1.0,        # pupil diameter ratio
-            'dorms': True,          # output RMS instead of std
             'wavelengthInNm': 1650.0,
         }
     )
@@ -270,7 +268,6 @@ SPECULA object-reference mechanism:
         modal_params={
             'ifunc_ref': 'my_ifunc',   # key of the IFunc object in params.yml
             'nmodes': 50,              # optionally restrict to fewer modes
-            'dorms': True,
         }
     )
 
@@ -301,7 +298,6 @@ SPECULA to restore the calibration object from the calibration repository:
         modal_params={
             'ifunc_object': 'my_ifunc_tag',
             # or: 'ifunc_inv_object': 'my_ifunc_inv_tag',
-            'dorms': True,
         }
     )
 
@@ -409,6 +405,13 @@ tap with no effect on the control loop), you can relax this check:
         on_missing_downstream_consumers='warn',  # log instead of raising
         # or 'ignore' to silently proceed
     )
+
+The results of ``FieldAnalyser`` are saved in the ``PSF``, ``MA`` and ``CUBE``
+directories next to the tracking number, in the format given by its ``data_format``
+argument: ``'fits'``, ``'npz'``, ``'npy'`` or ``'hdf5'``. By default, the format
+of the data objects is used (the ``ITERAS_DATA_FORMAT`` or ``SPECULA_DATA_FORMAT``
+environment variable, or FITS). The format of the tracking number's own files does
+not matter: they are read in whatever format they were saved.
 
 Step 4: Visualizing the Results
 -------------------------------

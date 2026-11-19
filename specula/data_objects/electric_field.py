@@ -1,8 +1,14 @@
 from astropy.io import fits
 import numpy as np
 
-from specula import cpuArray
+from specula import fuse
 from specula.base_data_obj import BaseDataObj
+from iteras.lib import storage
+
+
+@fuse(kernel_name='ef_at_lambda')
+def _ef_at_lambda(amp, phase, k, out, xp):
+    out[...] = xp.exp(1j * (phase * k)) * amp
 
 
 class ElectricField(BaseDataObj):
@@ -11,6 +17,7 @@ class ElectricField(BaseDataObj):
     This class represents a 2D electric field, storing both amplitude and phase information
     for each pixel in a rectangular grid.
     """
+
     def __init__(self,
                  dimx: int,
                  dimy: int,
@@ -125,6 +132,14 @@ class ElectricField(BaseDataObj):
 
         self.field[:] = self.to_xp(v)
 
+    @classmethod
+    def track_consumers_in_replay(cls):
+        # Objects adding a phase-additive contribution to an electric field (e.g. an
+        # ElectricFieldCombinator or PhaseScreenCube feeding a WFS downstream of a
+        # captured AtmoPropagation) must not be silently left out of a targeted replay
+        # (SPECULA #696, see Simul.build_targeted_replay)
+        return True
+
     def get_value(self):
         return self.field
 
@@ -204,7 +219,9 @@ class ElectricField(BaseDataObj):
         slicex : slice, optional
             The slice along the x-axis (default: None, which means all columns).
         out : xp.ndarray, optional
-            The output array (default: None).
+            The output array (default: None). It can be a strided view, and
+            have a different shape than the slice, with the same number of
+            elements: the slice is then reshaped to it (in C order).
 
         Returns
         -------
@@ -216,27 +233,15 @@ class ElectricField(BaseDataObj):
             slicey = np.s_[:]
         if slicex is None:
             slicex = np.s_[:]
-        phi = self.phi_at_lambda(wavelengthInNm, slicey=slicey, slicex=slicex)
-        ef = self.xp.exp(1j * phi, dtype=self.complex_dtype, out=out)
-        ef *= self.field[0, slicey, slicex]
-        return ef
-
-    def product(self, ef2, subrect=None):
-        """
-        Multiply the electric field by another electric field.
-
-        Parameters
-        ----------
-        ef2 : ElectricField
-            The other electric field.
-        subrect : tuple, optional
-            The subrectangle to multiply (top-left coordinate into ef2. Default: None, which means all of ef2).
-        """
-#        subrect = self.checkOther(ef2, subrect=subrect)    # TODO check subrect from atmo_propagation, even in PASSATA it does not seem right
-        x2 = subrect[0] + self.size[0]
-        y2 = subrect[1] + self.size[1]
-        self.field[0] *= ef2.field[0, subrect[0] : x2, subrect[1] : y2]
-        self.field[1] += ef2.field[1, subrect[0] : x2, subrect[1] : y2]
+        self._check_wavelength_compatibility(wavelengthInNm)
+        amp = self.field[0, slicey, slicex]
+        phase = self.field[1, slicey, slicex]
+        if out is None:
+            out = self.xp.empty(amp.shape, dtype=self.complex_dtype)
+        k = self.dtype((2 * np.pi) / wavelengthInNm)
+        # A single kernel on GPU. Reshaping to out does nothing if the shapes are the same.
+        _ef_at_lambda(amp.reshape(out.shape), phase.reshape(out.shape), k, out, xp=self.xp)
+        return out
 
     def area(self):
         """
@@ -300,22 +305,6 @@ class ElectricField(BaseDataObj):
         sub_ef.S0 = self.S0
         return sub_ef
 
-    def compare(self, ef2):
-        """
-        Compare this ElectricField object with another ElectricField object.
-
-        Parameters
-        ----------
-        ef2 : ElectricField
-            The ElectricField object to compare with.
-
-        Returns
-        -------
-        bool
-            True if the fields are different, False if they are equal.
-        """
-        return not (self.xp.array_equal(self.field, ef2.field))
-
     def get_fits_header(self):
         hdr = fits.Header()
         hdr['VERSION'] = 1
@@ -330,13 +319,9 @@ class ElectricField(BaseDataObj):
         return hdr
 
     def save(self, filename, overwrite=True):
-        hdr = self.get_fits_header()
-        hdu = fits.PrimaryHDU(header=hdr)  # main HDU, empty, only header
-        hdul = fits.HDUList([hdu])
-        hdul.append(fits.ImageHDU(data=cpuArray(self.field[0]), name='AMPLITUDE'))
-        hdul.append(fits.ImageHDU(data=cpuArray(self.field[1]), name='PHASE'))
-        hdul.writeto(filename, overwrite=overwrite)
-        hdul.close()  # Force close for Windows
+        storage.write_object(filename, self.get_fits_header(),
+                             {'amplitude': self.field[0], 'phase': self.field[1]},
+                             overwrite=overwrite)
 
     @staticmethod
     def from_header(hdr, target_device_idx=None):
@@ -357,14 +342,14 @@ class ElectricField(BaseDataObj):
 
     @staticmethod
     def restore(filename, target_device_idx=None):
-        hdr = fits.getheader(filename)
-        if 'OBJ_TYPE' not in hdr or hdr['OBJ_TYPE'] != 'ElectricField':
-            raise ValueError(f"Error: file {filename} does not contain an ElectricField object")
-        ef = ElectricField.from_header(hdr, target_device_idx=target_device_idx)
-        with fits.open(filename) as hdul:
-            ef.field[0, :] = ef.to_xp(hdul[1].data)   # pylint: disable=no-member # created dyamically by pyfits
-            ef.field[1, :] = ef.to_xp(hdul[2].data)   # pylint: disable=no-member # created dyamically by pyfits
-        return ef
+        with storage.read_object(filename) as f:
+            hdr = f.header
+            if 'OBJ_TYPE' not in hdr or hdr['OBJ_TYPE'] != 'ElectricField':
+                raise ValueError(f"Error: file {filename} does not contain an ElectricField object")
+            obj = ElectricField.from_header(hdr, target_device_idx=target_device_idx)
+            obj.field[0, :] = obj.to_xp(f.read('amplitude', 1))
+            obj.field[1, :] = obj.to_xp(f.read('phase', 2))
+        return obj
 
     def array_for_display(self):
         """

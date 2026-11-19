@@ -1,6 +1,7 @@
 import specula
 specula.init(0)  # Default target device
 
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -39,8 +40,23 @@ class TestSplitOutput(unittest.TestCase):
         self.assertEqual(output.output_key, 'out_slopes')
 
     def test_delay_suffix(self):
-        output = split_output('control.out_comm:1')
-        self.assertEqual(output.delay, 1)
+        output = split_output('control.out_comm:-1')
+        self.assertEqual(output.delay, -1)
+        output = split_output('control.out_comm:0')
+        self.assertEqual(output.delay, 0)
+
+    def test_unsupported_delay_raises(self):
+        '''Only one-step delays can be represented by the trigger order (#808)'''
+        for suffix in ('-2', '-10', '1'):
+            with self.subTest(suffix=suffix):
+                with self.assertRaises(ValueError):
+                    split_output(f'control.out_comm:{suffix}')
+
+    def test_type_suffix_not_checked_as_delay(self):
+        '''With detect_types the suffix is a type (SpeculaInput), not a delay'''
+        output = split_output('gain:float', detect_types=True)
+        self.assertEqual(output.type, 'float')
+        self.assertEqual(output.delay, 0)
 
     def test_object_name_with_dot_raises(self):
         with self.assertRaises(ValueError):
@@ -228,9 +244,9 @@ class TestReceiveNewValue(unittest.TestCase):
     # First receive (pickle path)
     # ----------------------------------------
 
-    @patch("specula.connections.process_comm")
+    @patch("iteras.process_comm")
     @patch("specula.connections.np")
-    @patch("specula.connections.cp")
+    @patch("iteras.cp")
     def test_first_receive_numpy(self, mock_cp, mock_np, mock_comm):
         """
         Should use recv() and assign np when xp_str != 'cp'
@@ -244,9 +260,9 @@ class TestReceiveNewValue(unittest.TestCase):
         self.assertEqual(result.xp, mock_np)
         mock_comm.recv.assert_called_once_with(source=1, tag=10)
 
-    @patch("specula.connections.process_comm")
+    @patch("iteras.process_comm")
     @patch("specula.connections.np")
-    @patch("specula.connections.cp")
+    @patch("iteras.cp")
     def test_first_receive_cupy(self, mock_cp, mock_np, mock_comm):
         """
         Should assign cp when xp_str == 'cp'
@@ -262,7 +278,7 @@ class TestReceiveNewValue(unittest.TestCase):
     # Force pickle path when cloned_value is empty
     # ----------------------------------------
 
-    @patch("specula.connections.process_comm")
+    @patch("iteras.process_comm")
     def test_buffer_path_falls_back_if_no_value(self, mock_comm):
         """
         If cloned_value.get_value() is None → use pickle path
@@ -281,7 +297,7 @@ class TestReceiveNewValue(unittest.TestCase):
     # Logging calls sanity check
     # ----------------------------------------
 
-    @patch("specula.connections.process_comm")
+    @patch("iteras.process_comm")
     def test_logging_called(self, mock_comm):
         new_val = DummyValue(val=1, xp_str="np")
         mock_comm.recv.return_value = new_val
@@ -294,7 +310,7 @@ class TestReceiveNewValue(unittest.TestCase):
     # Exception propagation
     # ----------------------------------------
 
-    @patch("specula.connections.process_comm")
+    @patch("iteras.process_comm")
     def test_recv_exception_propagates(self, mock_comm):
         """
         No try/except → exception should propagate
@@ -304,3 +320,72 @@ class TestReceiveNewValue(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.item.receive_new_value(first_mpi_receive=True)
 
+
+
+class TestReceiveInPlace(unittest.TestCase):
+
+    def test_receive_into_the_host_value(self):
+        '''A host value is received in place, with its generation time'''
+        item = _InputItem(type_=DummyValue, value=None, remote_rank=1, tag=10)
+        value = np.zeros(3)
+        item.cloned_value = DummyValue(val=value)
+        comm = MagicMock()
+
+        def recv_into(buffer, source, tag):
+            buffer[:] = [1, 2, 3]
+        comm.Recv.side_effect = recv_into
+        comm.recv.return_value = 7
+        with patch('iteras.process_comm', comm):
+            result = item.receive_new_value(first_mpi_receive=False)
+        self.assertIs(result, item.cloned_value)
+        np.testing.assert_array_equal(value, [1, 2, 3])
+        self.assertEqual(result.generation_time, 7)
+
+    def receive(self, xp, gpu_direct, steps=2):
+        '''Receive *steps* messages into a value on *xp* (np or cp); return the buffers MPI wrote into'''
+
+        class XpValue(DummyValue):
+            def set_value(self, val):
+                self._value[...] = xp.asarray(val)      # as the data objects do
+
+        item = _InputItem(type_=DummyValue, value=None, remote_rank=1, tag=10)
+        self.value = xp.zeros(3)
+        item.cloned_value = XpValue(val=self.value)
+        comm = MagicMock()
+        buffers = []
+
+        def recv_into(buffer, source, tag):
+            buffers.append(buffer)
+            buffer[...] = len(buffers)
+        comm.Recv.side_effect = recv_into
+        comm.recv.return_value = 7
+        env = {'ITERAS_MPI_GPU_DIRECT': '1' if gpu_direct else '0'}
+        with patch('iteras.process_comm', comm), patch.dict(os.environ, env):
+            for _ in range(steps):
+                item.receive_new_value(first_mpi_receive=False)
+        return item, buffers
+
+    def test_host_value_received_in_place_with_gpu_direct(self):
+        '''GPU-direct MPI changes only the receives of GPU values'''
+        item, buffers = self.receive(np, gpu_direct=True)
+        self.assertIs(buffers[0], self.value)
+        self.assertIs(buffers[1], self.value)
+        self.assertIsNone(item._gpu_buffer_array)
+        np.testing.assert_array_equal(self.value, [2, 2, 2])
+
+    @unittest.skipIf(cp is None, 'needs a GPU')
+    def test_gpu_direct_receive_through_a_gpu_buffer(self):
+        '''With GPU-direct MPI a GPU value is received into a GPU buffer, kept between steps'''
+        item, buffers = self.receive(cp, gpu_direct=True)
+        self.assertIsInstance(buffers[0], cp.ndarray)
+        self.assertIsNot(buffers[0], self.value)        # not into the value: the GPU may read it
+        self.assertIs(buffers[1], buffers[0])
+        self.assertIsNotNone(item._gpu_buffer_event)
+        np.testing.assert_array_equal(cp.asnumpy(self.value), [2, 2, 2])
+
+    @unittest.skipIf(cp is None, 'needs a GPU')
+    def test_gpu_value_received_through_the_host_by_default(self):
+        item, buffers = self.receive(cp, gpu_direct=False, steps=1)
+        self.assertIsInstance(buffers[0], np.ndarray)
+        self.assertIsNone(item._gpu_buffer_array)
+        np.testing.assert_array_equal(cp.asnumpy(self.value), [1, 1, 1])

@@ -213,6 +213,41 @@ class TestExtrapolation2D(unittest.TestCase):
         valid_pixels = xp.sum(edge_pixels >= 0)
         self.assertGreater(valid_pixels, 0)
 
+    def test_linear_phase_is_extrapolated_exactly(self):
+        """
+        A linear ramp must be extrapolated exactly on every edge pixel.
+
+        Regression test: a direction with a single valid neighbour (constant
+        extrapolation, coefficient 1 on P1) used to be averaged with a
+        direction having two valid neighbours (linear, 2*P1 - P2), biasing the
+        result by half a step. Now the linear extrapolation is averaged over
+        the directions with both reference points, and the constant fallback
+        is used only if there is none.
+
+        Scan: 6 grid sizes x 18 radii x 3 centre offsets (26168 edge pixels).
+        Fixed code: 0 wrong pixels, max error 2.8e-14. Old code: 44 wrong
+        pixels, max error 0.35 (half of the 0.7 y-step); first failing case
+        N=16, radius 3.04, offset 0.5.
+        """
+        n_checked = 0
+        for n in (16, 24, 32, 48, 64, 80):
+            y, x = np.mgrid[:n, :n].astype(np.float64)
+            ramp = 0.3 * x + 0.7 * y
+            for frac in np.linspace(0.15, 0.49, 18):
+                for offset in (0.0, 0.25, 0.5):
+                    c = (n - 1) / 2 + offset
+                    mask = np.hypot(x - c, y - c) <= frac * n
+                    edge, ref, coeff, valid = _calculate_extrapolation_indices_coeffs(mask)
+                    out = _apply_extrapolation(ramp * mask, edge, ref, coeff, valid, xp=np)
+                    sel = edge >= 0
+                    got = out.ravel()[edge[sel]]
+                    want = ramp.ravel()[edge[sel]]
+                    np.testing.assert_allclose(
+                        got, want, atol=1e-9, rtol=0,
+                        err_msg=f"N={n}, radius={frac * n:.2f}, offset={offset}")
+                    n_checked += int(sel.sum())
+        self.assertGreater(n_checked, 0)
+
     def test_extrapolation_does_not_fail_with_many_edge_pixels(self):
         """
         Test that extrapolation does not fail when the mask has many edge pixels
@@ -504,3 +539,75 @@ class TestExtrapolation2D(unittest.TestCase):
         # Do a dummy interpolation to ensure it doesn't crash with the updated object
         interp.interpolate()
         self.assertEqual(interp.interpolated_ef().size, (64, 64))
+
+    @cpu_and_gpu
+    def test_efinterpolator_update_parameters_without_initial_interpolation(self, target_device_idx, xp):
+        """
+        An interpolator created with parameters that need no interpolation
+        (the input is used as is) can be updated with parameters that do
+        """
+        ef_in = ElectricField(32, 32, 0.01, target_device_idx=target_device_idx)
+        mask = CircularMask((32, 32), 14, xp.array((32, 32)) / 2.0, xp=xp)
+        ef_in.A[:] = xp.asarray(mask.mask() == 0, dtype=ef_in.A.dtype)
+        ef_in.phaseInNm[:] = xp.arange(32)[None, :] * 10.0
+        interp = EFInterpolator(ef_in, (32, 32), target_device_idx=target_device_idx)
+        self.assertFalse(interp.do_interpolation)
+        interp.update_parameters(rotAnglePhInDeg=3.0)
+        interp.interpolate()
+
+        expected = EFInterpolator(ef_in, (32, 32), rotAnglePhInDeg=3.0, target_device_idx=target_device_idx)
+        expected.interpolate()
+        self.assertTrue(interp.do_interpolation)
+        np.testing.assert_allclose(cpuArray(interp.interpolated_ef().phaseInNm),
+                                   cpuArray(expected.interpolated_ef().phaseInNm), rtol=1e-6)
+
+    @cpu_and_gpu
+    def test_initialize_extrapolation(self, target_device_idx, xp):
+        '''
+        initialize_extrapolation() computes the extrapolation data only once,
+        and the binary amplitude flag is a Python bool (testing a GPU array
+        at every interpolate() would be a host synchronization)
+        '''
+        ef_in = ElectricField(32, 32, 0.1, target_device_idx=target_device_idx)
+        mask = CircularMask((32, 32), 14, xp.array((32, 32)) / 2.0, xp=xp)
+        ef_in.A[:] = xp.asarray(mask.mask() == 0, dtype=ef_in.A.dtype)
+        interp = EFInterpolator(ef_in, (64, 64), target_device_idx=target_device_idx)
+
+        self.assertFalse(interp.extrapolation_initialized)
+        interp.initialize_extrapolation()
+        self.assertTrue(interp.extrapolation_initialized)
+        self.assertIs(interp.amplitude_is_binary, True)
+
+        edge_pixels = interp.edge_pixels
+        interp.interpolate()
+        self.assertIs(interp.edge_pixels, edge_pixels)
+
+    @cpu_and_gpu
+    def test_shifted_pupil_touching_the_edge_has_no_tongue(self, target_device_idx, xp):
+        """
+        A circular pupil touching the array edge (N = 160), shifted by 10 pixels.
+        Old behaviour: the amplitude of the edge column was copied over the
+        10 columns coming from outside the array (a "tongue" of about 18 x 10
+        pixels). Now the amplitude is 0 there.
+
+        Note: EFInterpolator passes xShiftPhInPixel to the rowShift and
+        yShiftPhInPixel to the colShift of Interp2D, so the shift along the
+        columns is set with yShiftPhInPixel (and xShiftPhInPixel acts on rows).
+        """
+        n, shift = 160, 10
+        y, x = np.mgrid[0:n, 0:n].astype(np.float64)
+        c = (n - 1) / 2
+        pupil = (np.hypot(x - c, y - c) <= n / 2)
+
+        for kw, sl in ((dict(yShiftPhInPixel=shift), (slice(None), slice(-shift, None))),
+                       (dict(xShiftPhInPixel=shift), (slice(-shift, None), slice(None)))):
+            ef_in = ElectricField(n, n, 0.01, target_device_idx=target_device_idx)
+            ef_in.A[:] = xp.asarray(pupil, dtype=ef_in.A.dtype)
+            ef_in.phaseInNm[:] = 0.0
+
+            interp = EFInterpolator(ef_in, (n, n), target_device_idx=target_device_idx, **kw)
+            interp.interpolate()
+            amp = cpuArray(interp.interpolated_ef().A)
+
+            self.assertGreater(amp.sum(), 0)
+            np.testing.assert_array_equal(amp[sl], 0, err_msg=str(kw))

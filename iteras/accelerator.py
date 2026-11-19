@@ -1,0 +1,386 @@
+'''
+Accelerator: run the GPU work of the processing objects as a chain of CUDA graphs.
+
+The accelerator is on by default (Simul(accelerate=True), command line option
+--no-accelerate to turn it off). With the accelerator off, each object runs its
+trigger_code() as Python code launching its kernels one by one. In small
+simulations, this host work, not the GPU, sets the time per step.
+
+With the accelerator, on each GPU:
+
+* the trigger_code() of each accelerated object is captured once in a CUDA graph,
+  which is then launched at each step instead of running the Python code;
+* the GPU work of the objects (graphs, and the kernels of the phases that
+  still run as Python code) goes to the default stream of the device, in
+  trigger order, so that it runs in the right order without the host waiting
+  for the GPU between objects (BaseProcessingObj.post_trigger() does not wait);
+* check_ready(), prepare_trigger() and post_trigger() still run as Python code
+  at each step, so that values computed on the host from the time or the
+  inputs (like the time of the generators, copied to the GPU in
+  prepare_trigger()) are up to date. Only trigger_code() is frozen in the graph.
+
+An object is accelerated if it runs on a GPU, is not excluded by the Accelerator
+options, and its can_accelerate() method returns True when its graph is about to
+be captured (see BaseProcessingObj.can_accelerate()). Each object has its own
+graph, so objects that do not trigger at every step are simply not launched,
+as when the accelerator is off.
+
+Errors: an object whose can_accelerate() returns True declares that its
+trigger_code() can be captured and replayed. If this is not the case, the
+simulation stops with an AcceleratorError, which names the object:
+
+* CuPy refuses, with an exception, the calls that cannot be part of a graph
+  (cuBLAS, cuRAND, copies between the host and the GPU): the capture fails;
+* before each launch, the arrays of the object, of the data objects it holds
+  and of its inputs are checked to be the same as when the graph was captured:
+  the graph reads and writes their memory, so an array that was reallocated
+  (for example by prepare_trigger()) would make it use stale or freed memory.
+
+The fix is in the class (see BaseProcessingObj.can_accelerate()); meanwhile,
+the object can be excluded with the "exclude" option. With the option
+on_error='fallback' (the default), instead of stopping the simulation, the
+object runs as Python code from that step on, with a warning: the results are
+those of the accelerator off, only slower for that object.
+
+States of an accelerated object (GraphRunner):
+
+* first triggers (capture_after): trigger_code() runs as Python code;
+* then, at each trigger, can_accelerate() is asked: while it does not return
+  True, trigger_code() runs as Python code; when it does, the graph is
+  captured and launched;
+* captured: the graph is launched at each trigger. invalidate_graph() releases
+  it, and it is captured again at the next trigger.
+
+Objects that are not accelerated (on the CPU, excluded, or whose class
+overrides trigger() or redefines trigger_code() without declaring
+can_accelerate()) run as when the accelerator is off.
+'''
+import weakref
+
+import iteras
+from iteras.base_data_obj import BaseDataObj
+from iteras.log import get_iteras_logger
+from iteras.tracing import tracer
+
+_logger = get_iteras_logger(__name__)
+
+
+class AcceleratorError(RuntimeError):
+    '''An object declared that it can be accelerated, but its trigger_code() cannot be'''
+
+
+def _capture_stream(device_id):  # pragma: gpu
+    '''A stream of the device used only to capture the graphs'''
+    if device_id not in _capture_stream.streams:
+        with iteras.cp.cuda.Device(device_id):
+            _capture_stream.streams[device_id] = iteras.cp.cuda.Stream(non_blocking=True)
+    return _capture_stream.streams[device_id]
+
+
+_capture_stream.streams = {}
+
+
+def _items(value):  # pragma: gpu
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _holders(obj):  # pragma: gpu
+    '''*obj*, the data objects it holds (directly or in lists) and its local inputs'''
+    holders = [obj]
+    seen = {id(obj)}
+
+    def add(v):
+        if isinstance(v, BaseDataObj) and id(v) not in seen:
+            seen.add(id(v))
+            holders.append(v)
+
+    for v in list(obj.__dict__.values()):
+        if isinstance(v, (list, tuple)):
+            for item in v:
+                add(item)
+        else:
+            add(v)
+    for v in obj.local_inputs.values():
+        for item in _items(v):
+            add(item)
+    return holders
+
+
+def array_refs(obj):  # pragma: gpu
+    '''
+    [(holder, attribute, address)] of the GPU arrays that the graph of *obj*
+    may use: those of the object, of the data objects it holds (directly or in
+    lists) and of its local inputs.
+    '''
+    refs = []
+    for h in _holders(obj):
+        for k, v in h.__dict__.items():
+            if isinstance(v, iteras.cp.ndarray):
+                refs.append((h, k, v.data.ptr))
+    return refs
+
+
+def changed_ref(refs):  # pragma: gpu
+    '''First (holder, attribute) of *refs* whose array is not at the same address anymore'''
+    ndarray = iteras.cp.ndarray
+    for h, k, ptr in refs:
+        v = h.__dict__.get(k)
+        if v.__class__ is not ndarray or v.data.ptr != ptr:
+            return h, k
+    return None
+
+
+def _owner(cls, name):
+    '''The class of the MRO of *cls* that defines *name*'''
+    return next(k for k in cls.__mro__ if name in vars(k))
+
+
+def _can_accelerate_covers_trigger_code(cls):
+    '''
+    False if trigger_code() is redefined by a class derived from the one that
+    declares can_accelerate(): the declaration was made for another
+    trigger_code(), the derived class must declare it again.
+    '''
+    from iteras.base_processing_obj import BaseProcessingObj
+    declared = _owner(cls, 'can_accelerate')
+    return declared is BaseProcessingObj or issubclass(declared, _owner(cls, 'trigger_code'))
+
+
+class GraphRunner:  # pragma: gpu
+    '''
+    Runs the trigger_code() of an accelerated object: as Python code for the first
+    triggers (capture_after), then captured in a CUDA graph launched at each
+    trigger. Set as obj._accel by Accelerator.apply(); BaseProcessingObj.trigger()
+    calls trigger().
+    '''
+
+    def __init__(self, obj, options):
+        self.obj = obj
+        self.options = options
+        self.graph = None
+        self.pool = None
+        self.refs = []
+        self.outputs = []       # data objects whose generation_time trigger_code() sets
+        self.triggers = 0
+        self.status = 'not captured yet'
+        self.fallback = False   # True after an error with on_error='fallback': Python code
+
+    def trigger(self):
+        '''The computation of a step: launch the graph, or run or capture trigger_code()'''
+        self.triggers += 1
+        if self.fallback:
+            self.obj.trigger_code()
+        elif self.graph is None:
+            self.run_or_capture()
+        else:
+            if self.options.check_pointers and not self.check_arrays():
+                # Checked before the launch: no graph ran on stale memory
+                self.obj.trigger_code()
+                return
+            self.launch()
+
+    def run_or_capture(self):
+        '''
+        Run trigger_code() as Python code during the first triggers, which allocate
+        the buffers and FFT plans that the graph reuses, and while the object
+        cannot be accelerated; otherwise capture the graph.
+        '''
+        obj = self.obj
+        if self.triggers <= self.options.capture_after:
+            obj.trigger_code()
+            return
+        reason = obj.can_accelerate()
+        if reason is not True:
+            # Retried at the next trigger: it may become possible (e.g. after a start time)
+            self.status = f'can_accelerate(): {reason or False}'
+            obj.trigger_code()
+            return
+        self.capture()
+
+    def check_arrays(self):
+        '''
+        True if the arrays used by the graph are still those of the capture.
+        Otherwise raise AcceleratorError, or, with on_error='fallback', switch
+        to Python code and return False.
+        '''
+        changed = changed_ref(self.refs)
+        if changed is None:
+            return True
+        holder, attr = changed
+        inputs = {id(v): name for name, value in self.obj.local_inputs.items()
+                  for v in _items(value)}
+        if holder is self.obj:
+            where = f'its array {attr}'
+        elif id(holder) in inputs:
+            # The cause is in another class: say it, or the user looks for it in this one
+            where = (f'the array {type(holder).__name__}.{attr} of its input '
+                     f'{inputs[id(holder)]} (reallocated by the object that produces it)')
+        else:
+            where = f'its array {type(holder).__name__}.{attr}'
+        self.error(f'{where} was reallocated after the capture of its CUDA graph, '
+                   'which would use stale memory (arrays used by trigger_code() must be '
+                   'updated in place, or invalidate_graph() called)', 'array reallocated')
+        # The graph is dropped, not its memory pool: arrays allocated at the capture
+        # may still be referenced by the object, and are used by its Python code
+        self.graph = None
+        return False
+
+    def error(self, what, short, cause=None):
+        '''
+        Raise AcceleratorError, or, with on_error='fallback', log a warning and
+        run the object as Python code from now on
+        '''
+        message = self.error_message(what)
+        if self.options.on_error == 'raise':
+            raise AcceleratorError(message) from cause
+        _logger.warning(f'{message}. It runs as Python code (please report the error)')
+        self.fallback = True
+        self.status = f'Python code after an error ({short})'
+
+    def error_message(self, what):
+        obj = self.obj
+        return (f'Accelerator: {obj.name} ({type(obj).__name__}) declares, with can_accelerate(), '
+                f'that it can be accelerated, but {what}. Fix the class, or exclude the object: '
+                f'add it to the "exclude" list of the Accelerator section of the parameter '
+                f"file, e.g. accelerator: {{class: 'Accelerator', exclude: ['{obj.name}']}} "
+                f'(see the Errors section of docs/accelerator.rst)')
+
+    def launch(self):
+        '''Launch the graph, and set the generation time of the outputs that trigger_code() sets'''
+        # NVTX range only, to mark the graph kernels in Nsight Systems
+        with tracer.no_record(), tracer('cuda_graph', self.obj):
+            self.graph.launch(stream=iteras.cp.cuda.get_current_stream())
+        t = self.obj.current_time
+        for o in self.outputs:
+            o.generation_time = t
+
+    def capture(self):
+        obj = self.obj
+        t = obj.current_time
+        outputs = [o for out in obj.outputs.values() for o in _items(out)]
+        before = [o.generation_time for o in outputs]
+        # Attributes of the object and of its data objects before the capture, restored if
+        # it fails: trigger_code() may have stopped halfway, after rebinding attributes to
+        # arrays of the pool (freed below) or changing Python values (like counters)
+        saved = [(h, dict(h.__dict__)) for h in _holders(obj)]
+        stream = _capture_stream(obj.target_device_idx)
+        pool = iteras.cp.cuda.MemoryPool()
+        error = None
+        graph = None
+        # The work queued before the graph (prepare_trigger, the other objects) is on the
+        # default stream, where the graph is launched: capture it on a separate stream
+        with stream, iteras.cp.cuda.using_allocator(pool.malloc):
+            stream.begin_capture(mode=iteras.cp.cuda.runtime.streamCaptureModeRelaxed)
+            try:
+                obj.trigger_code()
+            except Exception as e:
+                error = e
+            finally:
+                try:
+                    graph = stream.end_capture()
+                except Exception as e:
+                    error = error or e
+        if error is not None:
+            for h, d in saved:
+                h.__dict__.clear()
+                h.__dict__.update(d)
+            pool.free_all_blocks()
+            first = str(error).splitlines()[0] if str(error) else ''
+            self.error(f'the capture of its trigger_code() in a CUDA graph failed '
+                       f'({type(error).__name__}: {first[:200]})', 'capture failed', error)
+            # The capture did not run the GPU work of this step
+            obj.trigger_code()
+            return
+        self.graph = graph
+        self.pool = pool
+        # A deleted MemoryPool does not release its memory to the device (CuPy >= 13):
+        # free it explicitly when this runner (and its object) is garbage collected
+        weakref.finalize(self, pool.free_all_blocks)
+        self.outputs = [o for o, b in zip(outputs, before) if o.generation_time == t and b != t]
+        self.refs = array_refs(obj) if self.options.check_pointers else []
+        # The capture did not run the GPU work of this step
+        self.launch()
+        # The graph keeps the memory of the temporary arrays of trigger_code()
+        obj.gpu_bytes_used += pool.total_bytes()
+        self.status = 'accelerated'
+        _logger.debug(f'Accelerator: {obj.name}: graph captured ({pool.total_bytes() / 2**20:.1f} MB)')
+
+    def invalidate(self):
+        '''Something frozen in the graph changed: capture it again at the next trigger'''
+        if self.graph is not None:
+            self.graph = None
+            self.obj.gpu_bytes_used -= self.pool.total_bytes()
+            self.pool.free_all_blocks()
+            self.pool = None
+            self.triggers = min(self.triggers, self.options.capture_after)
+
+
+class Accelerator:
+    '''
+    Applies the accelerator options (iteras.data_objects.accelerator.Accelerator) to the
+    processing objects of this process.
+    '''
+
+    def __init__(self, options):
+        self.options = options
+        self.rows = []          # (object, GraphRunner or None, reason it is not accelerated)
+        self.labels = {}        # id(object) -> name in the report, for the internal objects
+
+    def apply(self, objs):
+        '''
+        Set a GraphRunner on each object of *objs* (processing objects of this
+        process) that can be accelerated, and on their internal objects (see
+        BaseProcessingObj.internal_objects()), which are excluded with their container
+        '''
+        for obj in objs:
+            self.apply_one(obj, excluded=obj.name in self.options.exclude)
+            for i, part in enumerate(obj.internal_objects()):
+                self.labels[id(part)] = f'{obj.name}[{i}]'
+                self.apply_one(part, excluded=obj.name in self.options.exclude)
+
+    def apply_one(self, obj, excluded):
+        from iteras.base_processing_obj import BaseProcessingObj
+        reason = None
+        if obj.target_device_idx < 0:
+            reason = 'on the CPU'
+        elif excluded:
+            reason = 'excluded'
+        elif type(obj).trigger is not BaseProcessingObj.trigger:
+            reason = 'its class overrides trigger()'
+        elif not _can_accelerate_covers_trigger_code(type(obj)):
+            reason = (f'{_owner(type(obj), "trigger_code").__name__}.trigger_code() is not covered '
+                      f'by {_owner(type(obj), "can_accelerate").__name__}.can_accelerate()')
+        runner = None
+        if reason is None:
+            runner = obj._accel = GraphRunner(obj, self.options)
+        self.rows.append((obj, runner, reason))
+
+    def runners(self):
+        return [runner for _, runner, _ in self.rows if runner is not None]
+
+    def report(self):
+        '''Text table: which objects are accelerated, and why the others are not'''
+        lines = ['Accelerator:']
+        n = 0
+        for obj, runner, reason in self.rows:
+            if runner is not None:
+                reason = runner.status
+            if reason == 'accelerated':
+                n += 1
+            name = self.labels.get(id(obj), obj.name)
+            lines.append(f'  {name:30s} {type(obj).__name__:26s} {reason}')
+        lines.insert(1, f'  {n} of {len(self.rows)} objects accelerated')
+        return '\n'.join(lines)
+
+    def finish(self):
+        text = self.report()
+        # A warning if objects fell back to Python code: they are to be fixed
+        if any(runner.fallback for runner in self.runners()):
+            _logger.warning(text)
+        else:
+            _logger.info(text)
+        if self.options.report_file:
+            with open(self.options.report_file, 'w') as f:
+                f.write(text + '\n')

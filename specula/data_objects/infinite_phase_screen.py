@@ -1,26 +1,24 @@
+import weakref
+
 from seeing.integrator import evaluateFormula, cpulib
 from symao.turbolence import createTurbolenceFormulary, ft_phase_screen0
 
 from specula.base_data_obj import BaseDataObj
-from specula import ASEC2RAD, RAD2ASEC, cpuArray, np
+from specula import cpuArray, np
 
 turbolenceFormulas = createTurbolenceFormulary()
 
 
-def seeing_to_r0(seeing, wvl=500.e-9):
-    return 0.9759*wvl/(seeing* ASEC2RAD)
+class _ABMatrices:
+    '''Holder for the A and B matrices, shared by phase screens with the same geometry.'''
+    def __init__(self, A_mat, B_mat):
+        self.A_mat = A_mat
+        self.B_mat = B_mat
 
-def cn2_to_r0(cn2, wvl=500.e-9):
-    r0=(0.423*(2*np.pi/wvl)**2*cn2)**(-3./5.)
-    return r0
-
-def r0_to_seeing(r0, wvl=500.e-9):
-    return (0.9759*wvl/r0)*RAD2ASEC
-
-def cn2_to_seeing(cn2, wvl=500.e-9):
-    r0 = cn2_to_r0(cn2,wvl)
-    seeing = r0_to_seeing(r0,wvl)
-    return seeing
+# A and B matrices are expensive to compute and depend only on the screen geometry
+# and turbulence parameters, not on the random seed. Entries are dropped
+# as soon as no phase screen references them anymore.
+_AB_cache = weakref.WeakValueDictionary()
 
 
 class InfinitePhaseScreen(BaseDataObj):
@@ -53,11 +51,6 @@ class InfinitePhaseScreen(BaseDataObj):
         self.stencil_coords = None
         self.stencil_positions = None
         self.n_stencils = 0
-        self.cov_mat = None
-        self.cov_mat_zz = None
-        self.cov_mat_xx = None
-        self.cov_mat_zx = None
-        self.cov_mat_xz = None
         self.full_scrn = None
         self.A_mat = None
         self.B_mat = None
@@ -65,7 +58,6 @@ class InfinitePhaseScreen(BaseDataObj):
         self.random_seed = int(random_seed)
         self.rng = self.xp.random.default_rng(self.random_seed)
 
-        #self.set_stencil_coords_basic()
         self.set_stencil_coords()
         self.setup()
 
@@ -87,13 +79,6 @@ class InfinitePhaseScreen(BaseDataObj):
         cov = self.to_xp(cov)
 
         return cov
-
-    def set_stencil_coords_basic(self):
-        self.stencil = self.xp.zeros((self.stencil_size, self.stencil_size))
-        self.stencil[:2,:] = 1
-        self.stencil_coords = self.to_xp(self.xp.where(self.stencil==1)).T
-        self.stencil_positions = self.stencil_coords * self.pixel_scale
-        self.n_stencils = self.stencil_coords.shape[0]
 
     def set_stencil_coords(self):
         self.stencil = np.zeros((self.stencil_size, self.stencil_size))
@@ -129,17 +114,17 @@ class InfinitePhaseScreen(BaseDataObj):
         delta_x_grid = delta_x_grid_a - delta_x_grid_b
         delta_y_grid = delta_y_grid_a - delta_y_grid_b
         seperations = self.xp.sqrt(delta_x_grid ** 2 + delta_y_grid ** 2)
-        self.cov_mat = self.phase_covariance(seperations, self.r0, self.L0)
-        self.cov_mat_zz = self.cov_mat[:self.n_stencils, :self.n_stencils]
-        self.cov_mat_xx = self.cov_mat[self.n_stencils:, self.n_stencils:]
-        self.cov_mat_zx = self.cov_mat[:self.n_stencils, self.n_stencils:]
-        self.cov_mat_xz = self.cov_mat[self.n_stencils:, :self.n_stencils]
+        cov_mat = self.phase_covariance(seperations, self.r0, self.L0)
+        cov_mat_zz = cov_mat[:self.n_stencils, :self.n_stencils]
+        cov_mat_xx = cov_mat[self.n_stencils:, self.n_stencils:]
+        cov_mat_zx = cov_mat[:self.n_stencils, self.n_stencils:]
+        cov_mat_xz = cov_mat[self.n_stencils:, :self.n_stencils]
         # Cholesky solve can fail - so do brute force inversion
-        cf = self._lu_factor(self.cov_mat_zz)
-        inv_cov_zz = self._lu_solve(cf, self.xp.identity(self.cov_mat_zz.shape[0]))
-        A_mat = self.cov_mat_xz.dot(inv_cov_zz)
+        cf = self._lu_factor(cov_mat_zz)
+        inv_cov_zz = self._lu_solve(cf, self.xp.identity(cov_mat_zz.shape[0]))
+        A_mat = cov_mat_xz.dot(inv_cov_zz)
         # Can make initial BBt matrix first
-        BBt = self.cov_mat_xx - A_mat.dot(self.cov_mat_zx)
+        BBt = cov_mat_xx - A_mat.dot(cov_mat_zx)
         # Then do SVD to get B matrix
         u, W, ut = self.xp.linalg.svd(BBt)
         L_mat = self.xp.zeros((self.stencil_size, self.stencil_size))
@@ -150,14 +135,21 @@ class InfinitePhaseScreen(BaseDataObj):
 
     def setup(self):
         # set X coords
-        self.new_col_coords1 = self.xp.zeros((self.stencil_size, 2))
-        self.new_col_coords1[:, 0] = -1
-        self.new_col_coords1[:, 1] = self.xp.arange(self.stencil_size)
-        self.new_col_positions1 = self.new_col_coords1 * self.pixel_scale
+        new_col_coords1 = self.xp.zeros((self.stencil_size, 2))
+        new_col_coords1[:, 0] = -1
+        new_col_coords1[:, 1] = self.xp.arange(self.stencil_size)
+        new_col_positions1 = new_col_coords1 * self.pixel_scale
         # calc separations
-        positions1 = self.xp.concatenate((self.stencil_positions[0], self.new_col_positions1), axis=0)
+        positions1 = self.xp.concatenate((self.stencil_positions[0], new_col_positions1), axis=0)
+        cache_key = (self.mx_size, self.stencil_size, self.stencil_size_factor,
+                     float(self.pixel_scale), float(self.r0), float(self.L0),
+                     self.target_device_idx, self.xp.__name__, self.dtype)
+        self._AB = _AB_cache.get(cache_key)  # the reference keeps the cache entry alive
+        if self._AB is None:
+            self._AB = _ABMatrices(*self.AB_from_positions(positions1))
+            _AB_cache[cache_key] = self._AB
         self.A_mat, self.B_mat = [], []
-        A_mat, B_mat = self.AB_from_positions(positions1)
+        A_mat, B_mat = self._AB.A_mat, self._AB.B_mat
         self.A_mat.append(A_mat)
         self.B_mat.append(B_mat)
         self.A_mat.append(self.xp.fliplr(self.xp.flipud(A_mat)))

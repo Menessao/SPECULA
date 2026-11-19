@@ -7,7 +7,7 @@ from specula import np
 from specula import cpuArray
 
 from specula.data_objects.simul_params import SimulParams
-from specula.lib.modal_pushpull_signal import modal_pushpull_signal
+from specula.lib.modal_pushpull_signal import modal_pushpull_amplitudes
 from specula.processing_objects.push_pull_generator import PushPullGenerator
 from specula.processing_objects.random_generator import RandomGenerator
 from specula.processing_objects.schedule_generator import ScheduleGenerator
@@ -17,6 +17,54 @@ from specula.processing_objects.vibration_generator import VibrationGenerator
 from specula.processing_objects.wave_generator import WaveGenerator
 
 from test.specula_testlib import cpu_and_gpu
+
+
+def _reference_pushpull_signal(n_modes, first_mode=0, amplitude=None, vect_amplitude=None,
+                               linear=False, constant=False, min_amplitude=None,
+                               only_push=False, pattern=[1, -1], ncycles=1,
+                               repeat_ncycles=False, nsamples=1, repeat_full_sequence=False):
+    """
+    Full (nsteps, n_modes) push-pull time history, built with the loop-based
+    algorithm of the former specula.lib.modal_pushpull_signal function. Kept here
+    as an independent reference for the on-the-fly index arithmetic of PushPullGenerator.
+    """
+    if only_push:
+        pattern = [1]
+    vect_amplitude = modal_pushpull_amplitudes(
+        n_modes, first_mode=first_mode, amplitude=amplitude, vect_amplitude=vect_amplitude,
+        linear=linear, constant=constant, min_amplitude=min_amplitude, xp=np)
+
+    n_pokes = len(pattern)
+    local_cycles = 1 if repeat_full_sequence else ncycles
+    real_n_modes = n_modes - first_mode
+    time_hist = np.zeros((n_pokes * real_n_modes * local_cycles, n_modes))
+    for mode in range(first_mode, n_modes):
+        hist_idx = mode - first_mode
+        poke_pattern = vect_amplitude[mode] * np.array(pattern)
+        # Local repetition (+ + - -) or alternating (+ - + -)
+        if repeat_ncycles and not repeat_full_sequence:
+            time_hist[n_pokes*hist_idx*local_cycles:n_pokes*(hist_idx+1)*local_cycles, mode] = \
+                np.repeat(poke_pattern, local_cycles)
+        else:
+            for j in range(local_cycles):
+                time_hist[n_pokes*(local_cycles*hist_idx+j):n_pokes*(local_cycles*hist_idx+j+1), mode] = poke_pattern
+
+    if repeat_full_sequence:
+        time_hist = np.tile(time_hist, [ncycles, 1])
+
+    return np.repeat(time_hist, nsamples, axis=0)
+
+
+def _run_pushpull(generator):
+    """Trigger a PushPullGenerator over its whole sequence and return the (nsteps, nmodes) outputs."""
+    generator.setup()
+    outputs = []
+    for i in range(generator.nsteps):
+        generator.check_ready(i)
+        generator.trigger()
+        generator.post_trigger()
+        outputs.append(cpuArray(generator.outputs['output'].value).copy())
+    return np.array(outputs)
 
 class TestGenerators(unittest.TestCase):
 
@@ -69,6 +117,51 @@ class TestGenerators(unittest.TestCase):
         # Square wave should be +amp or -amp
         np.testing.assert_almost_equal(max(value), amp)
         np.testing.assert_almost_equal(min(value), -amp)
+
+    @staticmethod
+    def _wave_values(f, times):
+        f.setup()
+        values = []
+        for t_sec in times:
+            f.check_ready(f.seconds_to_t(t_sec))
+            f.trigger()
+            f.post_trigger()
+            values.append(cpuArray(f.outputs['output'].value)[0])
+        return np.array(values)
+
+    @cpu_and_gpu
+    def test_wave_generator_square_duty_cycle(self, target_device_idx, xp):
+        times = np.arange(1000) / 1000
+        for duty_cycle in [0.5, 0.25]:
+            f = WaveGenerator('SQUARE', amp=1.0, freq=1.0, duty_cycle=duty_cycle,
+                              target_device_idx=target_device_idx)
+            high = np.mean(self._wave_values(f, times) > 0)
+            self.assertAlmostEqual(high, duty_cycle, delta=0.02)
+
+    @cpu_and_gpu
+    def test_wave_generator_square_duty_cycle_switching_time(self, target_device_idx, xp):
+        # duty_cycle=0.3 at 1 Hz: +amp in [0, 0.3) s and -amp in [0.3, 1) s
+        amp = 3.0
+        f = WaveGenerator('SQUARE', amp=amp, freq=1.0, duty_cycle=0.3,
+                          target_device_idx=target_device_idx)
+        np.testing.assert_almost_equal(self._wave_values(f, [0.1, 0.29, 0.31, 0.9]),
+                                       [amp, amp, -amp, -amp])
+
+    @cpu_and_gpu
+    def test_wave_generator_duty_cycle_errors(self, target_device_idx, xp):
+        for duty_cycle in [1.5, -0.1]:
+            with self.assertRaises(ValueError):
+                WaveGenerator('SQUARE', duty_cycle=duty_cycle, target_device_idx=target_device_idx)
+        with self.assertRaises(ValueError):
+            WaveGenerator('SQUARE', amp=[1.0, 2.0], duty_cycle=[0.2, 0.3, 0.4],
+                          target_device_idx=target_device_idx)
+
+    @cpu_and_gpu
+    def test_wave_generator_sin_ignores_duty_cycle(self, target_device_idx, xp):
+        times = [0.1, 0.2, 0.3]
+        kwargs = dict(amp=1.0, freq=2.0, offset=0.3, target_device_idx=target_device_idx)
+        np.testing.assert_almost_equal(self._wave_values(WaveGenerator('SIN', **kwargs), times),
+                                       self._wave_values(WaveGenerator('SIN', duty_cycle=0.1, **kwargs), times))
 
     @cpu_and_gpu
     def test_wave_generator_linear(self, target_device_idx, xp):
@@ -311,6 +404,35 @@ class TestGenerators(unittest.TestCase):
         np.testing.assert_allclose(cpuArray(value), cpuArray(data[-1]))
 
     @cpu_and_gpu
+    def test_time_history_loop(self, target_device_idx, xp):
+        data = xp.arange(3 * 2).reshape((3, 2))
+        f = TimeHistoryGenerator(TimeHistory(data, target_device_idx=target_device_idx), loop=True,
+                                 target_device_idx=target_device_idx)
+        for it in range(7):
+            f.check_ready(it)
+            f.trigger()
+            f.post_trigger()
+            np.testing.assert_allclose(cpuArray(f.outputs['output'].value), cpuArray(data[it % 3]))
+
+    @cpu_and_gpu
+    def test_schedule_generator_period(self, target_device_idx, xp):
+        f = ScheduleGenerator(scheduled_values=[[0.0], [0.5], [1.0]], scheduled_times=[0.1, 0.2],
+                              modes_per_group=[1], period=1.0, target_device_idx=target_device_idx)
+        f.setup()
+        for t_sec, expected in [(0.05, 0.0), (0.15, 0.5), (0.9, 1.0), (1.05, 0.0), (2.15, 0.5), (3.95, 1.0)]:
+            f.check_ready(f.seconds_to_t(t_sec))
+            f.trigger()
+            f.post_trigger()
+            np.testing.assert_allclose(cpuArray(f.outputs['output'].value), [expected])
+
+    @cpu_and_gpu
+    def test_schedule_generator_period_errors(self, target_device_idx, xp):
+        for period in [0.0, 0.2]:
+            with self.assertRaises(ValueError):
+                ScheduleGenerator(scheduled_values=[[0.0], [1.0]], scheduled_times=[0.2],
+                                  modes_per_group=[1], period=period, target_device_idx=target_device_idx)
+
+    @cpu_and_gpu
     def test_schedule_generator(self, target_device_idx, xp):
         scheduled_values = [
             [0.1, 0.0],    # Values for t < 0.1s
@@ -376,7 +498,7 @@ class TestGenerators(unittest.TestCase):
             outputs.append(f.outputs['output'].value.copy())
 
         # Check agains reference signal
-        hist = modal_pushpull_signal(n_modes=nmodes, amplitude=amp, ncycles=ncycles, xp=np)
+        hist = _reference_pushpull_signal(n_modes=nmodes, amplitude=amp, ncycles=ncycles)
         for i in range(10):
             np.testing.assert_array_equal(cpuArray(outputs[i]), hist[i])
 
@@ -408,15 +530,127 @@ class TestGenerators(unittest.TestCase):
             outputs.append(f.outputs['output'].value.copy())
 
         # Check agains reference signal
-        hist = modal_pushpull_signal(n_modes=nmodes, first_mode=first_mode, amplitude=amp, constant=constant_amp, ncycles=ncycles, xp=np)
+        hist = _reference_pushpull_signal(n_modes=nmodes, first_mode=first_mode, amplitude=amp,
+                                          constant=constant_amp, ncycles=ncycles)
         for i in range(10):
             np.testing.assert_array_equal(cpuArray(outputs[i]), hist[i])
+
+    @cpu_and_gpu
+    def test_push_pull_generator_full_sequence(self, target_device_idx, xp):
+        """Compare the full on-the-fly generated sequence against the reference implementation
+        for a variety of configurations (patterns, repeat modes, first_mode, nsamples,
+        ncycles, explicit vect_amplitude and PUSH-only type)."""
+        configs = [
+            dict(name='default_alternating', nmodes=4, amp=0.5),
+            dict(name='repeat_ncycles', nmodes=3, amp=0.5, ncycles=2, repeat_ncycles=True),
+            dict(name='repeat_full_sequence', nmodes=3, amp=0.5, ncycles=2, repeat_full_sequence=True),
+            dict(name='repeat_ncycles_and_full_sequence', nmodes=3, amp=0.5, ncycles=2,
+                 repeat_ncycles=True, repeat_full_sequence=True),
+            dict(name='first_mode', nmodes=5, first_mode=2, amp=0.5),
+            dict(name='nsamples', nmodes=3, amp=0.5, nsamples=2),
+            dict(name='ncycles', nmodes=3, amp=0.5, ncycles=3),
+            dict(name='custom_pattern', nmodes=3, amp=0.5, pattern=[1, -1, 0.5]),
+            dict(name='push_only', nmodes=3, amp=0.5, push_pull_type='PUSH'),
+            dict(name='explicit_vect_amplitude', nmodes=4, vect_amplitude=[0.1, 0.2, 0.3, 0.4]),
+        ]
+
+        for raw_cfg in configs:
+            cfg = dict(raw_cfg)
+            name = cfg.pop('name')
+            with self.subTest(config=name):
+                f = PushPullGenerator(target_device_idx=target_device_idx, **cfg)
+                f.setup()
+
+                signal_kwargs = dict(cfg)
+                signal_kwargs['n_modes'] = signal_kwargs.pop('nmodes')
+                if 'amp' in signal_kwargs:
+                    signal_kwargs['amplitude'] = signal_kwargs.pop('amp')
+                if 'push_pull_type' in signal_kwargs:
+                    signal_kwargs['only_push'] = signal_kwargs.pop('push_pull_type') == 'PUSH'
+                hist = _reference_pushpull_signal(**signal_kwargs)
+
+                self.assertEqual(f.nsteps, hist.shape[0])
+
+                for i in range(f.nsteps):
+                    f.check_ready(i)
+                    f.trigger()
+                    f.post_trigger()
+                    value = cpuArray(f.outputs['output'].value)
+                    np.testing.assert_array_equal(value, hist[i], err_msg=f'config={name}, step={i}')
+
+    @cpu_and_gpu
+    def test_push_pull_generator_beyond_end_raises(self, target_device_idx, xp):
+        nmodes = 3
+        amp = 0.5
+
+        f = PushPullGenerator(
+            nmodes=nmodes,
+            push_pull_type='PUSHPULL',
+            amp=amp,
+            target_device_idx=target_device_idx
+        )
+        f.setup()
+
+        for i in range(f.nsteps):
+            f.check_ready(i)
+            f.trigger()
+            f.post_trigger()
+
+        with self.assertRaises(IndexError):
+            f.check_ready(f.nsteps)
+            f.trigger()
 
     @cpu_and_gpu
     def test_push_pull_invalid_type(self, target_device_idx, xp):
 
         with self.assertRaises(ValueError):
             _ = PushPullGenerator(nmodes=1, push_pull_type='INVALID')
+
+    @cpu_and_gpu
+    def test_push_pull_generator_explicit_sequences(self, target_device_idx, xp):
+        """Check the step ordering against hand-written sequences (rows are steps, columns are modes)."""
+        cases = [
+            dict(name='push_only',
+                 cfg=dict(nmodes=2, push_pull_type='PUSH', vect_amplitude=[3.0, 4.0], ncycles=2),
+                 expected=[[3, 0], [3, 0], [0, 4], [0, 4]]),
+            dict(name='push_only_ignores_pattern',
+                 cfg=dict(nmodes=2, push_pull_type='PUSH', pattern=[-1, 1], vect_amplitude=[3.0, 4.0]),
+                 expected=[[3, 0], [0, 4]]),
+            dict(name='alternating_ncycles',
+                 cfg=dict(nmodes=2, vect_amplitude=[2.0, 3.0], ncycles=2),
+                 expected=[[2, 0], [-2, 0], [2, 0], [-2, 0], [0, 3], [0, -3], [0, 3], [0, -3]]),
+            dict(name='repeat_ncycles',
+                 cfg=dict(nmodes=1, vect_amplitude=[2.0], ncycles=2, repeat_ncycles=True),
+                 expected=[[2], [2], [-2], [-2]]),
+            dict(name='repeat_full_sequence',
+                 cfg=dict(nmodes=2, vect_amplitude=[2.0, 3.0], ncycles=3, repeat_full_sequence=True),
+                 expected=[[2, 0], [-2, 0], [0, 3], [0, -3]] * 3),
+            dict(name='nsamples',
+                 cfg=dict(nmodes=1, vect_amplitude=[1.0], nsamples=3),
+                 expected=[[1], [1], [1], [-1], [-1], [-1]]),
+            dict(name='repeat_ncycles_and_nsamples',
+                 cfg=dict(nmodes=1, vect_amplitude=[1.0], ncycles=2, repeat_ncycles=True, nsamples=2),
+                 expected=[[1]] * 4 + [[-1]] * 4),
+            dict(name='first_mode_and_nsamples',
+                 cfg=dict(nmodes=3, first_mode=1, vect_amplitude=[2.0, 3.0], nsamples=2),
+                 expected=[[0, 2, 0], [0, 2, 0], [0, -2, 0], [0, -2, 0],
+                           [0, 0, 3], [0, 0, 3], [0, 0, -3], [0, 0, -3]]),
+            dict(name='first_mode_and_repeat_full_sequence',
+                 cfg=dict(nmodes=3, first_mode=1, vect_amplitude=[2.0, 3.0], ncycles=2,
+                          repeat_full_sequence=True),
+                 expected=[[0, 2, 0], [0, -2, 0], [0, 0, 3], [0, 0, -3]] * 2),
+            dict(name='custom_pattern_three_elements',
+                 cfg=dict(nmodes=2, vect_amplitude=[2.0, 3.0], pattern=[1, -1, 1], ncycles=2),
+                 expected=[[2, 0], [-2, 0], [2, 0], [2, 0], [-2, 0], [2, 0],
+                           [0, 3], [0, -3], [0, 3], [0, 3], [0, -3], [0, 3]]),
+            dict(name='custom_pattern_negative_first',
+                 cfg=dict(nmodes=2, vect_amplitude=[3.0, 4.0], pattern=[-1, 1]),
+                 expected=[[-3, 0], [3, 0], [0, -4], [0, 4]]),
+        ]
+        for case in cases:
+            with self.subTest(case=case['name']):
+                f = PushPullGenerator(target_device_idx=target_device_idx, **case['cfg'])
+                np.testing.assert_array_equal(_run_pushpull(f), np.array(case['expected'], dtype=float))
 
     @cpu_and_gpu
     def test_func_generator_float(self, target_device_idx, xp):

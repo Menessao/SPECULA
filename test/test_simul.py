@@ -6,6 +6,7 @@ specula.init(0)  # Default target device
 import os
 import tempfile
 import unittest
+import multiprocessing
 from unittest.mock import patch
 
 import yaml
@@ -14,12 +15,13 @@ from pathlib import PureWindowsPath
 from typing import Dict, List
 
 import numpy as np
-from specula.simul import Simul, computeTag
+from specula.simul import Simul
 from specula.loop_control import LoopControl
 from specula.connections import InputValue, InputList
 from specula.data_objects.recmat import Recmat
 from specula.base_data_obj import BaseDataObj
 from specula.lib.utils import import_class as real_import_class
+from iteras.data_objects.sim_params import SimParams
 from specula.processing_objects.modalrec_multirate import ModalrecMultirate
 from specula.data_objects.iir_filter_data import IirFilterData
 from specula.scalar_values import IntValue
@@ -36,7 +38,8 @@ class DummyOutput:
 class DummyOutputDerived(DummyOutput):
     pass
 
-class DummySimulParams:
+class DummySimulParams(SimParams):
+    # Does not call SimParams.__init__(): only root_dir is needed
     def __init__(self, root_dir='dummy', **_kwargs):
         self.root_dir = root_dir
     def init_logging(self, *args):
@@ -223,10 +226,89 @@ class TestSimul(unittest.TestCase):
                 }
             },
         }
-        # Raises ValueError
-        with self.assertRaises(ValueError):
+        # Raises ValueError, naming the objects involved
+        with self.assertRaises(ValueError) as context:
             _ = simul.build_trigger_order(pars)
+        self.assertIn('obj1', str(context.exception))
+        self.assertIn('obj2', str(context.exception))
 
+    def test_setup_order_same_as_trigger_order_without_delays(self):
+        pars = {
+            'gen': {'class': 'WaveGenerator'},
+            'slicer': {'class': 'BaseSlicer', 'inputs': {'in_value': 'gen.output'}},
+            'comb': {'class': 'LinearCombination', 'inputs': {'in_vectors_list': ['gen.output', 'slicer.out_value']}},
+        }
+        simul = Simul('dummy.yaml')
+        trigger_order, _ = simul.build_trigger_order(pars)
+        assert simul.build_setup_order(pars, trigger_order) == trigger_order
+
+    def test_setup_order_follows_delayed_inputs(self):
+        # The slicer is triggered before its delayed producer,
+        # but must be set up after it
+        pars = {
+            'gen': {'class': 'WaveGenerator'},
+            'slicer': {'class': 'BaseSlicer', 'inputs': {'in_value': 'comb.out_vector:-1'}},
+            'comb': {'class': 'LinearCombination', 'inputs': {'in_vectors_list': ['gen.output']}},
+        }
+        simul = Simul('dummy.yaml')
+        trigger_order, _ = simul.build_trigger_order(pars)
+        setup_order = simul.build_setup_order(pars, trigger_order)
+        assert trigger_order.index('slicer') < trigger_order.index('comb')
+        assert setup_order.index('comb') < setup_order.index('slicer')
+        assert sorted(setup_order) == sorted(trigger_order)
+
+    def test_setup_order_feedback_loop(self):
+        # Closed loop: the delayed DM command closes a cycle, so it is ignored
+        # and the cycle is set up in trigger order. The delayed input of the
+        # slicer outside the cycle is still followed.
+        pars = {
+            'dm': {'class': 'DM', 'inputs': {'in_command': 'integ.out_comm:-1'}},
+            'wfs': {'class': 'SH', 'inputs': {'in_ef': 'dm.out_layer'}},
+            'integ': {'class': 'Integrator', 'inputs': {'delta_comm': 'wfs.out_i'}},
+            'slicer': {'class': 'BaseSlicer', 'inputs': {'in_value': 'integ.out_comm:-1'}},
+        }
+        simul = Simul('dummy.yaml')
+        trigger_order, _ = simul.build_trigger_order(pars)
+        setup_order = simul.build_setup_order(pars, trigger_order)
+        cycle = [name for name in setup_order if name != 'slicer']
+        assert cycle == [name for name in trigger_order if name != 'slicer']
+        assert setup_order.index('integ') < setup_order.index('slicer')
+
+    def test_setup_order_delayed_input_from_feedback_loop_triggered_first(self):
+        # As above, but the slicer outside the loop comes first in
+        # trigger order: it must still wait for its delayed producer
+        pars = {
+            'slicer': {'class': 'BaseSlicer', 'inputs': {'in_value': 'integ.out_comm:-1'}},
+            'dm': {'class': 'DM', 'inputs': {'in_command': 'integ.out_comm:-1'}},
+            'wfs': {'class': 'SH', 'inputs': {'in_ef': 'dm.out_layer'}},
+            'integ': {'class': 'Integrator', 'inputs': {'delta_comm': 'wfs.out_i'}},
+        }
+        simul = Simul('dummy.yaml')
+        trigger_order, _ = simul.build_trigger_order(pars)
+        setup_order = simul.build_setup_order(pars, trigger_order)
+        assert trigger_order.index('slicer') < trigger_order.index('integ')
+        assert setup_order == ['dm', 'wfs', 'integ', 'slicer']
+
+    def test_loop_control_setup_order(self):
+        calls = []
+
+        class Recorder:
+            def __init__(self, name):
+                self.name = name
+            def __getattr__(self, attr):
+                return lambda *args, **kwargs: None
+            def setup(self):
+                calls.append(self.name)
+
+        a, b, c = Recorder('a'), Recorder('b'), Recorder('c')
+        loop = LoopControl()
+        loop.add(a, 0)
+        loop.add(b, 1)
+        loop.add(c, 2)
+        # c not in the setup order: set up last
+        loop.set_setup_order([b, a])
+        loop.start(run_time=1, dt=1)
+        assert calls == ['b', 'a', 'c']
 
     def test_combine_params(self):
 
@@ -300,6 +382,14 @@ class TestSimul(unittest.TestCase):
         params = yaml.safe_load(yml)
         with self.assertRaises(ValueError):
             simul.build_objects(params)
+
+    def test_run_in_bootstrapping_child_raises(self):
+        '''Test that run() stops before reading any file when called while a
+        spawned child process is bootstrapping (unguarded main script)'''
+        simul = Simul('nonexistent_file.yml')
+        with patch.object(multiprocessing.current_process(), '_inheriting', True, create=True):
+            with self.assertRaisesRegex(RuntimeError, '__name__ == "__main__"'):
+                simul.run()
 
     def test_data_suffix_stripped_and_null_passed(self):
         '''
@@ -572,6 +662,51 @@ class TestSimul(unittest.TestCase):
                 assert self._path_suffix_parts(first_path) == ('rec', 'tag_fast.fits')
                 assert self._path_suffix_parts(second_path) == ('rec', 'tag_slow.fits')
 
+    @unittest.skipIf(specula.cp is None, 'needs a GPU for the object')
+    def test_host_data_objects_are_restored_on_cpu(self):
+        '''
+        The "_object" parameters listed in host_data_objects are restored on
+        the CPU, the others on the device of the object
+        '''
+        from specula.base_processing_obj import BaseProcessingObj
+
+        class ClassWithHostObject(BaseProcessingObj):
+            host_data_objects = ('big',)
+
+            def __init__(self, big: Recmat, small: Recmat, target_device_idx=None, precision=None):
+                super().__init__(target_device_idx=target_device_idx, precision=precision)
+                self.big = big
+                self.small = small
+
+        def mock_import(classname, additional_modules=None):
+            if classname == 'SimulParams':
+                return DummySimulParams
+            if classname == 'ClassWithHostObject':
+                return ClassWithHostObject
+            return real_import_class(classname, additional_modules)
+
+        rec = Recmat(np.ones((2, 2), dtype=np.float32), target_device_idx=-1, precision=0)
+        params = {
+            'main': {'class': 'SimulParams', 'root_dir': 'dummy'},
+            'test': {
+                'class': 'ClassWithHostObject',
+                'target_device_idx': 0,     # not the CPU, to see the difference
+                'precision': 0,
+                'big_object': 'tag_big',
+                'small_object': 'tag_small',
+            }
+        }
+        # With data_objects_on_device (--data-objects-on-device), all on the device
+        for on_device, big_device in [(False, -1), (True, 0)]:
+            with self.subTest(data_objects_on_device=on_device):
+                with patch('specula.simul.import_class', side_effect=mock_import), \
+                     patch.object(Simul, 'restore_object', return_value=rec) as mock_restore:
+                    simul = Simul('dummy.yaml', data_objects_on_device=on_device)
+                    simul.build_objects(dict((k, dict(v)) for k, v in params.items()))
+
+                devices = {call.args[1]: call.args[2] for call in mock_restore.call_args_list}
+                self.assertEqual(devices, {'tag_big': big_device, 'tag_small': 0})
+
     def test_list_object_raises_with_no_type(self):
         '''
         Test generic _list_object behavior:
@@ -669,7 +804,7 @@ class TestSimul(unittest.TestCase):
     def test_build_targeted_replay_warn_mode_logs_without_raising(self):
         params = self._ef_combinator_shadowing_prop_params()
 
-        with self.assertLogs('specula.simul', level='WARNING') as cm:
+        with self.assertLogs('iteras.simul', level='WARNING') as cm:
             replay = Simul('dummy.yaml').build_targeted_replay(
                 params, 'prop', on_missing_downstream_consumers='warn')
 
@@ -888,29 +1023,41 @@ store:
         with self.assertRaises(ValueError):
             simul.build_objects(params)
 
-    def test_compute_tag(self):
-        '''Test that even small changes in names result in a different tag'''
+    def test_connection_tags(self):
+        '''Test that each connection gets its own pair of MPI tags (tag, tag+1),
+        including the connections not involving this rank'''
+        from types import SimpleNamespace
 
-        output_obj_name = 'foo'
-        dest_object = 'bar'
-        output_attr_name = 'test1'
-        input_attr_name = 'test2'
+        params = {
+            'src': {'outputs': ['out_a', 'out_b']},
+            'remote_src': {'outputs': ['out_c']},
+            'dst': {'inputs': {'in_x': 'src.out_a',
+                               'in_list': ['src.out_b', 'remote_src.out_c', 'src.out_a']}},
+            'remote_dst': {'inputs': {'in_y': 'remote_src.out_c'}},
+            'dst2': {'inputs': {'in_z': 'src.out_b:-1'}},
+        }
+        simul = Simul('dummy.yaml')
+        simul.objs = {
+            'src': SimpleNamespace(outputs={'out_a': 1, 'out_b': 2}),
+            'dst': SimpleNamespace(outputs={}, inputs={'in_x': None, 'in_list': None}),
+            'dst2': SimpleNamespace(outputs={}, inputs={'in_z': None}),
+        }
+        simul.remote_objs_ranks = {'remote_src': 1, 'remote_dst': 1}
+        simul.all_objs_ranks = {'src': 0, 'remote_src': 1, 'dst': 0, 'remote_dst': 1, 'dst2': 0}
 
-        tag1 = computeTag(output_obj_name, dest_object, output_attr_name, input_attr_name)
+        connected = []
+        simul.connect = lambda output_name, input_name, dest_object, tag: \
+            connected.append((dest_object, input_name, output_name, tag))
+        simul.connect_objects(params)
 
-        output_obj_name = 'foo2'
-        tag2 = computeTag(output_obj_name, dest_object, output_attr_name, input_attr_name)
-
-        dest_object = 'bar2'
-        tag3 = computeTag(output_obj_name, dest_object, output_attr_name, input_attr_name)
-
-        output_attr_name = 'atest1'
-        tag4 = computeTag(output_obj_name, dest_object, output_attr_name, input_attr_name)
-
-        input_attr_name = 'atest2'
-        tag5 = computeTag(output_obj_name, dest_object, output_attr_name, input_attr_name)
-
-        assert len(set((tag1, tag2, tag3, tag4, tag5))) == 5
+        # remote_dst <- remote_src is skipped, but still uses tag 8
+        assert connected == [
+            ('dst', 'in_x', 'src.out_a', 0),
+            ('dst', 'in_list', 'src.out_b', 2),
+            ('dst', 'in_list', 'remote_src.out_c', 4),
+            ('dst', 'in_list', 'src.out_a', 6),
+            ('dst2', 'in_z', 'src.out_b:-1', 10),
+        ]
 
     def test_target_device_idx(self):
 
@@ -956,7 +1103,7 @@ main:
         captured = {}
         original_run = LoopControl.run
 
-        def fake_run(self_loop, run_time, dt, t0=0, speed_report=False):
+        def fake_run(self_loop, run_time, dt, t0=0, speed_report=False, preroll_objs=None):
             captured['run_time'] = run_time
             captured['t0'] = t0
 

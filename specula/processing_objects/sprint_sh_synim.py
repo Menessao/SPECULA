@@ -62,6 +62,7 @@ class SprintShSynim(BaseSprintEstimator):
                  apply_absolute_slopes=False,
                  integration_gain=0.5,
                  forgetting_factor=1.0,
+                 param_tolerance=0.01,
                  target_device_idx=None,
                  precision=None):
         """
@@ -101,11 +102,13 @@ class SprintShSynim(BaseSprintEstimator):
             apply_absolute_slopes=apply_absolute_slopes,
             integration_gain=integration_gain,
             forgetting_factor=forgetting_factor,
+            param_tolerance=param_tolerance,
             target_device_idx=target_device_idx,
             precision=precision
         )
 
         self.idx_valid_sa = None
+        self.ifunc_3d = None  # Built in setup
 
         # Define perturbations
         self.perturbations = {
@@ -130,6 +133,13 @@ class SprintShSynim(BaseSprintEstimator):
     def setup(self):
         """Initialize with SH-specific parameters"""
         super().setup()
+
+        # Modes of the DM input command selected by modes_index, on the CPU as SynIM
+        # needs them, not normalized: the IM is in slopes per DM command unit
+        modal_ifunc = self.dm.modal_ifunc(idx_modes=self.modes_index, target_device_idx=-1,
+                                          precision=self.precision)
+        self.ifunc_3d = modal_ifunc.ifunc_2d_to_3d(normalize=False)
+        self.logger.debug(f"  Size of DM modes cube: {self.ifunc_3d.shape}")
 
         # Extract valid subapertures from ShSlopec
         subapdata = self.slopec.subapdata
@@ -172,19 +182,11 @@ class SprintShSynim(BaseSprintEstimator):
             # Shack-Hartmann case
             subapdata = self.slopec.subapdata
 
-            # Create Slopes object for IM mode
-            sl = Slopes(length=im_mode.shape[0])
+            # Slopes object for the IM mode, displayed as the slopes of the slope computer
+            sl = Slopes(length=im_mode.shape[0], layout=subapdata.slopes_layout(),
+                        interleave=self.slopec.slopes.interleave)
             sl.set_value(im_mode)
-            sl.single_mask = subapdata.single_mask()
-            sl.display_map = subapdata.display_map
-
-            # Create 2D frames
-            frame_x = sl.xp.zeros_like(sl.single_mask, dtype=sl.dtype)
-            frame_y = sl.xp.zeros_like(sl.single_mask, dtype=sl.dtype)
-
-            # Remap to 2D
-            sl.x_remap2d(frame_x, sl.display_map)
-            sl.y_remap2d(frame_y, sl.display_map)
+            frame_x, frame_y = sl.get2d()
         else:
             raise NotImplementedError("2D IM map is only implemented for"
                                       "Shack-Hartmann WFS in this example")

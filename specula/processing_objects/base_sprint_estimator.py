@@ -5,6 +5,8 @@ Specific WFS implementations should inherit from this class.
 
 from abc import abstractmethod
 
+import numpy as np
+
 from specula.base_processing_obj import BaseProcessingObj, InputDesc, OutputDesc
 from specula.connections import InputValue
 from specula.data_objects.pupilstop import Pupilstop
@@ -42,6 +44,7 @@ class BaseSprintEstimator(BaseProcessingObj):
                  apply_absolute_slopes: bool = False,
                  integration_gain: float = 0.5,
                  forgetting_factor: float = 1.0,
+                 param_tolerance: float = 0.01,
                  target_device_idx: int = None,
                  precision: int = None):
         """
@@ -77,7 +80,7 @@ class BaseSprintEstimator(BaseProcessingObj):
         wfs : BaseProcessingObj
             WFS object (specific type depends on subclass)
         modes_index : list [1]
-            List of mode indices to estimate
+            List of mode indices to estimate, as indices of the DM input command
         carrier_frequencies : list [Hz]
             Carrier frequencies for each mode [Hz]
         estimation_dt : float [s]
@@ -96,6 +99,10 @@ class BaseSprintEstimator(BaseProcessingObj):
             Gain for parameter updates (0 < gain <= 1)
         forgetting_factor : float or None [1]
             Forgetting factor for integration (0 < factor <= 1, 1 = no forgetting)
+        param_tolerance : float [1]
+            The iterations stop when the step of every parameter is smaller than
+            param_tolerance times its perturbation (e.g. 0.01 px for a 1 px shift
+            perturbation)
         target_device_idx : int [1], optional
             Target device index for computation (CPU/GPU). Default is None (uses global setting).
         precision : int [1], optional
@@ -132,6 +139,9 @@ class BaseSprintEstimator(BaseProcessingObj):
         if len(carrier_frequencies) != len(modes_index):
             raise ValueError("carrier_frequencies and modes_index must have same length")
 
+        if any(i < 0 or i >= dm.nmodes for i in modes_index):
+            raise ValueError(f"modes_index {modes_index} out of range: "
+                             f"the DM input command has {dm.nmodes} modes")
         self.modes_index = modes_index
         self.nmodes = len(modes_index)
         self.carrier_frequencies = self.xp.array(carrier_frequencies, dtype=self.dtype)
@@ -150,6 +160,10 @@ class BaseSprintEstimator(BaseProcessingObj):
         if not 0 < forgetting_factor <= 1:
             raise ValueError(f"forgetting_factor must be in (0, 1], got {forgetting_factor}")
         self.forgetting_factor = forgetting_factor
+
+        if param_tolerance <= 0:
+            raise ValueError(f"param_tolerance must be positive, got {param_tolerance}")
+        self.param_tolerance = param_tolerance
 
         # Initialize mis-registration parameters
         self.n_params = n_params
@@ -172,7 +186,6 @@ class BaseSprintEstimator(BaseProcessingObj):
 
         # Pupil parameters (extracted from DM)
         self.pup_diam_m = simul_params.pixel_pupil * simul_params.pixel_pitch
-        self.ifunc_3d = None  # Loaded in setup
         if pupil_mask is not None:
             self.pupil_mask = self.to_xp(pupil_mask.A, dtype=self.dtype)
         else:
@@ -268,9 +281,6 @@ class BaseSprintEstimator(BaseProcessingObj):
         # Initialize IM size
         self.estimated_intmat.set_nslopes(len(in_slopes.slopes))
 
-        # Extract DM parameters
-        self.ifunc_3d = cpuArray(self.dm.ifunc_obj.ifunc_2d_to_3d(normalize=True))
-        self.ifunc_3d = self.ifunc_3d[:, :, self.modes_index]  # Extract only requested modes
         if self.pupil_mask is None:
             self.pupil_mask = cpuArray(self.dm.mask)
 
@@ -278,7 +288,6 @@ class BaseSprintEstimator(BaseProcessingObj):
         self.logger.debug(f"  Number of modes: {self.nmodes}")
         self.logger.debug(f"  Number of slopes: {self.estimated_intmat.nslopes}")
         self.logger.debug(f"  Size of pupil: {self.pupil_mask.shape}")
-        self.logger.debug(f"  Size of DM influence functions: {self.ifunc_3d.shape}")
         self.logger.debug(f"  Estimation interval: {self.t_to_seconds(self.estimation_dt):.2f}s")
         self.logger.debug(f"  Integration gain: {self.integration_gain}")
         self.logger.debug(f"  Forgetting factor: {self.forgetting_factor}")
@@ -317,9 +326,11 @@ class BaseSprintEstimator(BaseProcessingObj):
 
         # Update outputs
         self.estimated_intmat.generation_time = t
-        self.misreg_output.value = self.misreg_params.copy()
+        # Outputs updated in place: a new array would fail the check of the arrays
+        # of an accelerated reader
+        self.misreg_output.set_value(self.misreg_params)
         self.misreg_output.generation_time = t
-        self.error_output.value = self.xp.array([self.current_error], dtype=self.dtype)
+        self.error_output.value[0] = self.current_error
         self.error_output.generation_time = t
 
     def _demodulate_slopes(self):
@@ -387,10 +398,29 @@ class BaseSprintEstimator(BaseProcessingObj):
         """Plot debug information for SH WFS."""
         pass  # Implemented in subclass if needed
 
+    # Weighted Tikhonov regularisation of the normal equations, see
+    # _estimate_misreg_correction()
+    REGULARISATION = 1e-6
+    # Condition number of the normalised sensitivities above which a warning says
+    # that the probed modes do not constrain all the parameters
+    OBSERVABILITY_THRESHOLD = 1e3
+
     def _iterative_estimation(self, im_measured):
         """
-        Iterative estimation loop with integration and forgetting.
-        
+        Gauss-Newton fit of the mis-registration parameters.
+
+        At each iteration the sensitivities and the difference between the
+        gain-corrected measured IM and the nominal IM give a Gauss-Newton step
+        that solves all the parameters together, with a variable projection that
+        accounts for the optical gains (_estimate_misreg_correction()).
+        The steps are not rejected when the residual grows:
+        with bilinear interpolation the nominal IM is piecewise linear in the
+        parameters, and the fit may have to cross points where no step lowers the
+        residual. The iterations stop when the residual is below
+        convergence_threshold or when every parameter step is below
+        param_tolerance times its perturbation; the parameters with the lowest
+        residual rms(meas - nominal * G) / rms(meas) seen are kept.
+
         Parameters
         ----------
         im_measured : ndarray
@@ -400,62 +430,76 @@ class BaseSprintEstimator(BaseProcessingObj):
         self.logger.info(f"  Initial misreg: {cpuArray(self.misreg_params)}")
 
         params_before = self.misreg_params.copy()
+        n_params = len(self.misreg_params)
+        tolerances = np.array([self.param_tolerance * self.perturbations[p][0]
+                               if p in self.perturbations else np.inf
+                               for p in range(n_params)])
 
         # Compute reference norm once (for relative error)
         im_measured_norm = float(self.xp.sqrt(self.xp.mean(im_measured**2)))
 
+        im_nominal = self._compute_nominal_im()
+        G_opt, error_rel = self._misfit(im_measured, im_nominal, im_measured_norm)
+        best = (error_rel, self.misreg_params.copy(), im_nominal, G_opt)
+
         for iteration in range(self.max_iterations):
-            # Compute nominal IM (subclass-specific)
-            im_nominal = self._compute_nominal_im()
+            if error_rel < self.convergence_threshold:
+                self.logger.info(f"  Converged after {iteration} iterations (residual)")
+                break
 
-            # Compute optical gains
-            G_opt = self._compute_optical_gains(im_measured, im_nominal)
-
-            # Mean absolute gain (for error weighting)
-            G_mean = float(self.xp.mean(self.xp.abs(G_opt)))
-
-            self.logger.debug(f"    Optical gains: {cpuArray(G_opt)}, mean: {G_mean:.3f}")
-
-            # Compute sensitivities (subclass-specific)
             sens_matrices = self._compute_sensitivity_matrices()
-
-            # Corrected difference
             im_diff = self._apply_optical_gain_correction(im_measured, G_opt) - im_nominal
 
             plot_debug = False  # Set to True to enable debug plotting
             if plot_debug: # pragma: no cover
                 self._plot_debug_info(im_measured, im_nominal, im_diff, G_opt, iteration)
 
-            # Estimate correction
-            delta_misreg = self._estimate_misreg_correction(im_diff, sens_matrices)
+            if iteration == 0:
+                self._check_observability(sens_matrices)
+            delta = self._estimate_misreg_correction(im_diff, sens_matrices, im_nominal)
 
-            # Apply integration with forgetting
-            self.misreg_params = (self.misreg_params * self.forgetting_factor +
-                                 delta_misreg * self.integration_gain)
+            # Integration with gain and forgetting: params * forgetting + delta * gain
+            params = cpuArray(self.misreg_params).astype(np.float64)
+            step = delta * self.integration_gain + params * (self.forgetting_factor - 1.0)
+            self.misreg_params = self.to_xp(params + step, dtype=self.dtype)
 
-            # Compute weighted relative error
-            # If gains are close to 1.0, this reduces to standard relative error
-            error_abs = float(self.xp.sqrt(self.xp.mean(im_diff**2)))
-            error_rel = error_abs / im_measured_norm
-            error_weighted = error_rel * G_mean  # Weight by mean gain
-            self.current_error = error_rel
+            im_nominal = self._compute_nominal_im()
+            G_opt, error_rel = self._misfit(im_measured, im_nominal, im_measured_norm)
+            if error_rel < best[0]:
+                best = (error_rel, self.misreg_params.copy(), im_nominal, G_opt)
 
             self.logger.debug(f"    Iteration {iteration+1}: error_rel={error_rel:.3e}, "
-                f"error_weighted={error_weighted:.3e}, params={cpuArray(self.misreg_params)}")
+                              f"params={cpuArray(self.misreg_params)}")
 
-            # Check convergence on weighted error
-            if error_weighted < self.convergence_threshold:
-                self.logger.info(f"  Converged after {iteration+1} iterations!")
+            if np.all(np.abs(step) < tolerances):
+                self.logger.info(f"  Converged after {iteration+1} iterations (parameter step)")
                 break
 
-        # Store final IM
-        self.estimated_intmat.intmat = self._compute_nominal_im()
+        error_rel, self.misreg_params, im_nominal, G_opt = best
+        self.current_error = error_rel
+
+        # Store final IM, in place after the first estimation (allocated with 0 slopes)
+        if self.estimated_intmat.intmat.shape == im_nominal.shape:
+            self.estimated_intmat.intmat[:] = im_nominal
+        else:
+            self.estimated_intmat.intmat = im_nominal
 
         delta_total = self.misreg_params - params_before
         self.logger.info(f"  Final params: {cpuArray(self.misreg_params)}")
         self.logger.info(f"  Final optical gains: {cpuArray(G_opt)}")
         self.logger.info(f"  Final relative error: {self.current_error:.3e}")
         self.logger.info(f"  Total change: {cpuArray(delta_total)}")
+
+    def _misfit(self, im_measured, im_nominal, im_measured_norm):
+        """
+        Optical gains and least-squares residual relative to the measurement,
+        rms(meas - nominal * G) / rms(meas), in measurement units, so it does not
+        depend on the probe amplitude (in [0, 1] for a single mode, where G is
+        the least-squares gain).
+        """
+        G_opt = self._compute_optical_gains(im_measured, im_nominal)
+        residual = im_measured - im_nominal * G_opt[self.xp.newaxis, :]
+        return G_opt, float(self.xp.sqrt(self.xp.mean(residual**2))) / im_measured_norm
 
     def _compute_optical_gains(self, im_measured, im_nominal):
         """Compute optical gains for each mode"""
@@ -467,38 +511,87 @@ class BaseSprintEstimator(BaseProcessingObj):
         G_inv = 1.0 / (G_opt + 1e-12)
         return im_measured * G_inv[self.xp.newaxis, :]
 
-    def _estimate_misreg_correction(self, im_diff, sens_matrices):
+    def _estimate_misreg_correction(self, im_diff, sens_matrices, im_nominal=None):
         """
-        Estimate mis-registration correction from IM difference.
-        
+        Gauss-Newton correction of all the parameters together: least-squares
+        solution of S delta = d, with S the sensitivities reshaped to
+        (nslopes * nmodes, n_params) and d the IM difference, from the normal
+        equations (S^T S + eps diag(S^T S)) delta = S^T d.
+
+        Variable projection: the residual that the fit minimises is
+        meas - G(p) * nominal(p), with the optical gain G of each mode
+        re-estimated by least squares at every point (G = im^+ meas, with
+        im^+ = im^T / (im^T im) the pseudoinverse of the nominal IM of a mode).
+        Its Jacobian (Kaufman's approximation) is G times the sensitivities
+        projected, mode by mode, on the complement of the nominal IM:
+        s_perp = (I - im im^+) s = s - im (im^T s) / (im^T im), i.e. without the
+        component that G already absorbs.
+        Without the projection the step ignores that G follows the parameters,
+        and the fit converges only linearly when the mis-registration changes
+        the IM a lot. d needs no projection: d = meas / G - nominal is already
+        orthogonal to the nominal IM, G being its least-squares gain.
+
+        The eps diag(S^T S) term is a Tikhonov regularisation weighted by the
+        sensitivity of each parameter (as in Levenberg-Marquardt), i.e. plain
+        Tikhonov on the normalised columns of S, so it does not depend on the
+        units of the parameters. With eps = REGULARISATION = 1e-6 it only guards
+        against a (nearly) singular S^T S and does not shorten the step. A
+        parameter with no sensitivity gets a zero correction.
+
         Parameters
         ----------
-        im_diff : ndarray, shape (nslopes, nmodes)
+        im_diff : ndarray, shape (nslopes, nmodes) or (nslopes,)
         sens_matrices : ndarray, shape (nslopes, nmodes, n_params)
-        
+        im_nominal : ndarray, shape (nslopes, nmodes) or (nslopes,), optional
+            Nominal IM at the current parameters, for the variable projection;
+            if None, the sensitivities are used as they are
+
         Returns
         -------
         delta_misreg : ndarray, shape (n_params,)
         """
         n_params = sens_matrices.shape[2]
-        delta_misreg = self.xp.zeros(n_params, dtype=self.dtype)
+        # Normal equations in double precision: S^T S squares the conditioning
+        sens = cpuArray(sens_matrices).astype(np.float64)
+        if im_nominal is not None:
+            # Variable projection, mode by mode: remove from each sensitivity
+            # s[:, m, p] its component along the nominal IM im[:, m] (an amplitude
+            # change, absorbed by the optical gain), keeping the shape change:
+            # s_perp = s - im * (im^T s) / (im^T im) = (I - im im^+) s,
+            # where im^+ = im^T / (im^T im) is the pseudoinverse of the column im,
+            # the same as in the optical gain G = im^+ meas
+            im = cpuArray(im_nominal).astype(np.float64).reshape(sens.shape[0], -1)
+            im_dot_s = (im[:, :, None] * sens).sum(axis=0)     # (nmodes, n_params)
+            im_dot_im = (im ** 2).sum(axis=0)                  # (nmodes,)
+            coef = im_dot_s / im_dot_im[:, None]               # (nmodes, n_params)
+            sens = sens - im[:, :, None] * coef[None, :, :]
+        S = sens.reshape(-1, n_params)
+        d = cpuArray(im_diff).reshape(-1).astype(np.float64)
+        A = S.T @ S
+        weights = np.diag(A).copy()
+        if not weights.max() > 0:
+            return np.zeros(n_params)
+        weights = np.maximum(weights, 1e-12 * weights.max())
+        return np.linalg.solve(A + self.REGULARISATION * np.diag(weights), S.T @ d)
 
-        if im_diff.ndim == 1:
-            im_diff = im_diff[:, self.xp.newaxis]
-
-        # Solve for each parameter
-        for p in range(n_params):
-            sens_p = sens_matrices[:, :, p]
-            deltas = []
-
-            for m in range(self.nmodes):
-                sens_col = sens_p[:, m]
-                diff_col = im_diff[:, m] if im_diff.shape[1] > m else im_diff[:, 0]
-
-                delta = self.xp.dot(sens_col, diff_col) / \
-                       (self.xp.dot(sens_col, sens_col) + 1e-12)
-                deltas.append(delta)
-
-            delta_misreg[p] = self.xp.mean(self.xp.array(deltas))
-
-        return delta_misreg
+    def _check_observability(self, sens_matrices):
+        """
+        Warn if the probed modes do not constrain all the parameters: condition
+        number of the sensitivities with normalised columns (so that the units
+        of the parameters do not matter).
+        """
+        S = cpuArray(sens_matrices).reshape(-1, sens_matrices.shape[2]).astype(np.float64)
+        names = [self.perturbations[p][1] if p in self.perturbations else f'param {p}'
+                 for p in range(S.shape[1])]
+        norms = np.sqrt((S ** 2).sum(axis=0))
+        if np.any(norms == 0):
+            unseen = [names[p] for p in np.nonzero(norms == 0)[0]]
+            self.logger.warning(f"  SPRINT: the probed modes have no sensitivity to {unseen}")
+            return
+        _, sv, vt = np.linalg.svd(S / norms, full_matrices=False)
+        cond = sv[0] / sv[-1]
+        if cond > self.OBSERVABILITY_THRESHOLD:
+            worst = names[int(np.argmax(np.abs(vt[-1])))]
+            self.logger.warning(f"  SPRINT: poorly constrained parameters (condition number"
+                                f" {cond:.1e}, mostly {worst}): choose probed modes that are"
+                                f" sensitive to all the mis-registrations")

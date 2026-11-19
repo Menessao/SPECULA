@@ -174,7 +174,7 @@ class Lift(BaseProcessingObj):
         if self.padded is None:
             self.padded = self.xp.zeros((self.fftSize, self.fftSize), dtype=x.dtype)
         self.padded[pad:pad+self.gridSize, pad:pad+self.gridSize] = x
-        result = self.xp.fft.fftshift(self.xp.fft.fft2(self.padded)) * (1.0 / self.fftSize)
+        result = self.fft.fftshift(self.fft.fft2(self.padded)) * (1.0 / self.fftSize)
         return result
 
     def computeCoG(self, frame, thFactor = 0.05):
@@ -254,10 +254,19 @@ class Lift(BaseProcessingObj):
         valid_idx = np.nonzero(mask2d)
         f = np.zeros_like(mask2d.astype(cpu_dtype))
 
+        # Normalised convolution: each resampled mode value is divided by the
+        # resampled pupil indicator, so it is an average over the valid pixels
+        # only. Otherwise the zeros outside the pupil reduce the phase on the
+        # edge pixels, where e.g. focus is largest, and bias the estimates.
+        weight = resize_interp.interpolate((mask2d != 0).astype(cpu_dtype))
+        valid_weight = weight > 0
+        safe_weight = np.where(valid_weight, weight, 1)
+
         self.modes = []
         for i in range(self.nmodes):
             f[valid_idx] = modalbase[i, :]
             f2 = resize_interp.interpolate(f.astype(cpu_dtype, copy=False))
+            f2 = np.where(valid_weight, f2 / safe_weight, 0)
             self.modes.append(self.xp.array(f2, dtype=self.dtype))
         self.modesCube = self.xp.stack(self.modes)
 
@@ -367,7 +376,7 @@ class Lift(BaseProcessingObj):
         psf = self.xp.array(psf)
         center = self.computeCoG(psf)
         frame = self.crop_or_enlarge_around_peak(psf, int(self.npix_side),
-                                                 peak_index=(self.xp.round(center[0]).astype(int), self.xp.round(center[1]).astype(int)))
+                                               peak_index=(self.xp.round(center[0]).astype(int), self.xp.round(center[1]).astype(int)))
         return self.xp.array(frame)
 
     def phaseEstimation(self, psf_orig, relTol=1e-3, absTol=1e-3):
@@ -439,7 +448,40 @@ class Lift(BaseProcessingObj):
         lastAML[0 + self.nPistons] += self.ref_tip
         lastAML[1 + self.nPistons] += self.ref_tilt
 
-        return currentPhaseEstimates[-1], lastAML * self.wavelengthInNm/(2*np.pi), len(total_A_MLs)
+        # *** Convert to physical units (microns) ***
+        final_coeffs = lastAML * self.wavelengthInNm / (2 * np.pi)
+
+        # *** Wrap coefficients to [-lambda/2, +lambda/2] for all modes ***
+        final_coeffs = self._wrap_coefficients(final_coeffs, self.wavelengthInNm)
+
+        return currentPhaseEstimates[-1], final_coeffs, len(total_A_MLs)
+
+    def _wrap_coefficients(self, coeffs, wavelengthInNm):
+        """
+        Wrap all modal coefficients to [-wavelength/2, +wavelength/2] range.
+        
+        This ensures estimates are always within one wavelength period,
+        which is critical for multi-wavelength phase unwrapping.
+        
+        Parameters
+        ----------
+        coeffs : ndarray
+            Modal coefficients in physical units (microns)
+        wavelengthInNm : float
+            Wavelength in nanometers
+            
+        Returns
+        -------
+        wrapped_coeffs : ndarray
+            Coefficients wrapped to [-lambda/2, +lambda/2]
+        """  
+        half_lambda = wavelengthInNm / 2.0
+
+        # Wrap to [-lambda/2, +lambda/2)
+        wrapped = ((coeffs + half_lambda) % wavelengthInNm) - half_lambda
+
+        return wrapped
+
 
     def focalPlaneImageLIFT(self, phase, set_flux=None):
         '''
@@ -482,7 +524,7 @@ class Lift(BaseProcessingObj):
                                     (padding_col, padding_col + extra_col)),
                             'constant', constant_values=0)
         return cropped
-    
+
     @lru_cache
     def _get_tlt_f(self, pupil_size, fft_size):
         '''
@@ -492,7 +534,8 @@ class Lift(BaseProcessingObj):
         xx, yy = self.xp.meshgrid(self.xp.arange(-pupil_size // 2, pupil_size // 2), self.xp.arange(-pupil_size // 2, pupil_size // 2))
         tlt_g = xx + yy
         tlt_f = -2 * self.xp.pi * tlt_g / (2*fft_size)
-        return tlt_f
+        # Object precision, otherwise the whole LIFT iteration runs in complex128
+        return tlt_f.astype(self.dtype)
 
     def trigger(self):
 
@@ -500,9 +543,11 @@ class Lift(BaseProcessingObj):
         currentPhaseEstimate, coeffs, niters = self.phaseEstimation(psf) 
 
         coeffs_xp = self.to_xp(coeffs)
-        self.outputs['out_pistons'].value = coeffs_xp[:self.nPistons]
+        # In place: a new array at each step would fail the check of the arrays of an
+        # accelerated reader (e.g. an Integrator)
+        self.outputs['out_pistons'].set_value(coeffs_xp[:self.nPistons])
         self.outputs['out_pistons'].generation_time = self.current_time
-        self.outputs['out_zern'].value = coeffs_xp[self.nPistons:]
+        self.outputs['out_zern'].set_value(coeffs_xp[self.nPistons:])
         self.outputs['out_zern'].generation_time = self.current_time
 
         # self.outputs["phase_estimate"] = currentPhaseEstimate

@@ -3,9 +3,7 @@ specula.init(0)  # Default target device
 
 import time
 import unittest
-import sys
-import types
-from typing import Union, Dict, List
+from typing import Dict, List
 
 from specula import np
 from specula import cpuArray
@@ -13,7 +11,6 @@ from specula import cpuArray
 from specula.lib.utils import unravel_index_2d
 from specula.lib.utils import camelcase_to_snakecase
 from specula.lib.utils import get_type_hints
-from specula.lib.utils import remove_suffix
 from specula.lib.utils import make_tn
 from specula.lib.utils import resolve_type
 
@@ -123,12 +120,6 @@ class TestGetTypeHints(unittest.TestCase):
         # Default __init__ has no annotations
         self.assertEqual(hints, {})
 
-    def test_remove_suffix(self):
-        self.assertEqual(remove_suffix('parameter_ref', '_ref'), 'parameter')
-        self.assertEqual(remove_suffix('parameter_data', '_data'), 'parameter')
-        self.assertEqual(remove_suffix('parameter_object', '_object'), 'parameter')
-        self.assertEqual(remove_suffix('parameter', '_ref'), 'parameter')  # No suffix to remove
-
     def test_make_tn_format(self):
         """Output should match YYYYMMDD_HHMMSS format"""
         tn = make_tn()
@@ -158,7 +149,7 @@ class TestResolveType(unittest.TestCase):
         self.assertEqual(resolve_type(List[float]), float)
 
     def test_union_type(self):
-        self.assertEqual(resolve_type(Union[float, None]), float)
+        self.assertEqual(resolve_type(float | None), float)
 
     def test_plain_type(self):
         self.assertEqual(resolve_type(float), float)
@@ -175,12 +166,6 @@ class TestResolveType(unittest.TestCase):
         self.assertEqual(resolve_type(List[Recmat]), Recmat)
 
     def test_union_custom(self):
-        self.assertEqual(resolve_type(Union[Recmat, None]), Recmat)
-
-    # --- PEP 604 unions (Python 3.10+) ---
-
-    @unittest.skipIf(sys.version_info < (3, 10), "Requires Python 3.10+")
-    def test_pep604_union(self):
         self.assertEqual(resolve_type(Recmat | None), Recmat)
 
     # --- require_list flag ---
@@ -218,11 +203,11 @@ class TestResolveType(unittest.TestCase):
 
     def test_require_list_with_union_fails(self):
         with self.assertRaises(TypeError):
-            resolve_type(Union[int, None], require_list=True)
+            resolve_type(int | None, require_list=True)
 
     def test_require_dict_with_union_fails(self):
         with self.assertRaises(TypeError):
-            resolve_type(Union[int, None], require_dict=True)
+            resolve_type(int | None, require_dict=True)
 
     # --- Nested structures (documented behavior: one level only) ---
 
@@ -235,7 +220,23 @@ class TestResolveType(unittest.TestCase):
     # --- Union ordering behavior ---
 
     def test_union_multiple_types(self):
-        self.assertEqual(resolve_type(Union[int, float, None]), int)
+        self.assertEqual(resolve_type(int | float | None), int)
 
 
+class TestFrequencyGrids(unittest.TestCase):
+
+    def test_subpixel_shift_phase(self):
+        from specula.lib.utils import make_subpixel_shift_phase
+        phase = make_subpixel_shift_phase(8, np, np.complex64, shift_x=1.0)
+        # A shift of one pixel: exp(-2 pi i fx), fx = fftfreq(8)
+        np.testing.assert_allclose(phase[0], np.exp(-2j * np.pi * np.fft.fftfreq(8)), atol=1e-6)
+        np.testing.assert_allclose(np.abs(phase), 1, atol=1e-6)
+
+    def test_distance_grid(self):
+        from specula.lib.modal_base_generator import generate_distance_grid
+        grid = generate_distance_grid(6, xp=np)
+        self.assertEqual(grid.shape, (6, 6))
+        self.assertEqual(float(grid[0, 0]), 0.0)
+        self.assertAlmostEqual(float(grid[0, 3]), 3.0)
+        self.assertAlmostEqual(float(grid[0, 5]), 1.0)     # wrapped like the FFT frequencies
 

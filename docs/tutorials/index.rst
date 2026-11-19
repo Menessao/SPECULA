@@ -1,0 +1,30 @@
+.. _tutorials:
+
+Tutorials
+=========
+
+A comprehensive collection of tutorials to help you get started with SPECULA and explore its advanced features. Each tutorial includes practical examples and step-by-step instructions.
+
+The step response and control stability tutorials use only the generic objects of iteras, the simulation
+framework of SPECULA: they do not need any AO object, and run with the ``iteras`` command too.
+
+.. toctree::
+   :maxdepth: 1
+
+   Basic SCAO simulation tutorial <scao_basic_tutorial>
+   SCAO simulation tutorial <scao_tutorial>
+   Deformable Mirror actuator step response tutorial <step_response_tutorial>
+   Control stability and performance analysis tutorial <control_stability_analysis>
+   Field Analyser (deferred computation of PSF, modal analysis and phase cube) tutorial <field_analyser_tutorial>
+   EfReplay (exact replay of existing electric field / layer outputs) tutorial <ef_replay_tutorial>
+   Pyramid WFS calibration in partial correction regime tutorial <pwfs_calib_pc_tutorial>
+   Generators for vibrations, time histories and static aberrations tutorial <generators_tutorial>
+   Science camera images with a single-lenslet SH and a CCD tutorial <science_camera_tutorial>
+   Fresnel Propagation tutorial <fresnel_propagation_tutorial>
+   Bi-directional Optical Feeder Link tutorial <bi_directional_optical_feeder_link_tutorial>
+   Segmented Pupil and Soft-Limiter Tutorial <segmented_pupil_soft_limiter_tutorial>
+   Building an ELT-class segmented pupil and modal basis <elt_segmented_dm_tutorial>
+   Building an MMSE petal reconstructor from a KL modal basis <elt_petal_mmse_reconstructor_tutorial>
+   Closed-loop ELT SCAO with the Soft-Limiter <elt_petal_soft_limiter_closed_loop_tutorial>
+   Training a CNN on simulated WFS data (wavefront rms from SH slopes) <cnn_rms_tutorial>
+   Nonlinear modal reconstructor (per-mode saturation correction) <nonlinear_modalrec>

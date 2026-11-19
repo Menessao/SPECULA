@@ -13,14 +13,11 @@ from specula.data_objects.intmat import Intmat
 from specula.data_objects.recmat import Recmat
 from specula.data_objects.simul_params import SimulParams
 from specula.data_objects.source import Source
-from specula.data_objects.ifunc import IFunc
-from specula.data_objects.m2c import M2C
 from specula.base_value import BaseValue
 from specula.processing_objects.dm import DM
 from specula.processing_objects.sh import SH
 from specula.processing_objects.sh_slopec import ShSlopec
 from specula import cpuArray, np
-from typing import Union
 
 
 class ImShSynimGenerator(BaseProcessingObj):
@@ -71,9 +68,11 @@ class ImShSynimGenerator(BaseProcessingObj):
     Outputs
     -------
     out_intmat : Intmat
-        Generated interaction matrix
+        Generated interaction matrix, one column per DM input command element,
+        in slopes per DM command unit
     out_recmat : Recmat
-        Generated reconstruction matrix (if compute_rec=True)
+        Generated reconstruction matrix. With compute_rec=False it is an
+        empty (1x1) matrix that is never updated
     
     Examples
     --------
@@ -118,7 +117,7 @@ class ImShSynimGenerator(BaseProcessingObj):
                  mmse: bool = False,
                  r0: float = 0.15,
                  L0: float = 25.0,
-                 noise_cov: Union[float, np.ndarray, list] = None,
+                 noise_cov: float | np.ndarray | list = None,
                  target_device_idx: int = None,
                  precision: int = None):
 
@@ -168,20 +167,18 @@ class ImShSynimGenerator(BaseProcessingObj):
             precision=precision
         )
 
-        self.output_recmat = None
-        if compute_rec:
-            # Create empty recmat, will be sized in setup
-            self.output_recmat = Recmat(
-                recmat=self.xp.zeros((1, 1), dtype=self.dtype),
-                target_device_idx=target_device_idx,
-                precision=precision
-            )
+        # Created also with compute_rec=False, since all declared outputs must
+        # exist: then it stays an empty, never updated recmat. Sized in setup.
+        self.output_recmat = Recmat(
+            recmat=self.xp.zeros((1, 1), dtype=self.dtype),
+            target_device_idx=target_device_idx,
+            precision=precision
+        )
 
         # Setup connections
         self.inputs['in_misreg_params'] = InputValue(type=BaseValue, optional=True)
         self.outputs['out_intmat'] = self.output_intmat
-        if compute_rec:
-            self.outputs['out_recmat'] = self.output_recmat
+        self.outputs['out_recmat'] = self.output_recmat
 
     @classmethod
     def input_names(cls):
@@ -190,16 +187,17 @@ class ImShSynimGenerator(BaseProcessingObj):
     @classmethod
     def output_names(cls):
         return {'out_intmat': OutputDesc(Intmat, 'Computed interaction matrix from SynIM geometric model'),
-                'out_recmat': OutputDesc(Recmat, 'Computed reconstruction matrix (optional, if compute_rec=True)')}
+                'out_recmat': OutputDesc(Recmat, 'Computed reconstruction matrix (updated only if compute_rec=True)')}
 
     def setup(self):
         """Initialize and extract parameters"""
         super().setup()
 
-        # Extract DM parameters
-        ifunc_3d_full = cpuArray(self.dm.ifunc_obj.ifunc_2d_to_3d(normalize=True))
-        self.ifunc_3d = ifunc_3d_full
-        nmodes = ifunc_3d_full.shape[2]
+        # Basis of the DM input command (on the CPU, as SynIM needs it), not
+        # normalized: the IM is in slopes per DM command unit
+        modal_ifunc = self.dm.modal_ifunc(target_device_idx=-1, precision=self.precision)
+        self.ifunc_3d = modal_ifunc.ifunc_2d_to_3d(normalize=False)
+        nmodes = self.ifunc_3d.shape[2]
 
         self.pup_mask = cpuArray(self.dm.mask)
 
@@ -283,14 +281,15 @@ class ImShSynimGenerator(BaseProcessingObj):
         ----------
         misreg_params : array_like
             Mis-registration parameters:
+
             - If length 4: [shift_x, shift_y, rotation, magnification]
             - If length 6: [shift_x, shift_y, rotation, mag_global,
-                            anamorphosis_90, anamorphosis_45]
+              anamorphosis_90, anamorphosis_45]
         
         Returns
         -------
-        im : ndarray, shape (nslopes, nmodes)
-            Interaction matrix
+        im : ndarray
+            Interaction matrix, shape (nslopes, nmodes)
         """
         return compute_im_synim(
             misreg_params=misreg_params,
@@ -316,27 +315,14 @@ class ImShSynimGenerator(BaseProcessingObj):
             Reconstruction matrix
         """
         if self.mmse:
-            # MMSE reconstruction (same as RecCalibrator)
+            # MMSE reconstruction (same as RecCalibrator), with the
+            # turbulence prior on the same basis as the IM columns
             diameter = self.pup_diam_m
-            modal_base = IFunc(
-                ifunc=self.dm.ifunc_obj.ifunc,
-                mask=self.dm.mask,
-                target_device_idx=self.target_device_idx,
-                precision=self.precision
-            )
-
-            if self.dm.m2c is not None:
-                m2c = M2C(
-                    self.dm.m2c,
-                    target_device_idx=self.target_device_idx,
-                    precision=self.precision
-                )
-            else:
-                m2c = None
-
+            modal_base = self.dm.modal_ifunc(target_device_idx=self.target_device_idx,
+                                             precision=self.precision)
             rec = self.output_intmat.generate_rec_mmse(
                 self.r0, self.L0, diameter, modal_base,
-                self.noise_cov, nmodes=self.rec_nmodes, m2c=m2c
+                self.noise_cov, nmodes=self.rec_nmodes
             )
         else:
             # Simple pseudo-inverse

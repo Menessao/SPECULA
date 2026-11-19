@@ -11,15 +11,44 @@ def clamp_generic_less(x, c, y, xp):
     y[:] = xp.where(y < x, c, y)
 
 
-@fuse(kernel_name='clamp_generic_more')
-def clamp_generic_more(x, c, y, xp):
-    y[:] = xp.where(y > x, c, y)
-
-
 class PyrSlopec(Slopec):
     """
     Pyramid slopes computer processing object. 
     Computes pyramid slopes from pixel data using the 4 pupil intensities.
+
+    clamp_negative (see Slopec): the negative pixels are set to zero after
+    the subtraction of thr_value. With shlike, subapertures with zero or
+    negative flux (possible with clamp_negative=False) get zero slopes; with
+    the default global normalization, all the slopes are zero if the total
+    flux is zero or negative.
+
+    Parameters
+    ----------
+    pupdata : PupData
+        Indices of the pixels of the 4 pupils on the detector.
+    sn : Slopes, optional
+        Slope null (see Slopec).
+    shlike : bool, optional
+        Normalize the slopes of each subaperture by its own flux
+        A + B + C + D (Shack-Hartmann-like). Default False: all the slopes
+        are normalized by the mean flux per subaperture.
+    norm_factor : float [counts], optional
+        If set, constant normalization of the slopes instead of the flux.
+        Not compatible with shlike.
+    thr_value : float [counts], optional
+        Subtracted from all the pixels before the slopes. Default 0.
+    slopes_from_intensity : bool, optional
+        Output the intensities of the 4 pupils, normalized by the mean
+        intensity per pupil pixel, instead of the slopes. Not compatible
+        with shlike.
+    clamp_negative : bool, optional
+        Set the negative pixels to zero (see Slopec). Default True.
+    target_device_idx : int, optional
+        Device index (-1 for CPU). Default: global setting.
+    precision : int, optional
+        0 for double, 1 for single precision. Default: global setting.
+    **kwargs
+        Passed to Slopec (e.g. filtmat, interleave).
     """
 
     def __init__(self,
@@ -28,8 +57,8 @@ class PyrSlopec(Slopec):
                  shlike: bool=False,
                  norm_factor: float=None,
                  thr_value: float=0,
-                 clip_negative: bool = True,
                  slopes_from_intensity: bool=False,
+                 clamp_negative: bool=True,
                  target_device_idx: int=None,
                  precision: int=None,
                 **kwargs): # is this needed??
@@ -39,7 +68,8 @@ class PyrSlopec(Slopec):
         self.pupdata = pupdata
         self.slopes_from_intensity = slopes_from_intensity
 
-        super().__init__(sn=sn, target_device_idx=target_device_idx, precision=precision, **kwargs)
+        super().__init__(sn=sn, clamp_negative=clamp_negative,
+                         target_device_idx=target_device_idx, precision=precision, **kwargs)
 
         if shlike and slopes_from_intensity:
             raise ValueError('Both SHLIKE and SLOPES_FROM_INTENSITY parameters are set. Only one of these should be used.')
@@ -50,7 +80,7 @@ class PyrSlopec(Slopec):
         self.shlike = shlike
         self.norm_factor = norm_factor
         self.threshold = thr_value
-        self.clip_negative = clip_negative
+        self.flat_pixels = None
         self.slopes_from_intensity = slopes_from_intensity
         if self.slopes_from_intensity:
             self.pupdata.set_slopes_from_intensity(slopes_from_intensity)   # TODO we should not modify an external object,
@@ -64,23 +94,34 @@ class PyrSlopec(Slopec):
         self.pup_idx2 = pupil_idx(2)[pupil_idx(2) >= 0]   # Exclude -1 padding
         self.pup_idx3 = pupil_idx(3)[pupil_idx(3) >= 0]   # Exclude -1 padding
         self.outputs['out_pupdata'] = self.pupdata
-        # Total pupil flux per frame [e-], e.g. to scale the photon noise of a Kalman filter.
-        # TODO: per-pixel pupil intensities, for the full spatial photon-noise model.
-        self.outputs['out_flux'] = self.total_counts
-        
-        if self.slopes_from_intensity:
-            self.slopes.single_mask = self.pupdata.complete_mask()
-            self.slopes.resize(len(self.pup_idx))
-        else:
-            self.slopes.single_mask = self.pupdata.single_mask()
-        self.slopes.display_map = self.pupdata.display_map
+
+        # Local (single-subaperture-sized) index map, shared by all 4 pupils since
+        # they only differ by a translation to their own quadrant. Used to remap
+        # the raw A, B, C, D pixel vectors (same length/order as pup_idx0..3) into
+        # 2d subaperture images, reusing the same geometry as Slopes.get2d()
+        # instead of duplicating index bookkeeping.
+        self.subap_map_idx = self.pupdata.local_display_map()
+        subap_shape = self.pupdata.single_mask().shape
+        self.pixels_subap = BaseValue(
+            value=self.xp.zeros((4,) + subap_shape, dtype=self.dtype),
+            target_device_idx=self.target_device_idx, precision=precision)
+        self.pixels_subap_sum = BaseValue(
+            value=self.xp.zeros(subap_shape, dtype=self.dtype),
+            target_device_idx=self.target_device_idx, precision=precision)
+        self.outputs['out_pixels_subap'] = self.pixels_subap
+        self.outputs['out_pixels_subap_sum'] = self.pixels_subap_sum
+
+        self.slopes.layout = self.pupdata.slopes_layout(from_intensity=self.slopes_from_intensity)
 
     @classmethod
     def output_names(cls):
         result = super().output_names()
         result.update({
             'out_pupdata': OutputDesc(PupData, 'Pupil data with subaperture geometry'),
-            'out_flux': OutputDesc(BaseValue, 'Total pupil flux of the frame (optional)'),
+            'out_pixels_subap': OutputDesc(BaseValue, 'Raw (pre-threshold) pixel intensities of the '
+                                            '4 pupils (A, B, C, D), shape (4, size_x, size_y)'),
+            'out_pixels_subap_sum': OutputDesc(BaseValue, 'Sum of the raw intensities of the 4 pupils, '
+                                                'shape (size_x, size_y); useful e.g. for scintillation analysis'),
         })
         return result
 
@@ -89,33 +130,43 @@ class PyrSlopec(Slopec):
 
     def nslopes(self):
         if self.slopes_from_intensity:
-            return len(self.pupdata.pupil_idx(0)) + len(self.pupdata.pupil_idx(1)) + len(self.pupdata.pupil_idx(2)) + len(self.pupdata.pupil_idx(3))
+            return len(self.pupdata.pupil_idx(0)) * 4
         else:
             return len(self.pupdata.pupil_idx(0)) * 2
 
+    def can_accelerate(self):
+        # compute_slopes() only launches GPU work on arrays updated in place
+        return True
+
     def prepare_trigger(self, t):
         super().prepare_trigger(t)
-        self.flat_pixels = self.local_inputs['in_pixels'].pixels.flatten()
+        # Copied into the same array at each step (the CUDA graph of a accelerated
+        # object keeps using the array it was captured with)
+        pixels = self.local_inputs['in_pixels'].pixels
+        if self.flat_pixels is None or self.flat_pixels.shape != (pixels.size,) \
+                or self.flat_pixels.dtype != pixels.dtype:
+            self.flat_pixels = self.xp.empty(pixels.size, dtype=pixels.dtype)
+        self.flat_pixels[:] = pixels.ravel()
 
     def _compute_pyr_slopes(self, A, B, C, D, factor):
         sx = (A+B-C-D) * factor
         sy = (B+C-A-D) * factor
         return sx, sy
 
-    def trigger_code(self):
+    def compute_slopes(self):
 
         self.flat_pixels -= self.threshold
-        if self.clip_negative:
+
+        if self.clamp_negative:
             clamp_generic_less(0,0,self.flat_pixels, xp=self.xp)
         A = self.flat_pixels[self.pup_idx0].astype(self.xp.float32)
         B = self.flat_pixels[self.pup_idx1].astype(self.xp.float32)
         C = self.flat_pixels[self.pup_idx2].astype(self.xp.float32)
         D = self.flat_pixels[self.pup_idx3].astype(self.xp.float32)
 
-        min_pup_len = self.xp.min(self.xp.array([len(self.pup_idx0),len(self.pup_idx1),len(self.pup_idx2),len(self.pup_idx3)]))
         # Compute flux per subaperture (sum of all 4 pupils)
-        flux_per_subap = A[:min_pup_len] + B[:min_pup_len] + C[:min_pup_len] + D[:min_pup_len]
-        self.flux_per_subaperture_vector.value[:min_pup_len] = flux_per_subap
+        flux_per_subap = A + B + C + D
+        self.flux_per_subaperture_vector.value[:] = flux_per_subap
 
         # Compute total intensity
         self.total_intensity = self.xp.sum(flux_per_subap)
@@ -126,7 +177,7 @@ class PyrSlopec(Slopec):
         inv_factor = self.xp.zeros(1, dtype=self.dtype)
 
         if self.slopes_from_intensity:
-            inv_factor[0] = self.total_intensity /  self.nsubaps() #4 * self.nsubaps())
+            inv_factor[0] = self.total_intensity / (4 * self.nsubaps())
             factor = 1.0 / inv_factor[0]
             self.sx = factor * self.xp.concatenate([A, B])
             self.sy = factor * self.xp.concatenate([C, D])
@@ -139,28 +190,39 @@ class PyrSlopec(Slopec):
                 # sh_like: normalize per subaperture using flux_per_subap (vectorial normalization)
                 self.sx, self.sy = self._compute_pyr_slopes(A, B, C, D, 1.0)
                 # Avoid division by zero
+                # (zero slopes where the flux is zero or, without clamp, negative)
                 flux_clamped = self.xp.where(flux_per_subap > 0, flux_per_subap, 1.0)
-                self.sx /= flux_clamped
-                self.sy /= flux_clamped
+                self.sx = self.xp.where(flux_per_subap > 0, self.sx / flux_clamped, 0)
+                self.sy = self.xp.where(flux_per_subap > 0, self.sy / flux_clamped, 0)
             else:
-                # Default: global normalization
+                # Default: global normalization. Zero slopes if the total
+                # flux is not positive (possible with clamp_negative=False)
                 inv_factor[0] = self.total_intensity / self.nsubaps()
-                factor = 1.0 / inv_factor[0]
-                self.sx, self.sy = self._compute_pyr_slopes(A, B, C, D, factor)
-                clamp_generic_more(0, 1, inv_factor, xp=self.xp)
-                self.sx *= inv_factor[0]
-                self.sy *= inv_factor[0]
+                positive = inv_factor > 0
+                factor = self.xp.where(positive, 1.0 / self.xp.where(positive, inv_factor, 1), 0)
+                self.sx, self.sy = self._compute_pyr_slopes(A, B, C, D, factor[0])
 
-        if self.slopes_from_intensity:
-            meta_intensities = self.xp.concatenate((self.sx,self.sy))
-            self.slopes.xslopes = meta_intensities[:self.slopes.size//2]
-            self.slopes.yslopes = meta_intensities[self.slopes.size//2:self.slopes.size//2+len(self.slopes.yslopes)]
-        else:
-            self.slopes.xslopes = self.sx
-            self.slopes.yslopes = self.sy
+        self.slopes.xslopes = self.sx
+        self.slopes.yslopes = self.sy
+
+        # Raw (pre-threshold) 2d sub-images of the 4 pupils, and their sum, read
+        # from the input pixels (self.flat_pixels is a thresholded copy). Part of
+        # the CUDA graph of the object when it is accelerated.
+        raw_pixels = self.local_inputs['in_pixels'].pixels.ravel()
+        raw_A = raw_pixels[self.pup_idx0].astype(self.xp.float32)
+        raw_B = raw_pixels[self.pup_idx1].astype(self.xp.float32)
+        raw_C = raw_pixels[self.pup_idx2].astype(self.xp.float32)
+        raw_D = raw_pixels[self.pup_idx3].astype(self.xp.float32)
+        self.xp.put(self.pixels_subap.value[0], self.subap_map_idx, raw_A)
+        self.xp.put(self.pixels_subap.value[1], self.subap_map_idx, raw_B)
+        self.xp.put(self.pixels_subap.value[2], self.subap_map_idx, raw_C)
+        self.xp.put(self.pixels_subap.value[3], self.subap_map_idx, raw_D)
+        self.xp.put(self.pixels_subap_sum.value, self.subap_map_idx, raw_A + raw_B + raw_C + raw_D)
 
     def post_trigger(self):
         super().post_trigger()
 
         self.outputs['out_pupdata'].generation_time = self.current_time
-        self.total_counts.generation_time = self.current_time
+
+        self.outputs['out_pixels_subap'].generation_time = self.current_time
+        self.outputs['out_pixels_subap_sum'].generation_time = self.current_time

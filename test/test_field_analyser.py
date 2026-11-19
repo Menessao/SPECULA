@@ -3,6 +3,7 @@ import unittest
 import os
 import shutil
 import glob
+import tempfile
 import pickle
 import yaml
 import specula
@@ -464,13 +465,13 @@ class TestModalParamsHandling(unittest.TestCase):
     """Unit tests for the simplified modal_params pass-through to ModalAnalysis."""
 
     def setUp(self):
-        self.datadir = os.path.join(os.path.dirname(__file__), 'data')
+        # Local temp dir: on NFS, rmtree can fail on just-written files (stale directory cache)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.datadir = self._tmp.name
         self._created_tn_dirs = []
 
     def tearDown(self):
-        for tn_dir in self._created_tn_dirs:
-            if os.path.isdir(tn_dir):
-                shutil.rmtree(tn_dir)
+        self._tmp.cleanup()
 
     def _make_analyzer(self, tn_name, pixel_pupil=8):
         tn_dir = os.path.join(self.datadir, f'modal_unit_{tn_name}')
@@ -537,7 +538,7 @@ class TestModalParamsHandling(unittest.TestCase):
             result = analyzer._build_replay_params_modal(
                 {'ifunc_ref': 'my_ifunc', 'nmodes': 50}
             )
-        ma = result['modal_analysis_0']
+        ma = result['field_modal_analysis']
         self.assertEqual(ma['class'], 'ModalAnalysis')
         self.assertEqual(ma['ifunc_ref'], 'my_ifunc')
         self.assertEqual(ma['nmodes'], 50)
@@ -551,7 +552,7 @@ class TestModalParamsHandling(unittest.TestCase):
                           return_value=self._fake_replay_base()), \
              patch.object(analyzer, '_add_field_sources_to_params'):
             result = analyzer._build_replay_params_modal({'ifunc_inv_ref': 'my_inv'})
-        ma = result['modal_analysis_0']
+        ma = result['field_modal_analysis']
         self.assertEqual(ma['ifunc_inv_ref'], 'my_inv')
         self.assertNotIn('ifunc_ref', ma)
 
@@ -565,7 +566,7 @@ class TestModalParamsHandling(unittest.TestCase):
             result = analyzer._build_replay_params_modal(
                 {'type_str': 'zernike', 'nmodes': 30, 'npixels': 8, 'obsratio': 0.2}
             )
-        ma = result['modal_analysis_0']
+        ma = result['field_modal_analysis']
         self.assertEqual(ma['type_str'], 'zernike')
         self.assertEqual(ma['nmodes'], 30)
         self.assertEqual(ma['npixels'], 8)
@@ -689,7 +690,7 @@ class TestModalParamsHandling(unittest.TestCase):
                           return_value=self._fake_replay_base()), \
              patch.object(analyzer, '_add_field_sources_to_params'):
             result = analyzer._build_replay_params_modal({'ifunc': mock_ifunc})
-        ma = result['modal_analysis_0']
+        ma = result['field_modal_analysis']
         self.assertIs(ma['ifunc'], mock_ifunc)
         self.assertNotIn('type_str', ma)
 
@@ -706,19 +707,19 @@ class TestModalParamsHandling(unittest.TestCase):
              patch.object(analyzer, '_add_field_sources_to_params'):
             result = analyzer._build_replay_params_modal({'custom_key': 123})
 
-        ma = result['modal_analysis_0']
+        ma = result['field_modal_analysis']
         self.assertEqual(ma['custom_key'], 123)
 
 
 class TestReplayPrecisionHandling(unittest.TestCase):
     def setUp(self):
-        self.datadir = os.path.join(os.path.dirname(__file__), 'data')
+        # Local temp dir: on NFS, rmtree can fail on just-written files (stale directory cache)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.datadir = self._tmp.name
         self._created_tn_dirs = []
 
     def tearDown(self):
-        for tn_dir in self._created_tn_dirs:
-            if os.path.isdir(tn_dir):
-                shutil.rmtree(tn_dir)
+        self._tmp.cleanup()
 
     def _make_analyzer(self, tn_name):
         tn_dir = os.path.join(self.datadir, f'precision_unit_{tn_name}')
@@ -759,11 +760,11 @@ class TestReplayPrecisionHandling(unittest.TestCase):
     def test_ensure_replay_precision_calls_specula_init_on_mismatch(self):
         from unittest.mock import patch
         analyzer, _ = self._make_analyzer('ensure_precision_mismatch')
-        with patch('specula.field_analyser.specula.init') as mock_init, \
-             patch('specula.field_analyser.specula.global_precision', 0), \
-             patch('specula.field_analyser.specula.default_target_device_idx', -1), \
-             patch('specula.field_analyser.specula.process_rank', None), \
-             patch('specula.field_analyser.specula.process_comm', None):
+        with patch('specula.base_replay_analyser.iteras.init') as mock_init, \
+             patch('specula.base_replay_analyser.iteras.global_precision', 0), \
+             patch('specula.base_replay_analyser.iteras.default_target_device_idx', -1), \
+             patch('specula.base_replay_analyser.iteras.process_rank', None), \
+             patch('specula.base_replay_analyser.iteras.process_comm', None):
             analyzer._ensure_replay_precision(1)
 
         mock_init.assert_called_once_with(
@@ -776,8 +777,8 @@ class TestReplayPrecisionHandling(unittest.TestCase):
     def test_ensure_replay_precision_skips_if_already_matching(self):
         from unittest.mock import patch
         analyzer, _ = self._make_analyzer('ensure_precision_match')
-        with patch('specula.field_analyser.specula.init') as mock_init, \
-             patch('specula.field_analyser.specula.global_precision', 1):
+        with patch('specula.base_replay_analyser.iteras.init') as mock_init, \
+             patch('specula.base_replay_analyser.iteras.global_precision', 1):
             analyzer._ensure_replay_precision(1)
 
         mock_init.assert_not_called()
@@ -792,13 +793,13 @@ class TestReplayCoverageCheck(unittest.TestCase):
     opt-out available.
     """
     def setUp(self):
-        self.datadir = os.path.join(os.path.dirname(__file__), 'data')
+        # Local temp dir: on NFS, rmtree can fail on just-written files (stale directory cache)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.datadir = self._tmp.name
         self._created_tn_dirs = []
 
     def tearDown(self):
-        for tn_dir in self._created_tn_dirs:
-            if os.path.isdir(tn_dir):
-                shutil.rmtree(tn_dir, ignore_errors=True)
+        self._tmp.cleanup()
 
     def _make_analyzer_with_dropped_combinator(self, tn_name, **kwargs):
         tn_dir = os.path.join(self.datadir, f'coverage_unit_{tn_name}')
@@ -829,7 +830,7 @@ class TestReplayCoverageCheck(unittest.TestCase):
         self.assertEqual(analyzer.on_missing_downstream_consumers, 'error')
 
         with self.assertRaises(ValueError) as ctx:
-            analyzer._build_replay_params_from_datastore()
+            analyzer._build_replay_params_from_datastore('prop')
 
         self.assertIn('ef_combinator', str(ctx.exception))
 
@@ -837,7 +838,7 @@ class TestReplayCoverageCheck(unittest.TestCase):
         analyzer = self._make_analyzer_with_dropped_combinator(
             'ignore_mode', on_missing_downstream_consumers='ignore')
 
-        replay_params = analyzer._build_replay_params_from_datastore()
+        replay_params = analyzer._build_replay_params_from_datastore('prop')
 
         self.assertIn('prop', replay_params)
         self.assertNotIn('ef_combinator', replay_params)
@@ -868,7 +869,7 @@ class TestReplayCoverageCheck(unittest.TestCase):
             log_level=logging.INFO,
         )
 
-        replay_params = analyzer._build_replay_params_from_datastore()
+        replay_params = analyzer._build_replay_params_from_datastore('prop')
         self.assertIn('prop', replay_params)
         self.assertNotIn('sh', replay_params)
 
@@ -885,13 +886,13 @@ class TestReplayCoverageCheck(unittest.TestCase):
 
 class TestReplaySeedHandling(unittest.TestCase):
     def setUp(self):
-        self.datadir = os.path.join(os.path.dirname(__file__), 'data')
+        # Local temp dir: on NFS, rmtree can fail on just-written files (stale directory cache)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.datadir = self._tmp.name
         self._created_tn_dirs = []
 
     def tearDown(self):
-        for tn_dir in self._created_tn_dirs:
-            if os.path.isdir(tn_dir):
-                shutil.rmtree(tn_dir)
+        self._tmp.cleanup()
 
     def _make_analyzer(self, tn_name):
         tn_dir = os.path.join(self.datadir, f'seed_unit_{tn_name}')
@@ -953,13 +954,13 @@ class TestReplaySeedHandling(unittest.TestCase):
 
 class TestFieldAnalyserWeakSpots(unittest.TestCase):
     def setUp(self):
-        self.datadir = os.path.join(os.path.dirname(__file__), 'data')
+        # Local temp dir: on NFS, rmtree can fail on just-written files (stale directory cache)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.datadir = self._tmp.name
         self._created_tn_dirs = []
 
     def tearDown(self):
-        for tn_dir in self._created_tn_dirs:
-            if os.path.isdir(tn_dir):
-                shutil.rmtree(tn_dir, ignore_errors=True)
+        self._tmp.cleanup()
 
     def _make_analyzer(self, tn_name, polar_coordinates=None, display=False, params=None):
         if polar_coordinates is None:
@@ -1035,9 +1036,9 @@ class TestFieldAnalyserWeakSpots(unittest.TestCase):
         from unittest.mock import patch
         analyzer = self._make_analyzer('precision_target_none')
 
-        with patch('specula.field_analyser.specula.init') as mock_init, \
-             patch('specula.field_analyser.specula.global_precision', 0), \
-             patch('specula.field_analyser.specula.default_target_device_idx', None):
+        with patch('specula.base_replay_analyser.iteras.init') as mock_init, \
+             patch('specula.base_replay_analyser.iteras.global_precision', 0), \
+             patch('specula.base_replay_analyser.iteras.default_target_device_idx', None):
             analyzer._ensure_replay_precision(1)
 
         mock_init.assert_not_called()
@@ -1153,7 +1154,7 @@ class TestFieldAnalyserRunTiming(unittest.TestCase):
         output_dir = Path(self.datadir) / 'timing_output_pass'
         self._created_dirs.append(str(output_dir))
 
-        with patch('specula.field_analyser.Simul') as MockSimul:
+        with patch('specula.base_replay_analyser.Simul') as MockSimul:
             mock_instance = MockSimul.return_value
             analyzer._run_simulation_with_params({'dummy': 'params'}, output_dir)
 
@@ -1165,8 +1166,64 @@ class TestFieldAnalyserRunTiming(unittest.TestCase):
         output_dir = Path(self.datadir) / 'timing_output_none'
         self._created_dirs.append(str(output_dir))
 
-        with patch('specula.field_analyser.Simul') as MockSimul:
+        with patch('specula.base_replay_analyser.Simul') as MockSimul:
             mock_instance = MockSimul.return_value
             analyzer._run_simulation_with_params({'dummy': 'params'}, output_dir)
 
         mock_instance.run.assert_called_once_with(start_time=0.1, end_time=None)
+
+
+class TestDataFormat(unittest.TestCase):
+    """Format of the results saved and read by FieldAnalyser (see iteras.lib.storage)"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.datadir = self._tmp.name
+        tn_dir = os.path.join(self.datadir, 'format_tn')
+        os.makedirs(tn_dir)
+        params = {'main': {'class': 'SimulParams', 'pixel_pupil': 8, 'pixel_pitch': 1.0},
+                  'prop': {'class': 'AtmoPropagation'}}
+        with open(os.path.join(tn_dir, 'params.yml'), 'w', encoding='utf-8') as f:
+            yaml.dump(params, f)
+
+    def _make_analyzer(self, **kwargs):
+        return FieldAnalyser(data_dir=self.datadir, tracking_number='format_tn',
+                             polar_coordinates=np.array([[0.0, 0.0]]), **kwargs)
+
+    def test_default_and_explicit_formats(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('ITERAS_DATA_FORMAT', 'SPECULA_DATA_FORMAT')}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(self._make_analyzer().data_format, 'fits')
+            os.environ['SPECULA_DATA_FORMAT'] = 'npz'
+            self.assertEqual(self._make_analyzer().data_format, 'npz')
+        self.assertEqual(self._make_analyzer(data_format='hdf5').data_format, 'hdf5')
+        # The results are read back as data objects files: pickle is not supported
+        with self.assertRaisesRegex(ValueError, 'data_format'):
+            self._make_analyzer(data_format='pickle')
+
+    def test_datastore_format_and_results(self):
+        """The replay DataStore saves in data_format, and the results are read from those files"""
+        from iteras.lib import storage
+        analyzer = self._make_analyzer(data_format='npz')
+        modal_params = {'nmodes': 3, 'type_str': 'zernike'}
+        with patch.object(analyzer, '_build_replay_params_from_datastore',
+                          return_value={'main': {'pixel_pupil': 8}, 'prop': {'class': 'AtmoPropagation'}}), \
+             patch.object(analyzer, '_add_field_sources_to_params'):
+            params = analyzer._build_replay_params_modal(modal_params)
+        stores = [p for p in params.values() if isinstance(p, dict) and p.get('class') == 'DataStore']
+        self.assertTrue(stores)
+        self.assertTrue(all(p['data_format'] == 'npz' for p in stores))
+
+        # A file as saved by the DataStore: data and times
+        coeffs = np.arange(6, dtype=np.float32).reshape(2, 3)
+        name = analyzer._get_modal_filename(analyzer.sources[0], modal_params)
+        os.makedirs(analyzer.modal_output_dir, exist_ok=True)
+        path = analyzer._output_path(analyzer.modal_output_dir, name)
+        self.assertEqual(path.suffix, '.npz')
+        storage.write_object(path, {}, {'data': coeffs, 'times': np.array([0, 1], dtype=np.uint64)},
+                             layout='primary')
+        results = analyzer._load_modal_results(modal_params)
+        np.testing.assert_array_equal(results['modal_coeffs'][0], coeffs)
+        np.testing.assert_allclose(results['residual_average'][0], coeffs.mean(axis=0))

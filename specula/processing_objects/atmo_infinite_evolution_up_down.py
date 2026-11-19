@@ -1,7 +1,6 @@
 from specula import cpuArray, np
 from specula.processing_objects.atmo_infinite_evolution import AtmoInfiniteEvolution
-from specula.base_processing_obj import InputDesc, OutputDesc
-from specula.base_value import BaseValue
+from specula.base_processing_obj import OutputDesc
 from specula.data_objects.layer import Layer
 from specula.data_objects.simul_params import SimulParams
 
@@ -107,11 +106,9 @@ class AtmoInfiniteEvolutionUpDown(AtmoInfiniteEvolution):
         self.outputs['layer_list_down'] = self.layer_list_down
         self.outputs['layer_list_up'] = self.layer_list_up
 
-        # Separate tracking for up
-        self.last_position_up = np.zeros(self.n_infinite_phasescreens, dtype=self.dtype)
-        self.last_effective_position_up = np.zeros(
-            self.n_infinite_phasescreens, dtype=self.dtype
-        )
+        # Separate tracking for up, in double precision (see AtmoInfiniteEvolution)
+        self.last_position_up = np.zeros(self.n_infinite_phasescreens, dtype=np.float64)
+        self.last_effective_position_up = np.zeros(self.n_infinite_phasescreens, dtype=np.float64)
         self.acc_rows_up = np.zeros(self.n_infinite_phasescreens)
         self.acc_cols_up = np.zeros(self.n_infinite_phasescreens)
 

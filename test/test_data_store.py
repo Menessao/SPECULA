@@ -15,7 +15,9 @@ from unittest.mock import patch
 from specula.connections import InputValue
 from specula.loop_control import LoopControl
 from specula.base_data_obj import BaseDataObj
+from specula import cp
 from specula.base_value import BaseValue
+from specula.base_processing_obj import BaseProcessingObj
 from specula.processing_objects.data_store import DataStore
 from test.specula_testlib import cpu_and_gpu
 
@@ -76,6 +78,132 @@ class TestDataStore(unittest.TestCase):
         self.assertEqual(list(store.storage['slow'].keys()), [0, 2, 4])
         np.testing.assert_array_equal(self._stored_scalars(store, 'fast'), np.array([10, 12, 14]))
         np.testing.assert_array_equal(self._stored_scalars(store, 'slow'), np.array([20, 22, 24]))
+
+    @unittest.skipIf(cp is None, 'Cupy not found')
+    def test_copy_ordered_with_the_next_write_of_the_producer(self):
+        '''
+        The output of an object working on a blocking stream, copied
+        asynchronously, is not overwritten by the next step of the producer before
+        the copy is done (see the extension API on streams)
+        '''
+        class Producer(BaseProcessingObj):
+            def __init__(self):
+                super().__init__(target_device_idx=0)
+                self.out = BaseValue(value=self.xp.zeros(16 * 1024 * 1024, dtype=self.xp.float32),
+                                     target_device_idx=0)
+                self.outputs['out'] = self.out
+
+        producer = Producer()
+        producer.stream = cp.cuda.Stream(non_blocking=False)
+        store = DataStore(store_dir=self.tmp_dir, create_tn=False, target_device_idx=0)
+        store.inputs['v'] = InputValue(type=BaseValue)
+        store.inputs['v'].set(producer.out)
+        store.setup()
+        for t in range(4):
+            with producer.stream:
+                producer.out.value.fill(t)
+                for _ in range(3):
+                    producer.out.value *= 1.0       # GPU work, so that the next write takes time
+            # the default stream waits for the producer on the GPU, the host does not wait
+            cp.cuda.get_current_stream().wait_event(producer.stream.record())
+            producer.out.generation_time = t
+            store.check_ready(t)
+            store.trigger()
+            store.post_trigger()
+            with producer.stream:
+                producer.out.value.fill(-1)         # the next step of the producer
+        for t, v in store.storage['v'].items():
+            np.testing.assert_array_equal(v[::4096], t)
+
+    @unittest.skipIf(cp is None, 'Cupy not found')
+    def test_output_set_in_finalize_on_another_device(self):
+        '''
+        An output that its producer, on a GPU, sets in finalize() (like the
+        integrated PSF) is stored by a DataStore on the CPU
+        '''
+        class Producer(BaseProcessingObj):
+            def __init__(self):
+                super().__init__(target_device_idx=0)
+                self.out = BaseValue(value=self.xp.zeros(3, dtype=self.dtype), target_device_idx=0)
+                self.outputs['out'] = self.out
+
+            def post_trigger(self):
+                super().post_trigger()
+                self.out.value += 1
+                self.out.generation_time = self.current_time
+
+            def finalize(self):
+                # Same time as the last step, as PSF does
+                self.out.value *= 100
+                self.out.generation_time = self.current_time
+
+        producer = Producer()
+        store = DataStore(store_dir=self.tmp_dir, create_tn=False, target_device_idx=-1)
+        store.inputs['v'] = InputValue(type=BaseValue)
+        store.inputs['v'].set(producer.outputs['out'])
+        loop = LoopControl()
+        loop.add(producer, 0)
+        loop.add(store, 1)
+        loop.start(run_time=3e-3, dt=1e-3)
+        for _ in range(3):
+            loop.iter()
+        with patch.object(DataStore, 'save'):
+            loop.finish()
+        values = list(store.storage['v'].values())
+        np.testing.assert_array_equal(values[-1], [300, 300, 300])
+        self.assertEqual(len(values), 3)
+
+    def test_values_stored_in_blocks(self):
+        store = DataStore(store_dir=self.tmp_dir, create_tn=False, target_device_idx=-1)
+        store.BLOCK_BYTES = 2 * 3 * 8           # two values of 3 doubles per block
+        values = [store._host_copy('a', np.full(3, float(i))) for i in range(3)]
+        for i, v in enumerate(values):
+            np.testing.assert_array_equal(v, i)
+        self.assertIs(values[0].base, values[1].base)          # the same block
+        self.assertIsNot(values[1].base, values[2].base)       # full: a new one
+        scalar = store._host_copy('s', np.array(4.0))
+        self.assertEqual(scalar.shape, ())
+        self.assertEqual(float(scalar), 4.0)
+        other = store._host_copy('a', np.zeros(5))              # another shape: a new block
+        self.assertEqual(other.shape, (5,))
+
+    def test_unsupported_format(self):
+        store = DataStore(store_dir=self.tmp_dir, create_tn=False, target_device_idx=-1)
+        store.tn_dir = self.tmp_dir
+        store.data_format = 'unknown'
+        with patch.object(DataStore, 'save_params'):
+            with self.assertRaisesRegex(TypeError, 'unsupported file format'):
+                store.save()
+
+    @cpu_and_gpu
+    def test_data_store_values_overwritten_after_trigger(self, target_device_idx, xp):
+        '''
+        The values stored are those of each step, even if the input array is
+        changed in place right after the trigger (GPU values are copied
+        asynchronously)
+        '''
+        store = DataStore(store_dir=self.tmp_dir, create_tn=False)
+        store.target_device_idx = target_device_idx
+        value = self._make_input_value(target_device_idx)
+        value.set_value(xp.zeros(1000, dtype=xp.float32))
+        self._connect_input(store, 'v', value)
+        store.setup()
+
+        for t in range(5):
+            value.value[:] = 10 + t
+            value.generation_time = t
+            store.check_ready(t)
+            store.trigger()
+            store.post_trigger()
+            value.value[:] = -1
+            # At most the copies of one step are pending
+            self.assertLessEqual(len(store._pending_copies), 1)
+
+        stored = store.storage['v']
+        self.assertEqual(list(stored.keys()), [0, 1, 2, 3, 4])
+        for t, v in stored.items():
+            self.assertIsInstance(v, np.ndarray)
+            np.testing.assert_array_equal(v, np.full(1000, 10 + t, dtype=np.float32))
 
     @cpu_and_gpu
     def test_data_store_per_input_downsampling(self, target_device_idx, xp):
@@ -335,6 +463,38 @@ class TestDataStore(unittest.TestCase):
             expected_path = os.path.join("/tmp", "20250101_120000") + "_42"
             self.assertEqual(ds.tn_dir, expected_path)
             mock_makedirs.assert_called_once_with(expected_path)
+
+    def test_create_tn_folder_skips_existing_names(self):
+        """Existing TN folders are skipped: TN, TN.0 taken -> TN.1."""
+        with patch("time.strftime", return_value="20250101_120000"):
+            ds = DataStore(store_dir=self.tmp_dir, data_format="fits")
+            base = os.path.join(self.tmp_dir, "20250101_120000")
+            os.makedirs(base)
+            os.makedirs(base + ".0")
+            ds.create_TN_folder()
+            self.assertEqual(ds.tn_dir, base + ".1")
+            self.assertTrue(os.path.isdir(base + ".1"))
+
+    def test_create_tn_folder_race_with_another_process(self):
+        """Another process creates the same TN between the name choice and mkdir (simulated by a
+        makedirs that creates the folder just before the real call): the next free name must be
+        used, not an error."""
+        base = os.path.join(self.tmp_dir, "20250101_120000")
+        real_makedirs = os.makedirs
+
+        # Do not patch os.path.exists: os.makedirs uses it internally to walk up the parents,
+        # and on Windows that walk ends in a PermissionError on the drive root
+        def racing_makedirs(path, *args, **kwargs):
+            if path == base and not os.path.isdir(base):
+                real_makedirs(base)  # the other process wins the race
+            return real_makedirs(path, *args, **kwargs)
+
+        with patch("time.strftime", return_value="20250101_120000"), \
+             patch("os.makedirs", side_effect=racing_makedirs):
+            ds = DataStore(store_dir=self.tmp_dir, data_format="fits")
+            ds.create_TN_folder()
+        self.assertEqual(ds.tn_dir, base + ".0")
+        self.assertTrue(os.path.isdir(base + ".0"))
 
     def test_finalize_does_not_save_when_split_tn_set(self):
         """

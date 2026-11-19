@@ -16,6 +16,7 @@ from specula.data_objects.simul_params import SimulParams
 from specula.processing_objects.dm import DM
 from specula.processing_objects.rec_calibrator import RecCalibrator
 
+from specula import cpuArray
 from test.specula_testlib import cpu_and_gpu
 
 
@@ -43,7 +44,6 @@ class TestRecCalibrator(unittest.TestCase):
 
         self.assertEqual(calibrator.nmodes, nmodes)
         self.assertEqual(calibrator.data_dir, self.test_dir)
-        self.assertEqual(calibrator.first_mode, 0)
         self.assertIsNone(calibrator.pupdata_tag)
         self.assertFalse(calibrator.overwrite)
         self.assertEqual(calibrator.rec_path, os.path.join(self.test_dir, f'{rec_tag}.fits'))
@@ -52,7 +52,6 @@ class TestRecCalibrator(unittest.TestCase):
     def test_initialization_with_custom_parameters(self):
         """Test RecCalibrator initialization with custom parameters"""
         nmodes = 20
-        first_mode = 5
         pupdata_tag = 'test_pupdata'
         overwrite = True
         target_device_idx = -1  # Use CPU to avoid GPU dependency
@@ -62,7 +61,6 @@ class TestRecCalibrator(unittest.TestCase):
             nmodes=nmodes,
             data_dir=self.test_dir,
             rec_tag='test_rec',
-            first_mode=first_mode,
             pupdata_tag=pupdata_tag,
             overwrite=overwrite,
             target_device_idx=target_device_idx,
@@ -70,7 +68,6 @@ class TestRecCalibrator(unittest.TestCase):
         )
 
         self.assertEqual(calibrator.nmodes, nmodes)
-        self.assertEqual(calibrator.first_mode, first_mode)
         self.assertEqual(calibrator.pupdata_tag, pupdata_tag)
         self.assertTrue(calibrator.overwrite)
         self.assertEqual(calibrator.target_device_idx, target_device_idx)
@@ -187,41 +184,17 @@ class TestRecCalibrator(unittest.TestCase):
         # Verify directory was created
         self.assertTrue(os.path.exists(self.test_dir))
 
-    @cpu_and_gpu
-    def test_finalize_with_first_mode(self, target_device_idx, xp):
-        """Test that finalize method handles first_mode correctly"""
-        nmodes = 8
-        first_mode = 3
-        rec_tag = 'test_first_mode'
+    def test_first_mode_nonzero_raises(self):
+        """first_mode is deprecated: a value other than 0 raises a ValueError"""
+        with self.assertRaises(ValueError):
+            RecCalibrator(nmodes=8, data_dir=self.test_dir, rec_tag='test_first_mode',
+                          first_mode=3, overwrite=True)
 
-        # Create a mock Intmat object
-        mock_intmat = MagicMock(spec=Intmat)
-        mock_intmat.target_device_idx = target_device_idx
-
-        # Create mock REC object
-        mock_rec = MagicMock()
-        mock_intmat.generate_rec.return_value = mock_rec
-
-        # Create calibrator with first_mode
-        calibrator = RecCalibrator(
-            nmodes=nmodes,
-            data_dir=self.test_dir,
-            rec_tag=rec_tag,
-            first_mode=first_mode,
-            overwrite=True
-        )
-
-        # Set up the input
-        calibrator.local_inputs['in_intmat'] = mock_intmat
-
-        # Call finalize
-        calibrator.finalize()
-
-        # Verify generate_rec was called with correct parameters
-        mock_intmat.generate_rec.assert_called_once_with(nmodes)
-
-        # Note: The current implementation doesn't use first_mode in generate_rec
-        # This test documents the current behavior
+    def test_first_mode_zero_warns(self):
+        """first_mode=0 is accepted with a FutureWarning"""
+        with self.assertWarns(FutureWarning):
+            RecCalibrator(nmodes=8, data_dir=self.test_dir, rec_tag='test_first_mode',
+                          first_mode=0, overwrite=True)
 
     def test_input_connection_setup(self):
         """Test that input connections are properly set up"""
@@ -649,40 +622,10 @@ class TestRecCalibratorMMSE(unittest.TestCase):
         rec = Recmat.restore(calibrator.rec_path, target_device_idx=target_device_idx)
         self.assertEqual(rec.recmat.shape, (nmodes_subset, self.nslopes))
 
-    @cpu_and_gpu
-    def test_mmse_zernike_first_mode_parameter(self, target_device_idx, xp):
-        """Test MMSE reconstruction with first_mode parameter (skip piston)"""
-        noise_cov = 0.1
-        first_mode = 2  # Skip piston and tip
-        nmodes_to_use = 5
-
-        intmat = Intmat(self.test_intmat_data, target_device_idx=target_device_idx)
-
-        calibrator = RecCalibrator(
-            nmodes=nmodes_to_use,
-            data_dir=self.test_dir,
-            rec_tag='test_mmse_zernike_first_mode',
-            first_mode=first_mode,
-            mmse=True,
-            r0=self.r0,
-            L0=self.L0,
-            dm=self.dm,
-            noise_cov=noise_cov,
-            overwrite=True,
-            target_device_idx=target_device_idx
-        )
-
-        calibrator.local_inputs['in_intmat'] = intmat
-        calibrator.finalize()
-
-        # Verify reconstruction matrix has correct shape
-        rec = Recmat.restore(calibrator.rec_path, target_device_idx=target_device_idx)
-        self.assertEqual(rec.recmat.shape, (nmodes_to_use, self.nslopes))
-
     def test_mmse_zernike_missing_modal_base_raises(self):
-        """Test that missing modal_base raises error for MMSE with Zernike"""
-        with self.assertRaises(AttributeError):
-            calibrator = RecCalibrator(
+        """Test that a missing dm raises ValueError at init for MMSE, before the calibration"""
+        with self.assertRaises(ValueError):
+            RecCalibrator(
                 nmodes=self.nmodes,
                 data_dir=self.test_dir,
                 rec_tag='test_error',
@@ -692,10 +635,6 @@ class TestRecCalibratorMMSE(unittest.TestCase):
                 dm=None,  # Missing!
                 noise_cov=0.1
             )
-
-            intmat = Intmat(self.test_intmat_data, target_device_idx=-1)
-            calibrator.local_inputs['in_intmat'] = intmat
-            calibrator.finalize()
 
     @cpu_and_gpu
     def test_mmse_zernike_low_order_vs_high_order(self, target_device_idx, xp):
@@ -748,3 +687,89 @@ class TestRecCalibratorMMSE(unittest.TestCase):
 
         self.assertEqual(rec_low.recmat.shape, (4, self.nslopes))
         self.assertEqual(rec_all.recmat.shape, (self.nmodes, self.nslopes))
+
+
+class TestRecCalibratorMMSESelection(unittest.TestCase):
+    """The MMSE prior must be computed on the modes of the DM input command
+    (after start_mode/idx_modes)."""
+
+    npix = 16
+    n_ifunc = 6
+    n_m2c = 5
+    r0 = 0.15
+    L0 = 25.0
+    noise = 100.0  # large enough for the turbulence prior to matter in the MMSE solution
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.simul_params = SimulParams(pixel_pupil=self.npix, pixel_pitch=0.5)
+        rng = np.random.RandomState(7)
+        self.m2c_arr = rng.randn(self.n_ifunc, self.n_m2c).astype(np.float32)
+        self.intmat_arr = rng.randn(30, self.n_ifunc).astype(np.float32)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _ifunc(self, target_device_idx):
+        return IFunc(type_str='zernike', npixels=self.npix, nmodes=self.n_ifunc,
+                     target_device_idx=target_device_idx)
+
+    def _rec(self, dm, ncols, target_device_idx):
+        """Recmat produced by RecCalibrator for a seeded intmat with ncols columns"""
+        intmat = Intmat(self.intmat_arr[:, :ncols].copy(), target_device_idx=target_device_idx)
+        calibrator = RecCalibrator(nmodes=ncols, data_dir=self.test_dir, rec_tag='rec',
+                                   mmse=True, r0=self.r0, L0=self.L0,
+                                   dm=dm, noise_cov=self.noise, overwrite=True,
+                                   target_device_idx=target_device_idx)
+        calibrator.local_inputs['in_intmat'] = intmat
+        calibrator.finalize()
+        rec = Recmat.restore(calibrator.rec_path, target_device_idx=target_device_idx)
+        return cpuArray(rec.recmat), intmat
+
+    def _expected(self, intmat, dm, ifunc_arr, m2c_arr, ncols, target_device_idx):
+        """Recmat from generate_rec_mmse called directly with an explicit basis"""
+        if m2c_arr is not None:
+            ifunc_arr = m2c_arr.T @ ifunc_arr
+        modal_base = IFunc(ifunc=ifunc_arr, mask=dm.mask, target_device_idx=target_device_idx)
+        diameter = dm.pixel_pitch * dm.pixel_pupil
+        rec = intmat.generate_rec_mmse(self.r0, self.L0, diameter, modal_base, self.noise,
+                                       nmodes=ncols)
+        return cpuArray(rec.recmat)
+
+    @cpu_and_gpu
+    def test_mmse_prior_with_m2c_and_start_mode(self, target_device_idx, xp):
+        """With m2c and start_mode=s the prior is on m2c[:, s:], not on m2c[:, :n]"""
+        start_mode = 1
+        ifunc = self._ifunc(target_device_idx)
+        ifunc_arr = cpuArray(ifunc.influence_function)
+        dm = DM(self.simul_params, height=0, ifunc=ifunc,
+                m2c=M2C(self.m2c_arr, target_device_idx=target_device_idx),
+                start_mode=start_mode, target_device_idx=target_device_idx)
+        ncols = dm.nmodes
+        self.assertEqual(ncols, self.n_m2c - start_mode)
+
+        got, intmat = self._rec(dm, ncols, target_device_idx)
+        want = self._expected(intmat, dm, ifunc_arr, self.m2c_arr[:, start_mode:], ncols,
+                              target_device_idx)
+        old = self._expected(intmat, dm, ifunc_arr, self.m2c_arr, ncols, target_device_idx)
+
+        np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-6)
+        self.assertFalse(np.allclose(got, old, rtol=1e-3, atol=1e-6))
+
+    @cpu_and_gpu
+    def test_mmse_prior_without_m2c_and_idx_modes(self, target_device_idx, xp):
+        """Without m2c and with idx_modes the prior is on the selected ifunc rows"""
+        idx_modes = [1, 3, 4]
+        ifunc = self._ifunc(target_device_idx)
+        ifunc_arr = cpuArray(ifunc.influence_function)
+        dm = DM(self.simul_params, height=0, ifunc=ifunc, idx_modes=idx_modes,
+                target_device_idx=target_device_idx)
+        ncols = len(idx_modes)
+
+        got, intmat = self._rec(dm, ncols, target_device_idx)
+        want = self._expected(intmat, dm, ifunc_arr[idx_modes], None, ncols, target_device_idx)
+        old = self._expected(intmat, dm, ifunc_arr, None, ncols, target_device_idx)
+
+        np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-6)
+        self.assertFalse(np.allclose(got, old, rtol=1e-3, atol=1e-6))
+

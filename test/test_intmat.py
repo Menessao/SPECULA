@@ -3,11 +3,13 @@ specula.init(0)  # Default target device
 
 import os
 import unittest
+from unittest.mock import patch
 
 from specula import np
 from specula import cpuArray
 from specula.data_objects.intmat import Intmat
 from specula.data_objects.recmat import Recmat
+from specula.lib.slopes_layout import SlopesLayout
 from test.specula_testlib import cpu_and_gpu
 
 class TestIntmat(unittest.TestCase):
@@ -35,6 +37,44 @@ class TestIntmat(unittest.TestCase):
         im2 = Intmat.restore(self.filename)
 
         np.testing.assert_array_equal(cpuArray(im.intmat), cpuArray(im2.intmat))
+        assert im2.slopes_layout is None
+
+    @cpu_and_gpu
+    def test_save_restore_slopes_layout(self, target_device_idx, xp):
+        '''The slopes layout is saved and restored with the Intmat'''
+        try:
+            os.unlink(self.filename)
+        except FileNotFoundError:
+            pass
+
+        layout = SlopesLayout((3, 4), [1, 5, 6], SlopesLayout.XY)
+        im = Intmat(xp.arange(12).reshape((6, 2)), slopes_layout=layout,
+                    target_device_idx=target_device_idx)
+        im.save(self.filename)
+        im2 = Intmat.restore(self.filename)
+
+        assert im2.slopes_layout == layout
+        np.testing.assert_array_equal(cpuArray(im.intmat), cpuArray(im2.intmat))
+
+    @cpu_and_gpu
+    def test_init_casts_to_precision(self, target_device_idx, xp):
+        """Intmat data must follow the object precision, not the input dtype"""
+        data64 = xp.arange(6, dtype=xp.float64).reshape((3, 2))
+        im = Intmat(data64, target_device_idx=target_device_idx, precision=1)
+        assert im.intmat.dtype == xp.float32
+        data32 = xp.arange(6, dtype=xp.float32).reshape((3, 2))
+        im = Intmat(data32, target_device_idx=target_device_idx, precision=0)
+        assert im.intmat.dtype == xp.float64
+
+    @cpu_and_gpu
+    def test_restore_float64_file_with_single_precision(self, target_device_idx, xp):
+        """A float64 intmat file restored with single global precision must be float32"""
+        im = Intmat(np.arange(6, dtype=np.float64).reshape((3, 2)), target_device_idx=-1, precision=0)
+        im.save(self.filename, overwrite=True)
+        with patch("iteras.global_precision", 1):
+            im2 = Intmat.restore(self.filename, target_device_idx=target_device_idx)
+        assert im2.intmat.dtype == xp.float32
+        np.testing.assert_array_equal(cpuArray(im2.intmat), cpuArray(im.intmat))
 
     def tearDown(self):
         try:
@@ -158,6 +198,16 @@ class TestIntmat(unittest.TestCase):
         assert xp.allclose(rec.recmat, xp.linalg.pinv(mat))
 
     @cpu_and_gpu
+    def test_generate_rec_cut_modes(self, target_device_idx, xp):
+        mat = xp.diag(xp.array([5.0, 4.0, 3.0, 2.0, 1.0]))
+        intmat = Intmat(mat, target_device_idx=target_device_idx)
+        rec = intmat.generate_rec(cut_modes=2)
+        expected = xp.diag(xp.array([1 / 5.0, 1 / 4.0, 1 / 3.0, 0.0, 0.0]))
+        assert xp.allclose(rec.recmat, expected)
+        with self.assertRaises(ValueError):
+            intmat.generate_rec(cut_modes=5)
+
+    @cpu_and_gpu
     def test_generate_rec_and_mmse(self, target_device_idx, xp):
         mat = xp.eye(5)
         intmat = Intmat(mat, target_device_idx=target_device_idx)
@@ -167,7 +217,7 @@ class TestIntmat(unittest.TestCase):
         from specula.data_objects.ifunc import IFunc
         modal_base = IFunc(type_str='zernike', nmodes=mat.shape[1], npixels=64, target_device_idx=target_device_idx)
         c_noise = 1
-        rec = intmat.generate_rec_mmse(r0, L0, diameter, modal_base, c_noise, nmodes=None, m2c=None)
+        rec = intmat.generate_rec_mmse(r0, L0, diameter, modal_base, c_noise, nmodes=None)
         assert isinstance(rec, Recmat)
 
 

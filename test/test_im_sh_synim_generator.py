@@ -6,8 +6,10 @@ specula.init(0)  # Default target device
 from specula.data_objects.simul_params import SimulParams
 from specula.data_objects.source import Source
 from specula.data_objects.ifunc import IFunc
+from specula.data_objects.m2c import M2C
 from specula.data_objects.electric_field import ElectricField
 from specula.data_objects.subap_data import SubapData
+from specula.data_objects.recmat import Recmat
 from specula.base_value import BaseValue
 from specula.processing_objects.dm import DM
 from specula.processing_objects.sh import SH
@@ -123,7 +125,7 @@ def generate_reference_im_synim(simul_params, source, dm, wfs, slopec,
     pup_mask = dm.mask
 
     # Get 3D influence functions
-    ifunc_3d = dm.ifunc_obj.ifunc_2d_to_3d(normalize=True)
+    ifunc_3d = dm.ifunc_obj.ifunc_2d_to_3d(normalize=False)
 
     # Get valid subapertures from slopec
     subapdata = slopec.subapdata
@@ -215,7 +217,9 @@ class TestImShSynimGenerator(unittest.TestCase):
             print(f"Reference IM shape: {im_ref.shape}")
             print(f"Reference IM RMS: {np.sqrt(np.mean(im_ref**2)):.3e}")
 
-        # Compare
+        # Compare (im_ref may live on GPU regardless of `xp`, since SynIM
+        # own backend is bound once at import time - see synim_utils.py)
+        im_ref = cpuArray(im_ref)
         im_diff = im_generated - im_ref
         rms_diff = np.sqrt(np.mean(im_diff**2))
         rel_diff = rms_diff / np.sqrt(np.mean(im_ref**2))
@@ -224,8 +228,10 @@ class TestImShSynimGenerator(unittest.TestCase):
             print(f"\nDifference RMS: {rms_diff:.3e}")
             print(f"Relative difference: {rel_diff*100:.3f}%")
 
-        # Should be essentially identical
-        self.assertLess(rel_diff, 1e-10, "Generated IM should match reference")
+        # trigger_code() casts the IM to self.dtype (float32 for precision=1),
+        # so it cannot match a float64 reference to 1e-10; float32 round-trip
+        # error is inherently ~1e-7.
+        self.assertLess(rel_diff, 1e-6, "Generated IM should match reference")
 
     @cpu_and_gpu
     def test_im_generator_with_misreg(self, target_device_idx, xp):
@@ -289,7 +295,9 @@ class TestImShSynimGenerator(unittest.TestCase):
                                             shift_x, shift_y, rotation, magnification,
                                             xp=xp)
 
-        # Compare
+        # Compare (im_ref may live on GPU regardless of `xp`, since SynIM
+        # own backend is bound once at import time - see synim_utils.py)
+        im_ref = cpuArray(im_ref)
         im_diff = im_generated - im_ref
         rms_diff = np.sqrt(np.mean(im_diff**2))
         rel_diff = rms_diff / np.sqrt(np.mean(im_ref**2))
@@ -301,7 +309,7 @@ class TestImShSynimGenerator(unittest.TestCase):
             print(f"Relative difference: {rel_diff*100:.3f}%")
 
         # Should match
-        self.assertLess(rel_diff, 1e-7,
+        self.assertLess(rel_diff, 1e-6,
                         "Generated IM should match reference with mis-registration")
 
     @cpu_and_gpu
@@ -420,7 +428,10 @@ class TestImShSynimGenerator(unittest.TestCase):
                 xp=xp
             )
 
-            # Compare
+            # Compare (im_ref may live on GPU regardless of `xp`, since SynIM
+            # own backend is bound once at import time - see synim_utils.py)
+            im_generated = cpuArray(im_generated)
+            im_ref = cpuArray(im_ref)
             im_diff = im_generated - im_ref
             rms_diff = np.sqrt(np.mean(im_diff**2))
             rel_diff = rms_diff / np.sqrt(np.mean(im_ref**2))
@@ -428,5 +439,80 @@ class TestImShSynimGenerator(unittest.TestCase):
             if self.verbose: # pragma: no cover
                 print(f"  Relative difference: {rel_diff*100:.3f}%")
 
-            self.assertLess(rel_diff, 1e-10, f"generate_im()"
+            # The DM modes are built with the generator precision (float32),
+            # the reference uses the float64 influence functions
+            self.assertLess(rel_diff, 1e-6, f"generate_im()"
                             f" should match reference for {description}")
+
+    @cpu_and_gpu
+    def test_im_generator_uses_dm_input_basis(self, target_device_idx, xp):
+        """With m2c and start_mode the IM columns are the DM input command:
+        IM = IM_ifunc @ m2c[:, start_mode:], and the MMSE prior is on the same basis"""
+        simul_params, source, dm, wfs, slopec = create_test_system()
+        n_ifunc = dm.ifunc.shape[0]
+        m2c_arr = np.random.RandomState(1).randn(n_ifunc, 8).astype(np.float32)
+        start_mode = 2
+        dm_m2c = DM(simul_params=simul_params, ifunc=dm.ifunc_obj, height=0.0,
+                    m2c=M2C(m2c_arr), start_mode=start_mode)
+
+        im_ifunc = cpuArray(generate_reference_im_synim(simul_params, source, dm, wfs, slopec, xp=xp))
+
+        im_gen = ImShSynimGenerator(simul_params=simul_params, dm=dm_m2c, slopec=slopec,
+                                    source=source, wfs=wfs, compute_rec=True, mmse=True,
+                                    noise_cov=1.0, target_device_idx=target_device_idx, precision=1)
+        im_gen.setup()
+        im_gen.trigger_code()
+
+        im_generated = cpuArray(im_gen.output_intmat.intmat)
+        im_expected = im_ifunc @ cpuArray(m2c_arr[:, start_mode:])
+        self.assertEqual(im_generated.shape, im_expected.shape)
+        rel_diff = np.sqrt(np.mean((im_generated - im_expected)**2) / np.mean(im_expected**2))
+        self.assertLess(rel_diff, 1e-4)
+        self.assertEqual(im_gen.output_recmat.recmat.shape, (dm_m2c.nmodes, im_generated.shape[0]))
+
+    @cpu_and_gpu
+    def test_im_generator_compute_rec_false_declares_all_outputs(self, target_device_idx, xp):
+        """Issue #840: with compute_rec=False the generator must pass the sanity
+        checks of setup() (every output in output_names(), including out_recmat,
+        must exist) and compute the same IM as with compute_rec=True.
+        out_recmat is an empty (1, 1) Recmat that the trigger never updates."""
+        simul_params, source, dm, wfs, slopec = create_test_system()
+
+        def make(compute_rec):
+            return ImShSynimGenerator(simul_params=simul_params, dm=dm, slopec=slopec,
+                                      source=source, wfs=wfs, compute_rec=compute_rec,
+                                      target_device_idx=target_device_idx, precision=1)
+
+        im_gen = make(False)
+
+        # Raised ValueError("Output out_recmat declared in output_names but not present")
+        im_gen.check_output_names()
+        im_gen.setup()
+        im_gen.sanity_check()
+
+        self.assertIn('out_recmat', im_gen.outputs)
+        self.assertIn('out_intmat', im_gen.outputs)
+        recmat = im_gen.outputs['out_recmat']
+        self.assertIsInstance(recmat, Recmat)
+        self.assertEqual(cpuArray(recmat.recmat).shape, (1, 1))
+        rec_time_before = recmat.generation_time
+
+        t = 7
+        im_gen.current_time = t
+        im_gen.trigger_code()
+
+        # IM updated, REC untouched
+        im_off = cpuArray(im_gen.output_intmat.intmat)
+        self.assertEqual(im_gen.output_intmat.generation_time, t)
+        self.assertGreater(np.max(np.abs(im_off)), 0)
+        self.assertEqual(recmat.generation_time, rec_time_before)
+        self.assertNotEqual(recmat.generation_time, t)
+        self.assertEqual(cpuArray(recmat.recmat).shape, (1, 1))
+        self.assertEqual(float(np.max(np.abs(cpuArray(recmat.recmat)))), 0.0)
+
+        # Same IM as an otherwise identical generator with compute_rec=True
+        im_gen_rec = make(True)
+        im_gen_rec.setup()
+        im_gen_rec.trigger_code()
+        im_on = cpuArray(im_gen_rec.output_intmat.intmat)
+        np.testing.assert_array_equal(im_off, im_on)

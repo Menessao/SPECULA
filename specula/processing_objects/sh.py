@@ -1,9 +1,12 @@
+import inspect
+import warnings
+
 import numpy as np
 
-from specula import fuse, show_in_profiler, RAD2ASEC
+from specula import fuse, RAD2ASEC, cpuArray
+from specula.tracing import tracer
 from specula.lib.extrapolation_2d import EFInterpolator
-from specula.lib.toccd import toccd
-from specula.lib.make_mask import make_mask
+from specula.lib.pixel_integration import pixel_integration_matrix, integrate_pixels
 from specula.connections import InputValue
 from specula.data_objects.electric_field import ElectricField
 from specula.data_objects.intensity import Intensity
@@ -42,7 +45,8 @@ class SH(BaseProcessingObj):
     subap_npx : int [pixels]
         Number of pixels across the subaperture on the sensor
     squaremask : bool
-        If True, use a square mask in the focal plane. Default is True.
+        Square field stop of side subap_wanted_fov in the focal plane. Only square
+        stops are supported (the pixel integration is separable): must be True.
     fov_ovs_coeff : float [1], optional
         Coefficient to determine the oversampling of the FoV.
         A value larger than 1 is recommended to avoid FFT wrapping effects.
@@ -54,7 +58,8 @@ class SH(BaseProcessingObj):
     rotAnglePhInDeg : float [deg], optional
         Rotation angle of the phase in degrees. Default is 0.
     set_fov_res_to_turbpxsc : bool
-        If True, set the FoV resolution to the turbulence pixel scale. Default is False.
+        Deprecated and ignored: the internal FFT sampling is no longer a choice
+        (see the Notes).
     laser_launch_tel : LaserLaunchTelescope
         If provided, use the laser launch telescope parameters for kernel generation.
         Default is None.
@@ -68,11 +73,28 @@ class SH(BaseProcessingObj):
         Target device index for GPU processing. Default is None (CPU).
     precision : int [1], optional
         Numerical precision (e.g., 32 or 64). Default is None (use default precision).
+
+    Attributes
+    ----------
+    sensor_pxscale_effective : float [arcsec/pixel]
+        Sensor pixel scale actually simulated, set by setup(). Always equal to
+        sensor_pxscale.
+    subap_real_fov_arcsec : float [arcsec]
+        Subaperture FoV actually simulated (subap_npx * sensor_pxscale), set by setup().
+
+    Notes
+    -----
+    Each detector pixel is the exact integral of the subaperture PSF over a pixel of
+    sensor_pxscale. The PSF of a subaperture field of n pixels is band limited, so
+    its samples from an FFT with 2 * n points (zero padding by 2) determine it
+    everywhere, and its integral over any pixel is a weighted sum of them
+    (see pixel_integration_matrix()). No finer FFT sampling, FoV rounding or
+    rebinning is needed, and the pixel scale is exact.
     """
 
     __zeros_cache = {}
 
-    def _zeros_common(self, shape, dtype):
+    def _zeros_common(self, shape, dtype, key_extra=None):
         """
         Wrapper around self.xp.zeros to enable reuse cache.
         None of the arrays allocated here should be used in 
@@ -84,13 +106,16 @@ class SH(BaseProcessingObj):
             Array shape
         dtype : dtype
             Data type
+        key_extra : hashable, optional
+            Additional cache key, for arrays that can only be shared
+            by objects that also agree on something else than the shape
             
         Returns
         -------
         array : ndarray
             Array from cache
         """
-        key = (self.target_device_idx, shape, dtype)
+        key = (self.target_device_idx, shape, dtype, key_extra)
         if key not in self.__zeros_cache:
             self.__zeros_cache[key] = self.xp.zeros(shape, dtype=dtype)
         return self.__zeros_cache[key]
@@ -115,47 +140,45 @@ class SH(BaseProcessingObj):
         ):
 
         super().__init__(target_device_idx=target_device_idx, precision=precision)
+        if not squaremask:
+            raise ValueError('SH: only square field stops are supported (squaremask=True)')
+        if set_fov_res_to_turbpxsc:
+            warnings.warn('SH: set_fov_res_to_turbpxsc is deprecated and ignored: '
+                          'the FFT sampling is fixed by the exact pixel integration',
+                          FutureWarning, stacklevel=2)
         self.wavelength_in_nm = wavelengthInNm
         self.subap_wanted_fov = subap_wanted_fov
         self.subap_on_diameter = subap_on_diameter
         self._lenslet = Lenslet(self.subap_on_diameter, target_device_idx=target_device_idx)
-        self._subap_wanted_fov_rad = self.subap_wanted_fov / RAD2ASEC
-        self._sensor_pxscale = sensor_pxscale / RAD2ASEC
+        self._sensor_pxscale_arcsec = sensor_pxscale
         self._subap_npx = subap_npx
         self._fov_ovs_coeff = fov_ovs_coeff
-        self._squaremask = squaremask
-        self._fov_resolution_arcsec = 0
-        self._debugOutput = False
+        self._fov_resolution_arcsec = None
+        self._fft_period_arcsec = None
+        self.sensor_pxscale_effective = None
+        self.subap_real_fov_arcsec = None
         self._rotAnglePhInDeg = rotAnglePhInDeg
         self._xShiftPhInPixel = xShiftPhInPixel
         self._yShiftPhInPixel = yShiftPhInPixel
-        self._set_fov_res_to_turbpxsc = set_fov_res_to_turbpxsc
         self._laser_launch_tel = laser_launch_tel
+        self._pix_int_matrix = None
+        self._pix_int_matrix_kernel = None
+        self._intensity = None
+        self._int_tmp = None
+        self._int_img = None
+        self._out_views = None
         self.data_dir = data_dir
-        self._np_sub = 0
         self._fft_size = 0
-        self._trigger_geometry_calculated = False
         self._mask_threshold = 1e-3  # threshold to consider a pixel inside the mask
 
-        self.psf = None
-        self.psf_shifted = None
-        self.ef_row = None
         self.ef_interpolator = None
         self._ovs_np_sub = None
-        self._xyShiftPhInPixel = None
+        self._ovs_ef_size = None
         self._wf3 = None
-        self._cutpixels = None
-        self._cutsize = None
-        self._psfimage = None
-        self._psf_reshaped_2d = None
-        self._tltf = None
-        self._fp_mask = None
+        self._wf3_rows_view = None
         self._kernelobj = None
-        self._kernel_fn = None
-
-        # TODO these are fixed but should become parameters
+        self._last_sodium_values = None
         self._fov_ovs = 1
-        self._floatShifts = False
 
         self._ccd_side = self._subap_npx * self._lenslet.n_lenses
         self._out_i = Intensity(self._ccd_side, self._ccd_side,
@@ -164,10 +187,10 @@ class SH(BaseProcessingObj):
 
         self.subap_rows_slice = subap_rows_slice
 
-        # optional inputs for the kernel object
-        if self._laser_launch_tel is not None:
-            self.inputs['sodium_altitude'] = InputValue(type=BaseValue, optional=True)
-            self.inputs['sodium_intensity'] = InputValue(type=BaseValue, optional=True)
+        # Inputs of the LGS kernels: used only with a laser launch telescope, but
+        # always created, as all declared inputs (an LGS SH requires them)
+        self.inputs['sodium_altitude'] = InputValue(type=BaseValue, optional=True)
+        self.inputs['sodium_intensity'] = InputValue(type=BaseValue, optional=True)
 
         self.inputs['in_ef'] = InputValue(type=ElectricField)
         self.outputs['out_i'] = self._out_i
@@ -186,214 +209,127 @@ class SH(BaseProcessingObj):
             'out_i': OutputDesc(Intensity, 'Output Shack-Hartmann focal-plane intensity image'),
         }
 
-    def _set_in_ef(self, in_ef):
+    @classmethod
+    def split_options(cls, params, max_devices):
+        '''
+        The subaperture rows split over k devices (DistributedSH), for each k
+        that divides their number, if DistributedSH accepts all the parameters.
+        Derived classes, DistributedSH included, are not split: an explicit
+        DistributedSH keeps its number of slices.
+        '''
+        if cls is not SH:
+            return {}
+        from specula.processing_objects.distributed_sh import DistributedSH
+        rows = params.get('subap_on_diameter')
+        if not isinstance(rows, int) or params.get('subap_rows_slice') is not None:
+            return {}
+        accepted = inspect.signature(DistributedSH.__init__).parameters
+        for key in params:
+            if key in ('class', 'inputs', 'outputs', 'gui_pos'):
+                continue
+            # As Simul: "laser_launch_tel_ref" sets the parameter laser_launch_tel
+            name = next((key.removesuffix(suffix) for suffix in ('_ref', '_data', '_object')
+                         if key.endswith(suffix) and key.removesuffix(suffix) in accepted), key)
+            if name not in accepted:
+                return {}
+        # The defaults of SH that DistributedSH does not share, made explicit
+        own = inspect.signature(cls.__init__).parameters
+        defaults = {name: p.default for name, p in own.items()
+                    if name in accepted and name not in params
+                    and p.default is not inspect.Parameter.empty
+                    and accepted[name].default != p.default}
+        return {k: {**params, **defaults, 'class': 'DistributedSH', 'n_slices': k}
+                for k in range(2, max_devices + 1) if rows % k == 0}
 
-        lens = self._lenslet.get(0, 0)
+    def _set_in_ef(self, in_ef):
+        '''
+        Compute the SH geometry from the input electric field.
+        All angles are in arcsec.
+
+        Sets _fov_ovs, _ovs_ef_size, _ovs_np_sub, _fft_size, _fft_period_arcsec,
+        _fov_resolution_arcsec, sensor_pxscale_effective and subap_real_fov_arcsec.
+        '''
         n_lenses = self._lenslet.n_lenses
         ef_size = in_ef.size[0]
+        sensor_pxscale = self._sensor_pxscale_arcsec
+        self.sensor_pxscale_effective = sensor_pxscale
+        self.subap_real_fov_arcsec = sensor_pxscale * self._subap_npx
 
-        self._np_sub = max([1, round((ef_size * lens[2]) / 2.0)])
-        if self._np_sub * n_lenses > ef_size:
-            self._np_sub -= 1
+        # Oversampling of the electric field. We take the maximum of three constraints:
+        # - 1.0: do not downsample (loss of quality);
+        # - the FFT period, lambda / pixel pitch of the oversampled field, must cover
+        #   the sensor subaperture FoV;
+        # - fov_ovs_coeff: margin against the wrapping of the periodic PSF.
+        native_period = self.wavelength_in_nm * 1e-9 / in_ef.pixel_pitch * RAD2ASEC
+        needed_ovs = max(1.0, self.subap_real_fov_arcsec / native_period, self._fov_ovs_coeff)
 
-        # this is the number of pixels per sub-aperture
-        np_sub = (ef_size * lens[2]) / 2.0
-
-        sensor_pxscale_arcsec = self._sensor_pxscale * RAD2ASEC
-        dSubApInM = np_sub * in_ef.pixel_pitch
-        turbulence_pxscale = self.wavelength_in_nm * 1e-9 / dSubApInM * RAD2ASEC
-        subap_wanted_fov_arcsec = self.subap_wanted_fov
-        subap_real_fov_arcsec = self._sensor_pxscale * self._subap_npx * RAD2ASEC
-
-        if self._fov_resolution_arcsec == 0:
-            self.logger.info('FoV internal resolution parameter not set.')
-            if self._set_fov_res_to_turbpxsc:
-                if turbulence_pxscale >= sensor_pxscale_arcsec:
-                    raise ValueError('set_fov_res_to_turbpxsc property should be set'
-                                     ' to one only if turb. pix. sc. is < sensor pix. sc.')
-                self._fov_resolution_arcsec = turbulence_pxscale
-                self.logger.warning('set_fov_res_to_turbpxsc property is set.')
-                self.logger.warning('FoV internal resolution parameter will be set to turb. pix. sc.')
-            elif turbulence_pxscale < sensor_pxscale_arcsec and sensor_pxscale_arcsec / 2.0 > 0.5:
-                self._fov_resolution_arcsec = turbulence_pxscale * 0.5
-            else:
-                i = 0
-                resTry = turbulence_pxscale / (i + 2)
-                while resTry >= sensor_pxscale_arcsec:
-                    i += 1
-                    resTry = turbulence_pxscale / (i + 2)
-                iMin = i
-
-                nTry = 10
-                resTry = np.zeros(nTry)
-                scaleTry = np.zeros(nTry)
-                fftScaleTry = np.zeros(nTry)
-                subapRealTry = np.zeros(nTry)
-                mcmxTry = np.zeros(nTry)
-
-                for i in range(nTry):
-                    resTry[i] = turbulence_pxscale / (iMin + i + 2)
-                    scaleTry[i] = round(turbulence_pxscale / resTry[i])
-                    fftScaleTry[i] = self.wavelength_in_nm / 1e9 \
-                                   * self._lenslet.dimx \
-                                   / (ef_size * in_ef.pixel_pitch * scaleTry[i]) \
-                                   * RAD2ASEC
-                    subapRealTry[i] = round(subap_wanted_fov_arcsec / fftScaleTry[i] / 2.0) * 2
-                    mcmxTry[i] = np.lcm(int(self._subap_npx), int(subapRealTry[i]))
-
-                # Search for resolution factor with FoV error < 1%
-                fov = subapRealTry * fftScaleTry
-                fov_error = np.abs(fov - subap_wanted_fov_arcsec) / subap_wanted_fov_arcsec
-                idx_good = np.where(fov_error < 0.02)[0]
-
-                # If no resolution factor gives low error, consider all scale values
-                if len(idx_good) == 0:
-                    idx_good = np.arange(nTry)
-
-                # Search for index with minimum ratio between M.C.M. and resolution factor
-                ratio_mcm = mcmxTry[idx_good] / scaleTry[idx_good]
-                idx_min = np.argmin(ratio_mcm)
-                if idx_good[idx_min] != 0 and mcmxTry[idx_good[0]] / mcmxTry[idx_good[idx_min]] > scaleTry[idx_good[idx_min]] / scaleTry[idx_good[0]]:
-                    self._fov_resolution_arcsec = resTry[idx_good[idx_min]]
-                else:
-                    self._fov_resolution_arcsec = resTry[idx_good[0]]
-
-        self.logger.info(f'FoV internal resolution parameter set as [arcsec]:'
-                f' {self._fov_resolution_arcsec}')
-
-        # Compute FFT FoV resolution element in arcsec
-        scale_ovs = round(turbulence_pxscale / self._fov_resolution_arcsec)
-
-        dTelPaddedInM = ef_size * in_ef.pixel_pitch * scale_ovs
-        dSubApPaddedInM = dTelPaddedInM / self._lenslet.dimx
-        fft_pxscale_arcsec = self.wavelength_in_nm * 1e-9 / dSubApPaddedInM * RAD2ASEC
-
-        # Compute real FoV
-        subap_real_fov_pix = round(subap_real_fov_arcsec / fft_pxscale_arcsec / 2.0) * 2.0
-        subap_real_fov_arcsec = subap_real_fov_pix * fft_pxscale_arcsec
-        mcmx = np.lcm(int(self._subap_npx), int(subap_real_fov_pix))
-
-        turbulence_fov_pix = int(scale_ovs * np_sub)
-
-        # ---------------------------------------------------------------------
-        # OVERSAMPLING CALCULATION LOGIC
-        # ---------------------------------------------------------------------
-
-        # 1. Determine base scaling requirement
-        # ratio > 1 means we need to upsample to cover the requested sensor FOV
-        if turbulence_fov_pix > 0:
-            ratio = float(subap_real_fov_pix) / float(turbulence_fov_pix)
-        else:
-            ratio = 1.0
-
-        # 2. Determine target oversampling factor
-        # We take the MAXIMUM of three constraints:
-        # - 1.0: Ensure we do not downsample (loss of quality).
-        # - ratio: Ensure we cover the Field of View given by the pixel scale.
-        # - fov_ovs_coeff: Respect explicit user request for super-sampling.
-        needed_ovs = max(1.0, ratio, self._fov_ovs_coeff)
-
-        # 3. Calculate minimum required phase size in pixels
-        min_ef_size = ef_size * needed_ovs
-
-        # 4. Enforce geometry constraint:
-        # The total size must be a multiple of (2 * n_lenses).
-        # This ensures that
-        # a) Phase size is divisible by n_lenses (integer pixels per subaperture)
-        # b) Pixels per subaperture is even
+        # The oversampled size is rounded up to a multiple of 2 * n_lenses, so that
+        # each subaperture has an integer and even number of pixels
         modulus = 2 * n_lenses
+        self._ovs_ef_size = int(np.ceil(ef_size * needed_ovs / modulus)) * modulus
+        self._fov_ovs = self._ovs_ef_size / ef_size
+        self._ovs_np_sub = self._ovs_ef_size // n_lenses
 
-        # Round up to the next valid multiple
-        final_ef_size = np.ceil(min_ef_size / modulus) * modulus
+        # Zero padding by 2: enough for the band-limited PSF (see pixel_integration_matrix()),
+        # and for the LGS convolution kernels, whose Fourier coefficients are computed in
+        # closed form (see lgs_kernel_spectrum()), so they are exact in the band of the PSF
+        self._fft_size = 2 * self._ovs_np_sub
+        self._fft_period_arcsec = native_period * self._fov_ovs
+        self._fov_resolution_arcsec = self._fft_period_arcsec / self._fft_size
 
-        # 5. Set the precise float oversampling factor
-        self._fov_ovs = final_ef_size / ef_size
-
-        # ---------------------------------------------------------------------
-
-        self._sensor_pxscale = subap_real_fov_arcsec / self._subap_npx / RAD2ASEC
-        self._ovs_np_sub = round(ef_size * self._fov_ovs * lens[2] * 0.5)
-        self._fft_size = self._ovs_np_sub * scale_ovs
-
-        self.logger.info('-->     FoV resolution [asec], {}'.format(self._fov_resolution_arcsec))
-        self.logger.info('-->     turb. pix. sc.,        {}'.format(turbulence_pxscale))
-        self.logger.info('-->     sc. over sampl.,       {}'.format(scale_ovs))
+        self.logger.info('-->     FFT pix. sc. [asec],   {}'.format(self._fov_resolution_arcsec))
+        self.logger.info('-->     FFT period [asec],     {}'.format(self._fft_period_arcsec))
         self.logger.info('-->     FoV over sampl.,       {}'.format(self._fov_ovs))
-        self.logger.info('-->     FFT pix. sc. [asec],   {}'.format(fft_pxscale_arcsec))
-        self.logger.info('-->     no. elements FoV,      {}'.format(subap_real_fov_pix))
-        self.logger.info('-->     FFT size (turb. FoV),  {}'.format(self._fft_size))
-        self.logger.info('-->     L.C.M. for toccd,      {}'.format(mcmx))
+        self.logger.info('-->     FFT size,              {}'.format(self._fft_size))
         self.logger.info('-->     oversampled np_sub,    {}'.format(self._ovs_np_sub))
-
-        # Validation Check (Updated to use precise float math)
-        # We check if the calculated subaperture size is effectively an even integer
-        actual_phase_size = ef_size * self._fov_ovs
-        pixels_per_subap = actual_phase_size * lens[2] # lens[2] is 2/n_lenses
-
-        # Check if pixels_per_subap is even (divisible by 2)
-        # We use a small epsilon for float comparison
-        if abs((pixels_per_subap / 2.0) - round(pixels_per_subap / 2.0)) > 1e-4:
-            raise ValueError(
-                f'ERROR: Interpolated phase size {actual_phase_size} is not divisible '
-                f'by {2 * self._lenslet.n_lenses} (2 * n_lenses).'
-            )
-        self.logger.info(f'GOOD: Interpolated phase size {int(actual_phase_size)} is divisible'
-                f' by {self._lenslet.n_lenses} subapertures.')
+        self.logger.info('-->     oversampled EF size,   {}'.format(self._ovs_ef_size))
 
     def _calc_geometry(self, in_ef):
         '''
-        Calculate the geometry of the SH
+        Allocate the buffers and compute the arrays used by trigger_code(),
+        using the geometry computed by _set_in_ef()
         '''
-
-        subap_wanted_fov = self._subap_wanted_fov_rad
-        sensor_pxscale = self._sensor_pxscale
-        subap_npx = self._subap_npx
-
-        self._xyShiftPhInPixel = np.array([self._xShiftPhInPixel, self._yShiftPhInPixel]) * self._fov_ovs
-
-        if not self._floatShifts:
-            self._xyShiftPhInPixel = np.round(self._xyShiftPhInPixel).astype(int)
-
-        ovs_pixel_pitch = in_ef.pixel_pitch / self._fov_ovs
-
-        # Reuse geometry calculated in set_in_ef
+        n = self._ovs_np_sub
         fft_size = self._fft_size
+        dimx = self._lenslet.dimx
+        npx = self._subap_npx
 
-        # Padded subaperture cube extracted from full pupil
-        self._wf3 = self._zeros_common((self._lenslet.dimy, fft_size, fft_size),
-                                       dtype=self.complex_dtype)
+        # Pixel integration matrix. The square field stop matters only if it is
+        # smaller than the sensor FoV: it then clips the edge pixels.
+        stop = self.subap_wanted_fov if self.subap_wanted_fov < self.subap_real_fov_arcsec else None
+        g = pixel_integration_matrix(fft_size, self._fft_period_arcsec, self._sensor_pxscale_arcsec,
+                                     npx, stop=stop)
+        self._pix_int_matrix = self.to_xp(g, dtype=self.dtype)
+        # The convolution kernels move the axis from sample 0 to sample fft_size / 2
+        # (their impulse response is centred there), so their output uses G rolled by half
+        self._pix_int_matrix_kernel = self.to_xp(np.roll(g, fft_size // 2, axis=1), dtype=self.dtype)
 
-        # Focal plane result from FFT
-        fp4_pixel_pitch = self.wavelength_in_nm / 1e9 / (ovs_pixel_pitch * fft_size)
-        fov_complete = fft_size * fp4_pixel_pitch
+        # Padded subaperture cube extracted from full pupil (one row of subapertures,
+        # i.e. dimx of them). Only the top-left n x n corner of each subap is ever
+        # written, so the zero padding is set here once and never touched again.
+        # The corner size is part of the cache key: an SH with the same fft_size
+        # but a larger corner would otherwise write into the padding of this one.
+        self._wf3 = self._zeros_common((dimx, fft_size, fft_size), dtype=self.complex_dtype,
+                                       key_extra=n)
+        # |FFT|^2, and the buffers of integrate_pixels()
+        self._intensity = self._zeros_common((dimx, fft_size, fft_size), dtype=self.dtype)
+        self._int_tmp = self._zeros_common((dimx, npx, fft_size), dtype=self.dtype)
+        self._int_img = self._zeros_common((dimx, npx, npx), dtype=self.dtype)
 
-        sensor_subap_fov = sensor_pxscale * subap_npx
-        fov_cut = fov_complete - sensor_subap_fov
+        # FFT pixel scale [rad], computed as in the original code: the kernel file
+        # names are a hash of the exact pixel scale value
+        fp4_pixel_pitch = self.wavelength_in_nm / 1e9 / (in_ef.pixel_pitch / self._fov_ovs * fft_size)
+        self._make_kernel_object(in_ef, fp4_pixel_pitch, fft_size)
 
-        self._cutpixels = int(np.round(fov_cut / fp4_pixel_pitch) / 2 * 2)
-        self._cutsize = fft_size - self._cutpixels
-        self._psfimage = self._zeros_common((self._cutsize * self._lenslet.dimy,
-                                             self._cutsize * self._lenslet.dimx),
-                                            dtype=self.dtype)
-        self._psf_reshaped_2d = self._zeros_common((self._cutsize,
-                                                    self._cutsize * self._lenslet.dimx),
-                                                   dtype=self.dtype)
-
-        # 1/2 Px tilt
-        self._tltf = self._get_tlt_f(self._ovs_np_sub, fft_size - self._ovs_np_sub)
-
-        self._fp_mask = make_mask(fft_size,
-                                  diaratio=subap_wanted_fov / fov_complete,
-                                  square=self._squaremask, xp=self.xp)
-
-        # set up kernel object
+    def _make_kernel_object(self, in_ef, fp4_pixel_pitch, fft_size):
+        '''Convolution kernel object for a laser launch telescope (LGS), if any'''
         if self._laser_launch_tel is not None:
             if len(self._laser_launch_tel.tel_pos) == 0:
                 self._kernelobj = GaussianConvolutionKernel(dimx = self._lenslet.dimx,
                                                             dimy = self._lenslet.dimy,
                                                             pxscale = fp4_pixel_pitch * RAD2ASEC,
                                                             pupil_size_m = in_ef.pixel_pitch * in_ef.size[0],
-                                                            dimension = self._fft_size,
+                                                            dimension = fft_size,
                                                             spot_size = self._laser_launch_tel.spot_size,
                                                             oversampling = 1,
                                                             return_fft = True,
@@ -402,39 +338,38 @@ class SH(BaseProcessingObj):
                                                             target_device_idx=self.target_device_idx,
                                                             precision=self.precision)
             else:
-                if len(self._laser_launch_tel.beacon_tt) != 0:
-                    theta = self._laser_launch_tel.beacon_tt
-                else:
-                    theta = []
+                # launcher in the frame of this SH (rotated if it is given
+                # in the telescope frame, see LaserLaunchTelescope)
+                launcher_pos, beacon_tt = self._laser_launch_tel.wfs_frame(self._rotAnglePhInDeg)
                 self._kernelobj = ConvolutionKernel(dimx = self._lenslet.dimx,
                                                     dimy = self._lenslet.dimy,
                                                     pxscale = fp4_pixel_pitch * RAD2ASEC,
                                                     pupil_size_m = in_ef.pixel_pitch * in_ef.size[0],
-                                                    dimension = self._fft_size,
-                                                    launcher_pos = self._laser_launch_tel.tel_pos,
+                                                    dimension = fft_size,
+                                                    launcher_pos = launcher_pos,
                                                     seeing = 0.0,
                                                     launcher_size = self._laser_launch_tel.spot_size,
                                                     zfocus = self._laser_launch_tel.beacon_focus,
-                                                    theta = theta,
+                                                    theta = beacon_tt,
                                                     oversampling = 1,
                                                     return_fft = True,
                                                     positive_shift_tt = True,
                                                     data_dir=self.data_dir,
                                                     target_device_idx=self.target_device_idx,
                                                     precision=self.precision)
-            self._kernel_fn = None
-        else:
-            self._kernelobj = None
 
     def prepare_trigger(self, t):
         super().prepare_trigger(t)
 
-        # Interpolation of input array if needed
-        with show_in_profiler('interpolation'):
-            self.ef_interpolator.interpolate()
-
         if self._kernelobj is not None:
             self._prepare_kernels()
+
+        # The input field interpolation is done in trigger_code(), so that it is
+        # part of the CUDA graph. Its extrapolation data depends on the pupil,
+        # which is only valid from the first step on (it is set by the upstream
+        # objects in their trigger): it is computed here, before the graph is
+        # captured at the first trigger(). Does nothing after the first call.
+        self.ef_interpolator.initialize_extrapolation()
 
     def _prepare_kernels(self):
         if len(self._laser_launch_tel.tel_pos) != 0:
@@ -442,96 +377,119 @@ class SH(BaseProcessingObj):
             sodium_intensity = self.local_inputs['sodium_intensity']
             if sodium_altitude is None or sodium_intensity is None:
                 raise ValueError('sodium_altitude and sodium_intensity must be provided')
+            values = (sodium_altitude.value, sodium_intensity.value)
+        else:
+            values = ()
+
+        # Avoid recomputing kernels if the sodium layer parameters
+        # have not changed since the last call. Their values are compared,
+        # because generators update the generation time at every step,
+        # even if the actual values are unchanged.
+        # The arrays are small: comparing them on the host is faster than
+        # launching several comparison kernels on the device.
+        host_values = tuple(cpuArray(v) for v in values)
+        if self._last_sodium_values is not None and \
+                all(np.array_equal(v, last)
+                    for v, last in zip(host_values, self._last_sodium_values)):
+            return
+        # Copies, because cpuArray() does not copy on the CPU and
+        # generators update their output in place
+        self._last_sodium_values = tuple(np.array(v) for v in host_values)
+
+        if values:
             sodium_altitude = sodium_altitude.value * self._laser_launch_tel.airmass
             sodium_intensity = sodium_intensity.value
         else:
             sodium_altitude = None
             sodium_intensity = None
 
+        kernels = self._kernelobj.kernels
         self._kernelobj.prepare_for_sh(
             sodium_altitude=sodium_altitude,
             sodium_intensity=sodium_intensity,
             current_time=self.current_time
         )
+        # The kernels can be reallocated (e.g. when they start or stop being
+        # shared with other SH objects), and the CUDA graph reads them
+        # at the address they had at capture time
+        if self._kernelobj.kernels is not kernels:
+            self.invalidate_graph()
 
 
     def trigger_code(self):
+        """
+        Compute the SH detector image, one row of subapertures at a time.
+        Processing the whole lenslet array at once would be faster, but the
+        oversampled field can reach 8k x 8k pixels: memory usage is as
+        important as speed here, so no full-frame temporaries must be added.
 
-        # Work on SH rows (single-subap code is too inefficient)
+        The input field is first interpolated to the oversampled resolution.
+        This is done here rather than in prepare_trigger(), so that it is part
+        of the CUDA graph, and so that SH objects with the same geometry can
+        share the interpolated field (use_out_ef_cache=True).
 
-        for i in range(self.subap_rows_slice.start, self.subap_rows_slice.stop):
+        Then, for each row of dimx subapertures:
 
-            # Extract 2D subap row
-            wf1 = self.ef_interpolator.interpolated_ef()
+        1. the row of the oversampled electric field, viewed as a (dimx, n, n)
+           subap cube, is computed directly into the top-left corner of the
+           zero-padded cube _wf3 (padding by 2, or more with a laser launch
+           telescope), with a single kernel on GPU;
+        2. a batched 2D FFT and ``|.|^2`` give the PSF samples of each subap.
+           With a convolution kernel (LGS), they are convolved with the subap
+           kernels in Fourier space (rfft2/irfft2, the kernels are stored as
+           half spectra);
+        3. each detector pixel is the exact integral of the PSF over the pixel,
+           G @ PSF @ G.T, written directly into the output image.
+
+        The flux normalization is done in post_trigger().
+
+        The CUDA graph is captured at the first trigger(), because the
+        interpolation needs the pupil, and captured again if the interpolation
+        parameters are changed with update_interpolator_parameters().
+        """
+        xp = self.xp
+        dimx = self._lenslet.dimx
+        rows = self.subap_rows_slice
+        n = self._ovs_np_sub
+
+        # Interpolation of the input field, if needed
+        with tracer('interpolation', self):
+            self.ef_interpolator.interpolate()
+        wf1 = self.ef_interpolator.interpolated_ef()
+
+        for i, out_view in zip(range(rows.start, rows.stop), self._out_views):
+
+            # Field of the 2D subap row, written directly into the padded array
             wf1.ef_at_lambda(self.wavelength_in_nm,
-                             slicey=np.s_[i * self._ovs_np_sub: (i+1) * self._ovs_np_sub],
+                             slicey=np.s_[i * n: (i + 1) * n],
                              slicex=np.s_[:],
-                             out=self.ef_row)
+                             out=self._wf3_rows_view)
 
-            # Reshape to subap cube (nsubap, npix, npix)
-            subap_cube_view = self.ef_row.reshape(self._ovs_np_sub, self._lenslet.dimy, self._ovs_np_sub).swapaxes(0, 1)
+            fp4 = self.fft.fft2(self._wf3, axes=(1, 2))
+            abs2(fp4, self._intensity, xp=xp)
 
-            # Insert into padded array
-            self._wf3[:, :self._ovs_np_sub, :self._ovs_np_sub] = subap_cube_view * self._tltf[self.xp.newaxis, :, :]
-
-            fp4 = self.xp.fft.fft2(self._wf3, axes=(1, 2))
-            abs2(fp4, self.psf_shifted, xp=self.xp)
-
-            # Full resolution kernel
-            if self._kernelobj is not None:
-                first = i * self._lenslet.dimy
-                last = (i + 1) * self._lenslet.dimy
-                subap_kern_fft = self._kernelobj.kernels[first:last, :, :]
-
-                psf_fft = self.xp.fft.fft2(self.psf_shifted)
+            if self._kernelobj is None:
+                psf, g = self._intensity, self._pix_int_matrix
+            else:
+                subap_kern_fft = self._kernelobj.kernels[i * dimx: (i + 1) * dimx]
+                psf_fft = self.fft.rfft2(self._intensity)
                 psf_fft *= subap_kern_fft
+                psf = self.fft.irfft2(psf_fft, s=(self._fft_size, self._fft_size), norm='forward',
+                                      overwrite_x=True)
+                g = self._pix_int_matrix_kernel
 
-                self._scipy_ifft2(psf_fft, overwrite_x=True, norm='forward')
-                self.psf[:] = psf_fft.real
-
-                # Assert that our views are actually views and not temporary allocations
-                assert subap_kern_fft.base is not None
-            else:
-                self.psf[:] = self.xp.fft.fftshift(self.psf_shifted, axes=(1, 2))
-
-            # Apply focal plane mask
-            self.psf *= self._fp_mask[self.xp.newaxis, :, :]
-
-            cutsize = self._cutsize
-            cutpixels = self._cutpixels
-
-            # FoV cut on each subap.
-            # If cutpixels is 0 (exact match), slicing [0:0] returns empty.
-            if cutpixels > 0:
-                psf_cut_view = self.psf[:, cutpixels // 2: -cutpixels // 2, cutpixels // 2: -cutpixels // 2]
-            else:
-                # If cutpixels is 0 (or negative, though negative shouldn't happen), take full frame
-                psf_cut_view = self.psf[:]
-
-            # Go back from a subap cube to a 2D frame row.
-            # This reshape is too complicated to produce a view,
-            # so we use a preallocated array
-            self._psf_reshaped_2d[:] = psf_cut_view.swapaxes(0, 1).reshape(-1, self._lenslet.dimy * cutsize)
-
-            # Insert 2D frame row into overall PSF image
-            self._psfimage[i * cutsize: (i+1) * cutsize, :] = self._psf_reshaped_2d
-
-            # Assert that our views are actually views and not temporary allocations
-            assert psf_cut_view.base is not None
-            assert subap_cube_view.base is not None
-
-        with show_in_profiler('toccd'):
-            self._out_i.i[:] = toccd(self._psfimage, (self._ccd_side, self._ccd_side), xp=self.xp)
-
+            # Detector pixels: G @ PSF @ G.T for each subaperture
+            out_view[:] = integrate_pixels(g, psf, self._int_tmp, self._int_img, xp)
+            # G has oscillating weights: rounding can make dark pixels slightly
+            # negative, which a Poisson noise generator would reject
+            xp.maximum(out_view, 0, out=out_view)
 
     def post_trigger(self):
         super().post_trigger()
 
         in_ef = self.local_inputs['in_ef']
         phot = in_ef.S0 * in_ef.masked_area()
-       # self.logger.debug(self.name, f'{in_ef.S0=} {self._out_i.i.sum()=}')
         self._out_i.i *= phot / self._out_i.i.sum()
-        # self._out_i.i = self.xp.nan_to_num(self._out_i.i, copy=False)
         self._out_i.generation_time = self.current_time
 
         debug_figures = False
@@ -550,8 +508,8 @@ class SH(BaseProcessingObj):
         self._set_in_ef(in_ef)
         self._calc_geometry(in_ef)
 
-        fov_oversample = self._fov_ovs
-        shape_ovs = (int(in_ef.size[0] * fov_oversample), int(in_ef.size[1] * fov_oversample))
+        # Use the integer size: int(size * _fov_ovs) can truncate to size - 1
+        shape_ovs = (self._ovs_ef_size, self._ovs_ef_size)
 
         self.ef_interpolator = EFInterpolator(
             in_ef,
@@ -560,32 +518,62 @@ class SH(BaseProcessingObj):
             xShiftPhInPixel=self._xShiftPhInPixel,
             yShiftPhInPixel=self._yShiftPhInPixel,
             mask_threshold=self._mask_threshold,
-            use_out_ef_cache=False, # we cannot reuse the cache here because the interpolated array
-                                    # is computed in prepare_trigger, but is used in trigger_code
+            use_out_ef_cache=True,  # the interpolated field is computed and used in trigger_code(),
+                                    # so SH objects with the same geometry can share it
+                                    # (their GPU work runs in order on the default stream)
             target_device_idx=self.target_device_idx,
             precision=self.precision
         )
 
-        ef_whole_size = int(in_ef.size[0] * self._fov_ovs)
-        self.ef_row = self._zeros_common((self._ovs_np_sub, ef_whole_size),
-                                         dtype=self.complex_dtype)
-        self.psf = self._zeros_common((self._lenslet.dimy, self._fft_size, self._fft_size),
-                                     dtype=self.dtype)
-        self.psf_shifted = self._zeros_common((self._lenslet.dimy, self._fft_size, self._fft_size),
-                                              dtype=self.dtype)
-
         if self.subap_rows_slice is None:
             self.subap_rows_slice = slice(0, self._lenslet.dimy)
 
+        n = self._ovs_np_sub
+        dimx = self._lenslet.dimx
+        npx = self._subap_npx
+        rows = range(self.subap_rows_slice.start, self.subap_rows_slice.stop)
 
-        super().build_stream(allow_parallel=False)
+        # Views used by trigger_code(), built once since the buffers never change.
+        # Only one row of subaps is computed at a time, because the whole oversampled
+        # field can be very large (8k x 8k). The top-left corners of the padded cube,
+        # as (n, dimx, n): the row of the field, n x (dimx * n), reshaped to it gives
+        # the subap cube
+        self._wf3_rows_view = self._wf3[:, :n, :n].swapaxes(0, 1)
 
-    def _get_tlt_f(self, p, c):
+        # Each row of the output image, as a (dimx, npx, npx) subap cube
+        self._out_views = [self._out_i.i[i * npx: (i + 1) * npx]
+                           .reshape(npx, dimx, npx).swapaxes(0, 1)
+                           for i in rows]
+
+        # Assert that our views are actually views and not temporary allocations
+        for view in [self._wf3_rows_view] + self._out_views:
+            assert view.base is not None
+
+    def can_accelerate(self):
+        return True
+
+    def update_interpolator_parameters(self, xShiftPhInPixel=None, yShiftPhInPixel=None,
+                                       rotAnglePhInDeg=None, magnification=None):
         '''
-        Half-pixel tilt
+        Change the misregistration parameters of the input field interpolation.
+
+        The interpolation is part of the CUDA graph, with its parameters
+        frozen at capture time, so the graph is invalidated and captured
+        again at the next trigger(). Always use this method instead of
+        calling ef_interpolator.update_parameters() directly.
+
+        Parameters are the same as EFInterpolator.update_parameters();
+        the ones set to None are left unchanged.
         '''
-        iu = complex(0, 1)
-        xx, yy = self.xp.meshgrid(self.xp.arange(-p // 2, p // 2), self.xp.arange(-p // 2, p // 2))
-        tlt_g = xx + yy
-        tlt_f = self.xp.exp(-2 * self.xp.pi * iu * tlt_g / (2 * (p + c)), dtype=self.complex_dtype)
-        return tlt_f
+        if (rotAnglePhInDeg is not None and rotAnglePhInDeg != self._rotAnglePhInDeg
+                and self._laser_launch_tel is not None
+                and self._laser_launch_tel.absolute_coordinates):
+            raise NotImplementedError(
+                'The rotation of an SH with a launcher in absolute coordinates cannot be'
+                ' changed during the simulation: the LGS kernels depend on it and are'
+                ' computed at setup')
+        self.ef_interpolator.update_parameters(xShiftPhInPixel=xShiftPhInPixel,
+                                               yShiftPhInPixel=yShiftPhInPixel,
+                                               rotAnglePhInDeg=rotAnglePhInDeg,
+                                               magnification=magnification)
+        self.invalidate_graph()

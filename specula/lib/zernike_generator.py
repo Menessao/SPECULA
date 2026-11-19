@@ -3,7 +3,7 @@ import numpy as np
 
 from specula import cpuArray, to_xp
 
-from functools import lru_cache
+from functools import cache
 from scipy.special import eval_jacobi
 from specula.lib.mask import CircularMask
 
@@ -54,11 +54,11 @@ class ZernikeGenerator():
     .. [1] Noll, R. J., “Zernike polynomials and atmospheric
        turbulence.”, Journal of the Optical Society of America
        (1917-1983), vol. 66, pp. 207–211, 1976.
-    .. [2] Born, M. and Wolf, E., "Principles of Optics", 7th edition,
-       Cambridge University Press, 1999.
-    .. [3] Magnus W., Oberhettinger F., and Soni R.P., "Formulas and
-       Theorems for the Special Functions of Mathematical Physics",
-       Springer-Verlag, New York, 1966.
+
+    See also Born, M. and Wolf, E., "Principles of Optics", 7th edition,
+    Cambridge University Press, 1999, and Magnus W., Oberhettinger F., and
+    Soni R.P., "Formulas and Theorems for the Special Functions of
+    Mathematical Physics", Springer-Verlag, New York, 1966.
 
     Examples
     --------
@@ -252,20 +252,25 @@ class ZernikeGenerator():
             ret[index] = self.getZernike(index)
         return ret
 
-    def getModesDict(self, indexVector):
-        return self.getZernikeDict(indexVector)
-
-    def getZernike(self, index):
+    def getZernike(self, index, cache=True):
+        '''
+        Return the Zernike polynomial of Noll index *index*.
+        If *cache* is False, a polynomial not already cached is
+        not stored, to avoid keeping many full-frame arrays in memory.
+        '''
         if not self._is_integer_num(index):
             raise ValueError("Invalid Zernike index %s" % index)
         if index <= 0:
             raise ValueError("Invalid Zernike index %d" % index)
-        if index not in list(self._dictCache.keys()):
-            res = self._polar(index, self._rhoMap,
-                              self._thetaMap)
-            res[self._boolean_mask] = 0
-            self._dictCache[index] = to_xp(self.xp, res, dtype=self.dtype)
-        return self._dictCache[index]
+        if index in self._dictCache:
+            return self._dictCache[index]
+        res = self._polar(index, self._rhoMap,
+                          self._thetaMap)
+        res[self._boolean_mask] = 0
+        res = to_xp(self.xp, res, dtype=self.dtype)
+        if cache:
+            self._dictCache[index] = res
+        return res
 
     @staticmethod
     def _is_integer_num(n):
@@ -365,18 +370,6 @@ class ZernikeGenerator():
 
         return G_mat
 
-    def getDerivativeXDict(self, indexVector):
-        ret = {}
-        for index in indexVector:
-            ret[index] = self.getDerivativeX(index)
-        return ret
-
-    def getDerivativeYDict(self, indexVector):
-        ret = {}
-        for index in indexVector:
-            ret[index] = self.getDerivativeY(index)
-        return ret
-
     def getDerivativeX(self, index):
         if index not in self._dictDxCache:
             self._dictDxCache[index] = self._computeDerivativeX(index)
@@ -419,9 +412,8 @@ class ZernikeGenerator():
         '''
         return np.ceil(0.5 * (np.sqrt(8 * np.array(j) + 1) - 3)).astype(int)
 
-    # We use lru_cache() instead of cache() for python 3.8 compatibility
     @classmethod
-    @lru_cache(maxsize=None)
+    @cache
     def index_to_name_dict(cls):
         '''
         Zernike index to zernike name mapping
@@ -435,20 +427,6 @@ class ZernikeGenerator():
                 2:'tip',
                 3:'tilt',
                 4:'focus'}
-
-    # We use lru_cache() instead of cache() for python 3.8 compatibility
-    @classmethod
-    @lru_cache(maxsize=None)
-    def name_to_index_dict(cls):
-        '''
-        Zernike name to zernike index mapping
-
-        Returns
-        -------
-        names: dict
-            dictionary of Zernike indexes: str -> int
-        '''
-        return {v: k for k, v in cls.index_to_name_dict().items()}
 
 
 def _isOdd(num):

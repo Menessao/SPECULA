@@ -167,3 +167,20 @@ def find_instances(obj, cls, *, seen=None, path="root"):
             if (attr_name not in excluded_names) and (str(type(value)) not in excluded_types):
                 yield from find_instances(value, cls, seen=seen, path=f"{path}.{attr_name}")
 
+
+
+def accelerate(*objs, **options):
+    '''
+    Accelerate the objects on a GPU among *objs*, as Simul does (see iteras.accelerator).
+    Errors raise AcceleratorError (on_error='raise'), unless *options* say otherwise:
+    a test must not pass because an object silently fell back to Python code.
+    '''
+    from iteras.accelerator import Accelerator
+    from iteras.data_objects.accelerator import Accelerator as AcceleratorOptions
+    options.setdefault('on_error', 'raise')
+    Accelerator(AcceleratorOptions(**options)).apply(objs)
+
+
+def graph_captured(obj):
+    '''True if the accelerator has captured the CUDA graph of *obj*'''
+    return getattr(obj, '_accel', None) is not None and obj._accel.graph is not None

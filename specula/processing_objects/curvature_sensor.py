@@ -30,9 +30,8 @@ class CurvatureSensor(BaseProcessingObj):
                  target_device_idx: int = None,
                  precision: int = None):
         """
-        Parameters:
+        Parameters
         ----------
-
         wavelengthInNm: float [nm]
             Wavelength of the light in nanometers.
         wanted_fov: float [arcsec]
@@ -172,13 +171,13 @@ class CurvatureSensor(BaseProcessingObj):
     def trigger_code(self):
         # Intrafocal propagation
         ef_plus = self.ef_resampled * self.exp_plus
-        self.fp_plus[:] = self.xp.fft.fftshift(self.xp.fft.fft2(ef_plus))
+        self.fp_plus[:] = self.fft.fftshift(self.fft.fft2(ef_plus))
         abs2_cwfs(self.fp_plus, self._temp_i1, xp=self.xp)
         self._temp_i1 *= self.detector_mask
 
         # Extrafocal propagation
         ef_minus = self.ef_resampled * self.exp_minus
-        self.fp_minus[:] = self.xp.fft.fftshift(self.xp.fft.fft2(ef_minus))
+        self.fp_minus[:] = self.fft.fftshift(self.fft.fft2(ef_minus))
         abs2_cwfs(self.fp_minus, self._temp_i2, xp=self.xp)
         self._temp_i2 *= self.detector_mask
 
@@ -193,12 +192,8 @@ class CurvatureSensor(BaseProcessingObj):
 
         # Bin/Resample to the exact requested output_resolution using toccd
         # toccd handles the exact re-binning/interpolation preserving flux
-        self._out_i1.i[:] = toccd(i1_fov,
-                                  (self.number_px, self.number_px),
-                                  xp=self.xp)
-        self._out_i2.i[:] = toccd(i2_fov,
-                                  (self.number_px, self.number_px),
-                                  xp=self.xp)
+        toccd(i1_fov, (self.number_px, self.number_px), xp=self.xp, out=self._out_i1.i)
+        toccd(i2_fov, (self.number_px, self.number_px), xp=self.xp, out=self._out_i2.i)
 
     def post_trigger(self):
         super().post_trigger()

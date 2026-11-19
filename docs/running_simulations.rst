@@ -9,7 +9,7 @@ The main way to run a simulation is to use the ``specula`` command line tool, in
 with the SPECULA package, giving the configuration file as an argument, in addition to several
 optional arguments (visible with the ``specula -h`` command).
 
-When embedding in another Python program, it is possible to use the :class:`specula.simul.Simul` class directly:
+When embedding in another Python program, it is possible to use the :class:`iteras.simul.Simul` class directly:
 
 .. code-block:: python
 
@@ -37,6 +37,71 @@ These arguments are similar to the ones used by ``specula`` itself, whose implem
 
 Examples of the diagram can be found in :doc:`simul_diagrams` page.
 A tutorial for running SCAO simulations is available in the :doc:`tutorials/scao_tutorial` page.
+To find out where the simulation time is spent, see the :doc:`profiling` page.
+
+Listing simulation runs
+=======================
+
+Each run saved by a :class:`~iteras.processing_objects.data_store.DataStore` gets its own TN folder
+(e.g. ``20260805_080019``, or ``20260805_080019.0`` for a second run started in the same second),
+containing a ``params.yml`` with the full simulation parameters, overrides included.
+When many runs accumulate in the same folder, the ``specula_list_runs`` command line tool shows what
+changes between them::
+
+    specula_list_runs ./output/
+
+For each TN, in chronological order, it prints only the parameters that changed with respect to the
+previous TN, so that runs launched in a batch show up as consecutive TNs changing the same key(s).
+It also writes ``list_runs.csv`` in the same folder, with one row per TN and one column per parameter
+that takes different values, to be sorted/filtered in a spreadsheet.
+Only the TN folders directly inside the given folder are read; other sub-folders are just listed.
+
+Main options (see ``specula_list_runs -h``):
+
+- ``--keys PATTERN ...``: only these parameters, wildcards allowed (e.g. ``--keys '*magnitude*' seeing.constant``)
+- ``--ignore PATTERN ...``: skip these parameters (e.g. ``--ignore '*seed*'``)
+- ``--since YYYYMMDD``: only TNs from this date on
+- ``--all-keys``: CSV columns also for parameters present only in some runs
+- ``--short``: shorten values longer than 50 characters (values longer than 1000 characters are always shortened)
+- ``--out FILE``: write the CSV elsewhere
+
+Data formats
+============
+
+Data objects (calibration files, the ``_object`` and ``tag`` parameters) and the
+inputs saved by ``DataStore`` are stored as a header and a set of named arrays,
+in one of the following formats, chosen by the extension of the file name:
+
+- ``fits`` (``.fits`` files): the default. The layout of the files of each
+  class is the same as in previous versions, and files written by previous
+  versions can still be read;
+- ``npz`` (``.npz`` files): numpy archives, readable with ``numpy.load()``
+  without pickle. Each array is an entry with its name, and the header is in
+  the ``__header__`` entry, as JSON;
+- ``npy`` (``.npy`` directories): one ``<array>.npy`` file per array and the
+  header in ``header.json``. Suited to large arrays, which can be read
+  without copies and are streamed to the GPU in chunks, like FITS files;
+- ``hdf5`` (``.h5`` files): one dataset per array, readable with h5py or any
+  HDF5 tool. The header keywords are also attributes of the file.
+
+The headers of the npz, npy and HDF5 files do not have the limits of FITS
+headers: keywords can be longer than 8 characters and values can contain any
+text. Their arrays can also be complex, which FITS files cannot store.
+
+``DataStore`` saves each of its inputs in a file named after the input, with
+the data at each stored time step (array ``data``), the times (array ``times``)
+and the header of the data object. It can also use the ``pickle`` format
+(``.pickle`` files). The format is chosen with the ``data_format`` parameter.
+When it is not given, the format is taken from the ``ITERAS_DATA_FORMAT``
+environment variable (or ``SPECULA_DATA_FORMAT``), and is ``fits`` if neither is
+set. ``DataSource``, and therefore the replays, detect the format of each file
+from its extension.
+
+Calibration files written without an extension, for example by the
+calibrators, get the extension of the default format, and are ``fits`` files
+if the default format is ``pickle``. When a calibration file is read by its
+tag, the file of the default format is used if it exists, otherwise the file
+in any of the other formats.
 
 Output logging
 ==============
@@ -102,6 +167,91 @@ Notes
 - The value is case-sensitive.
 - ``MPI_DBG`` and ``MPI_SEND_DBG`` are application-specific logging levels and are not part of the standard Python logging levels.
 - Lower verbosity levels (e.g., DEBUG) may produce large volumes of output.
+
+Accelerating objects
+====================
+
+By default, the GPU work of the objects runs as CUDA graphs chained on
+one stream per device, without the host waiting for the GPU between objects.
+Simulations whose time per step is set by the host, not by the GPU, run
+faster; the results agree with those of a run without the accelerator to
+rounding. ``--no-accelerate`` turns it off:
+
+.. code-block:: bash
+
+    specula --no-accelerate params.yml
+
+See :doc:`accelerator`.
+
+Data objects on the device
+==========================
+
+Some classes keep large input data objects on the host and build what they need
+on the GPU in blocks (``host_data_objects``, see :doc:`extension_api`): for example
+``ModalrecImplicitPolc`` with its reconstruction, projection and interaction
+matrices, 6.7 GB for MORFEO. This lowers the GPU memory peak during setup, but
+the matrices pass through host memory. With ``--data-objects-on-device`` all
+data objects are restored on the device of the object that uses them, streamed
+from the files without host copies: no host memory peak, but a higher GPU memory
+peak during setup.
+
+.. code-block:: bash
+
+    specula --data-objects-on-device params.yml
+
+.. _running_with_mpi:
+
+Running with MPI
+================
+
+A simulation can be split among several processes, possibly on several nodes, with MPI
+(the ``mpi4py`` package is needed):
+
+.. code-block:: bash
+
+    mpirun -n 4 specula --mpi params.yml placement.yml
+
+Each object runs in the process given by its ``target_rank`` parameter (0 by default), on the
+device given by ``target_device_idx``. They can be written by hand or computed by the
+:doc:`allocator <allocator>`.
+
+The outputs read by objects in other processes are copied to the host and sent at each step
+with non-blocking sends, so the sending process goes on at once. The data of a large message
+moves only when the receiver is waiting for it and, unless the MPI transport lets the receiver
+pull it by itself (single-copy shared memory between processes of the same node), while the
+sender is inside an MPI call. So a process that waits for its GPU while some of its sends are
+in flight keeps testing them, instead of blocking. At most two steps of each output can be in
+flight to a process; a process that runs further ahead waits for its receivers.
+
+Environment variables change this behavior:
+
+``ITERAS_MPI_GPU_DIRECT``
+    ``1`` to send and receive the outputs of GPU objects directly from and to GPU memory,
+    without copies to the host (default ``0``). It needs a CUDA-aware MPI, like Open MPI built
+    with CUDA and UCX (``ompi_info`` shows ``mpi_built_with_cuda_support:value:true``): with
+    any other MPI the processes crash. On Leonardo it moved a 2 MiB message between nodes in
+    0.11 ms instead of 0.51 ms, and between the GPUs of a node in 0.04 ms instead of 0.58 ms.
+    For the :doc:`allocator <allocator>`, set ``mpi_gpu_direct: true`` in the ``links`` of the
+    nodes.
+``ITERAS_MPI_SEND_MODE``
+    ``nonblocking`` (default) or ``buffered``: the previous behavior, with buffered sends
+    (``MPI_Ibsend``), whose data moves only when the sender calls MPI. Buffered sends always
+    go through the host.
+``ITERAS_MPI_POLL``
+    ``0`` to block while waiting for the GPU, even with sends in flight.
+
+Asynchronous Displays
+=====================
+
+Drawing displays is often much slower than a simulation step. With the ``--async-displays`` flag
+all displays run in a separate process, and the simulation never waits for them:
+
+.. code-block:: bash
+
+    specula params.yml --async-displays
+
+Image displays may skip updates to keep up, while plots with a time history receive every point.
+See :ref:`async_displays` for details.
 
 Interactive Stepping Mode
 ==========================
@@ -296,7 +446,7 @@ The ``--nsimul`` parameter automatically runs multiple simulations in sequence, 
 Python API
 ~~~~~~~~~~
 
-Using the :class:`specula.simul.Simul` class directly with explicit ``simul_idx``:
+Using the :class:`iteras.simul.Simul` class directly with explicit ``simul_idx``:
 
 .. code-block:: python
 

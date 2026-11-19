@@ -1,12 +1,13 @@
 
 import numpy as np
-from astropy.io import fits
-from specula import cpuArray
 
 from specula.lib.modal_base_generator import compute_ifs_covmat
 from specula.lib.mmse_reconstructor import compute_mmse_reconstructor
-from specula.base_data_obj import BaseDataObj
+from iteras.data_objects.matrix import Matrix, matrix_array_name
 from specula.data_objects.recmat import Recmat
+from specula.data_objects.ifunc import IFunc
+from specula.lib.slopes_layout import SlopesLayout
+from iteras.lib import storage
 
 
 class _ColsView:
@@ -33,10 +34,13 @@ class _RowsView:
     def __getitem__(self, key): return self.intmat_obj.intmat[key, :]
     def __setitem__(self, key, value): self.intmat_obj.intmat[key, :] = self.intmat_obj.to_xp(value)
 
-class Intmat(BaseDataObj):
+class Intmat(Matrix):
     """
     Interaction matrix data object.
     This class holds the interaction matrix (intmat) and related metadata for wavefront reconstruction.
+
+    It is a :class:`~iteras.data_objects.matrix.Matrix`, whose matrix is also
+    available as the ``intmat`` attribute.
     """
     def __init__(self,
                  intmat = None,
@@ -47,48 +51,48 @@ class Intmat(BaseDataObj):
                  pupdata_tag: str = '',
                  subapdata_tag: str = '',
                  norm_factor: float= 0.0,
+                 slopes_layout: SlopesLayout=None,
                  target_device_idx: int=None,
                  precision: int=None):
         """
-        Note
-        ----
-        
+        Notes
+        -----
         axes are [slopes, modes]
 
         Members .modes and .slopes allow numpy-like access, for example:
 
         intmat_obj.modes[3:5] += 1
         """
-        super().__init__(target_device_idx=target_device_idx, precision=precision)
-        if intmat is not None:
-            self.intmat = self.to_xp(intmat)
-        else:
+        if intmat is None:
             if nmodes is None or nslopes is None:
                 raise ValueError('nmode sand nslopes must set if intmat is not passed')
-            self.intmat = self.xp.zeros((nslopes, nmodes), dtype=self.dtype)
+            intmat = np.zeros((nslopes, nmodes))
+        super().__init__(intmat, target_device_idx=target_device_idx, precision=precision)
         self.slope_mm = slope_mm
         self.slope_rms = slope_rms
         self.pupdata_tag = pupdata_tag
         self.subapdata_tag = subapdata_tag
         self.norm_factor = norm_factor
+        self.slopes_layout = slopes_layout
 
-        self.modes = _ColsView(self)
-        self.slopes = _RowsView(self)
+    @property
+    def intmat(self):
+        '''The interaction matrix, same as ``matrix``'''
+        return self.matrix
 
-    def get_value(self):
-        '''
-        Get the intmat as a numpy/cupy array
-        '''
-        return self.intmat
+    @intmat.setter
+    def intmat(self, value):
+        self.matrix = value
 
-    def set_value(self, v):
-        '''
-        Set new values for the intmat
-        Arrays are not reallocated
-        '''
-        assert v.shape == self.intmat.shape, \
-            f"Error: input array shape {v.shape} does not match intmat shape {self.intmat.shape}"
-        self.intmat[:]= self.to_xp(v)
+    # Views created on demand: stored in an attribute, they would make a reference
+    # cycle, and the intmat array would be freed only by the garbage collector.
+    @property
+    def modes(self):
+        return _ColsView(self)
+
+    @property
+    def slopes(self):
+        return _RowsView(self)
 
     def set_nmodes(self, new_nmodes):
         old_nmodes = self.nmodes
@@ -126,31 +130,37 @@ class Intmat(BaseDataObj):
 
     @property
     def nmodes(self):
-        return self.intmat.shape[1]
+        return self.ncols
 
     @property
     def nslopes(self):
-        return self.intmat.shape[0]
+        return self.nrows
 
     def get_fits_header(self):
-        hdr = fits.Header()
-        hdr['VERSION'] = 1
+        hdr = super().get_fits_header()
         hdr['PUP_TAG'] = self.pupdata_tag
         hdr['SA_TAG'] = self.subapdata_tag
         hdr['NORMFACT'] = self.norm_factor
         return hdr
 
+    def get_metadata_arrays(self):
+        '''The :attr:`slopes_layout`, if set, as named arrays (see SlopesLayout.to_arrays())'''
+        return {} if self.slopes_layout is None else self.slopes_layout.to_arrays()
+
+    def set_metadata_arrays(self, arrays):
+        '''Restore the :attr:`slopes_layout` saved by :meth:`get_metadata_arrays`, if present'''
+        layout = SlopesLayout.from_arrays(arrays)
+        if layout is not None:
+            self.slopes_layout = layout
+
+    def _arrays_to_save(self):
+        return {'matrix': self.matrix, 'slopemm': self.slope_mm, 'sloperms': self.slope_rms,
+                **self.get_metadata_arrays()}
+
     def save(self, filename, overwrite=True):
-        hdr = self.get_fits_header()
-        hdu = fits.PrimaryHDU(header=hdr)  # main HDU, empty, only header
-        hdul = fits.HDUList([hdu])
-        hdul.append(fits.ImageHDU(data=cpuArray(self.intmat), name='INTMAT'))
-        if self.slope_mm is not None:
-            hdul.append(fits.ImageHDU(data=cpuArray(self.slope_mm), name='SLOPEMM'))
-        if self.slope_rms is not None:
-            hdul.append(fits.ImageHDU(data=cpuArray(self.slope_rms), name='SLOPERMS'))
-        hdul.writeto(filename, overwrite=overwrite)
-        hdul.close()  # Force close for Windows
+        # FITS layout as before: the matrix in the first extension, after an empty primary HDU
+        storage.write_object(filename, self.get_fits_header(), self._arrays_to_save(),
+                             overwrite=overwrite)
 
     @staticmethod
     def from_header(hdr, target_device_idx=None):
@@ -158,42 +168,48 @@ class Intmat(BaseDataObj):
 
     @staticmethod
     def restore(filename, target_device_idx=None):
-        with fits.open(filename) as hdul:
-            hdr = hdul[0].header
-            intmat = hdul[1].data.copy()
+        with storage.read_object(filename) as f:
+            hdr = f.header
             norm_factor = float(hdr.get('NORMFACT', 0.0))
             pupdata_tag = hdr.get('PUP_TAG', '')
             subapdata_tag = hdr.get('SA_TAG', '')
-            # Reading additional fits extensions
-            if len(hdul) >= 4:
-                slope_mm = hdul[2].data.copy()
-                slope_rms = hdul[3].data.copy()
+            layout_names = (SlopesLayout.IDX_NAME, SlopesLayout.SHAPE_NAME, SlopesLayout.KIND_NAME)
+            layout_arrays = {name: f.read(name) for name in f.names() if name.upper() in layout_names}
+            # Optional arrays, read only if both are present. Files with a layout
+            # have named arrays: no fallback to the HDU index, taken by the layout
+            # when slope_mm/slope_rms were not saved
+            i_mm, i_rms = (None, None) if layout_arrays else (2, 3)
+            if f.has('slopemm', i_mm) and f.has('sloperms', i_rms):
+                slope_mm = f.read('slopemm', i_mm)
+                slope_rms = f.read('sloperms', i_rms)
             else:
                 slope_mm = slope_rms = None
-        return Intmat(intmat, slope_mm, slope_rms, pupdata_tag, subapdata_tag, norm_factor, target_device_idx=target_device_idx)
+            intmat = f.load(matrix_array_name(f), 1, target_device_idx=target_device_idx)
+        im = Intmat(intmat, slope_mm=slope_mm, slope_rms=slope_rms, pupdata_tag=pupdata_tag,
+                    subapdata_tag=subapdata_tag, norm_factor=norm_factor,
+                    target_device_idx=target_device_idx)
+        im.set_metadata_arrays(layout_arrays)
+        return im
 
-    def generate_rec(self, nmodes=None, cut_modes=0, w_vec=None, interactive=False):
+    def generate_rec(self, nmodes=None, cut_modes=0):
         if nmodes is not None:
             intmat = self.modes[:nmodes]
         else:
             intmat = self.intmat
-        recmat = self.pseudo_invert(self.to_xp(intmat), n_modes_to_drop=cut_modes, w_vec=w_vec, interactive=interactive)
+        recmat = self.pseudo_invert(self.to_xp(intmat), n_modes_to_drop=cut_modes)
         rec = Recmat(recmat, target_device_idx=self.target_device_idx)
         rec.im_tag = self.norm_factor  # TODO wrong
         return rec
 
-    def generate_rec_mmse(self, r0, L0, diameter, modal_base, c_noise, nmodes=None, m2c=None):
+    def generate_rec_mmse(self, r0: float, L0: float, diameter: float, modal_base: IFunc,
+                          c_noise: float | np.ndarray | list, nmodes: int = None) -> Recmat:
         if nmodes is not None:
             intmat = self.modes[:nmodes]
         else:
             intmat = self.intmat
         # atmosphere covariance matrix
-        if m2c is not None:
-            influence_function = m2c.m2c.T @ modal_base.influence_function
-        else:
-            influence_function = modal_base.influence_function
         c_atm = compute_ifs_covmat(
-            modal_base.mask_inf_func, diameter, influence_function, r0, L0,
+            modal_base.mask_inf_func, diameter, modal_base.influence_function, r0, L0,
             oversampling=2, xp=self.xp, dtype=self.dtype
         )
         if c_atm.shape[0] > intmat.shape[1]:
@@ -244,7 +260,15 @@ class Intmat(BaseDataObj):
         rec = Recmat(recmat, target_device_idx=self.target_device_idx)
         return rec
 
-    def pseudo_invert(self, matrix, n_modes_to_drop=0, w_vec=None, interactive=False):
-        # TODO handle n_modes_to_drop, and w_vec
-        return self.xp.linalg.pinv(matrix)
+    def pseudo_invert(self, matrix, n_modes_to_drop=0):
+        """
+        Pseudo-inverse of *matrix*, dropping the *n_modes_to_drop* smallest singular values.
+        """
+        if n_modes_to_drop == 0:
+            return self.xp.linalg.pinv(matrix)
+        u, s, vt = self.xp.linalg.svd(matrix, full_matrices=False)
+        if not 0 < n_modes_to_drop < len(s):
+            raise ValueError(f'pseudo_invert: n_modes_to_drop must be between 0 and {len(s) - 1}')
+        n = len(s) - n_modes_to_drop
+        return (vt[:n].T / s[:n]) @ u[:, :n].T
 

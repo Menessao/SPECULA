@@ -7,7 +7,7 @@ Guidelines for processing objects
 Class derivation
 ----------------
 
-All processing objects derive from the :py:class:`~specula.base_processing_obj.BaseProcessingObj` class.
+All processing objects derive from the :py:class:`~iteras.base_processing_obj.BaseProcessingObj` class.
 
 Life cycle
 ----------
@@ -18,10 +18,11 @@ A processing object life is divided into several discrete steps
 * Input/output connection
 * Setup
 * Loop (repeated N times):
-  * check_ready()
-  * prepare_trigger()
-  * trigger_code()
+
+  * check_ready(), which calls prepare_trigger() if the object is ready
+  * trigger(), which runs trigger_code() directly or as a captured CUDA graph
   * post_trigger()
+
 * Finalize
  
 
@@ -76,7 +77,7 @@ If arrays are very small and are not intended to be loaded on a GPU, even if pre
 Inputs
 ******
 
-Each input is an entry on the *self.inputs* dictionary, and is an instance of the :py:class:`~specula.connections.InputValue` class, initialized with the expected input type. It is possible for an input to be a list of values of the same type, in this case use an instance of :py:class:`~specula.connections.InputList`::
+Each input is an entry on the *self.inputs* dictionary, and is an instance of the :py:class:`~iteras.connections.InputValue` class, initialized with the expected input type. It is possible for an input to be a list of values of the same type, in this case use an instance of :py:class:`~iteras.connections.InputList`::
 
         self.inputs['seeing'] = InputValue(type=BaseValue)
         self.inputs['in_slopes_list'] = InputList(type=Slopes)
@@ -85,7 +86,13 @@ If the input is optional, add *optional=True* (by default, all inputs are mandat
 
         self.inputs['in_slopes'] = InputValue(type=Slopes, optional=True)
 
-Calling the .get() method of an optional input may return None if it has not been set.
+An optional input that has not been connected in the configuration file has a value of None
+in *self.local_inputs* (see :ref:`prepare_trigger() <prepare_trigger>` below).
+
+Inputs must be created in the constructor, because connections are made before *setup()* is called.
+An input can be created conditionally, depending on the constructor parameters
+(for example, the sodium profile inputs of :py:class:`~specula.processing_objects.sh.SH`).
+In that case its declaration must be marked as optional, see :ref:`io_declaration` below.
 
 Outputs
 *******
@@ -95,45 +102,113 @@ Outputs are instances of SPECULA data objects that must be allocated exactly onc
         self.modes = BaseValue('output modes from modal reconstructor', target_device_idx=target_device_idx)
         self.outputs['out_modes'] = self.modes
 
-The output type is inferred automatically.
+The output type is the type of the data object itself, so no type needs to be specified
+when adding an entry to *self.outputs*.
 
 
-Input/Output declaration patterns
-*********************************
+.. _io_declaration:
 
-The framework validates declared names from ``input_names()`` and ``output_names()``
-against runtime ``self.inputs`` and ``self.outputs`` (via ``sanity_check()``).
+Declaring inputs and outputs
+****************************
 
-Declared names can use the following grammar:
+In addition to filling *self.inputs* and *self.outputs*, a processing object declares its interface
+with the two class methods ``input_names()`` and ``output_names()``. Each one returns a dictionary
+that maps a name to an ``InputDesc(type, description)`` or ``OutputDesc(type, description)``
+named tuple, both defined in :py:mod:`iteras.base_processing_obj`::
 
-* exact names, for example ``out_ef``
-* placeholder-style names, for example:
-    * ``out_modes_{sensor_idx}`` in ``ModalrecMultirate.output_names()``
-    * ``out_{source_name_}layer`` and ``out_{source_name_}ef`` in ``AtmoRandomPhase.output_names()``
+    from specula.base_processing_obj import BaseProcessingObj, InputDesc, OutputDesc
 
-Placeholder segments delimited by ``{...}`` are treated as wildcards
-and matched with glob semantics.
+    class ExampleProcessingObj(BaseProcessingObj):
 
-Raw ``*`` patterns are still supported by the matcher for backward compatibility,
-but in class-level ``input_names()`` and ``output_names()`` declarations
-placeholder-based ``{...}`` patterns are mandatory.
-
-Matching notes:
-
-* exact matches have precedence over pattern matches
-* for inputs, optional declarations are identified by descriptions ending with
-    ``(optional)``
-
-Typical use case for dynamic outputs::
+        @classmethod
+        def input_names(cls):
+            return {
+                'in_slopes': InputDesc(Slopes, 'Input slope vector'),
+                'gain_mod': InputDesc(BaseValue, 'Gain modulation vector (optional)'),
+            }
 
         @classmethod
         def output_names(cls):
-                return {
-                        'out_modes_{sensor_idx}': OutputDesc(BaseValue, 'Per-sensor modal output'),
-                }
+            return {'out_modes': OutputDesc(BaseValue, 'Reconstructed modal vector')}
 
-When outputs are truly dynamic and cannot be represented by a stable
-pattern/type contract, a class can still override ``check_output_names()``.
+The type is the data object class (for an :py:class:`~iteras.connections.InputList`,
+the type of the list elements). The description is a short human-readable text.
+
+A derived class extends the declarations of its base class by updating the dictionary
+returned by the base class method::
+
+        @classmethod
+        def input_names(cls):
+            inputs = super().input_names()
+            inputs.update({'in_commands': InputDesc(BaseValue, 'Command vector (optional)')})
+            return inputs
+
+The declarations are also used when building this documentation: the names of the declared inputs and outputs
+appear in the :doc:`api/processing_objects_summary` table, with optional inputs marked as *(opt)*.
+Types and descriptions are not shown there.
+
+Validation
+++++++++++
+
+The declarations are checked against the actual *self.inputs* and *self.outputs* dictionaries by
+``sanity_check()``, which the framework calls for each object right after its *setup()* method.
+The check raises an exception if:
+
+* an input or output present in the dictionaries is not declared;
+* a declared output is not present in *self.outputs*;
+* a declared input is not present in *self.inputs*, unless its declaration is optional (see below);
+* the input type is not exactly the declared type (a subclass is rejected),
+  or the input is not an :py:class:`~iteras.connections.InputValue`
+  or an :py:class:`~iteras.connections.InputList`;
+* the output is not an instance of the declared type (a subclass is accepted).
+
+If a class does not define ``input_names()`` or ``output_names()``, the corresponding check is skipped.
+Every new processing object should define both.
+
+Optional declarations
++++++++++++++++++++++
+
+Every input and output declared in ``input_names()`` and ``output_names()`` must be
+created in the constructor, even if the object uses it only in some configurations.
+For example, ``SH`` always creates the ``sodium_altitude`` and ``sodium_intensity``
+inputs, although it uses them only with a laser launch telescope. ``sanity_check()``
+checks this before *setup()*.
+
+An input that may be left unconnected in the configuration file is created with
+*optional=True* in :py:class:`~iteras.connections.InputValue`; *setup()* checks that the
+other inputs are connected. Its description usually contains ``(optional)`` (for example
+``(optional)`` or ``(optional, ...)``): this marker is documentation only, shown in the
+summary tables, and is not used by the checks.
+
+An output that is not computed in some configurations (for example ``out_recmat`` of
+``ImShSynimGenerator`` with ``compute_rec=False``) is created anyway, and is never updated.
+
+Name patterns
++++++++++++++
+
+Declared names can be:
+
+* exact names, for example ``out_ef``;
+* placeholder names, for example:
+
+  * ``out_modes_{sensor_idx}`` in ``ModalrecMultirate.output_names()``
+  * ``out_{source_name_}layer`` and ``out_{source_name_}ef`` in ``AtmoRandomPhase.output_names()``
+
+Each segment delimited by ``{...}`` is replaced by a ``*`` wildcard and the actual name is matched
+with :py:func:`fnmatch.fnmatchcase`. The wildcard also matches an empty string, so
+``out_{source_name_}ef`` matches both ``out_on_axis_ef`` and ``out_ef``.
+When an actual name matches both an exact declaration and a pattern, the exact declaration is used.
+
+Raw ``*`` patterns are still accepted by the matcher for backward compatibility,
+but new declarations must use the ``{...}`` placeholder form.
+
+Custom checks
++++++++++++++
+
+When the inputs or outputs are truly dynamic and cannot be described by a stable name pattern and type,
+a class can override ``check_input_names()`` or ``check_output_names()``, as done for example by
+:py:class:`~iteras.processing_objects.data_store.DataStore`
+and :py:class:`~iteras.processing_objects.data_source.DataSource`.
 
 
 Input/Output connections
@@ -141,8 +216,9 @@ Input/Output connections
 
 This step is performed automatically by the framework after all objects have been initialized.
 Inputs and outputs are connected based on the configuration file directives.
-For each connection, the output type must match what is specified in the input type definition as shown above.
-If the types do not match, an exception will be raised.
+For each connection, the output must be an instance of the type specified in the input definition
+(a subclass is accepted). If it is not, an exception will be raised.
+For connections between MPI processes this check is not performed.
 
 
 Setup
@@ -161,12 +237,11 @@ so that the derived class' code runs on the correct target. A class that reimple
         super().setup()
         [... additional setup as needed ...]
 
-An important task of the *setup()* method is to call the *build_stream()* method to enable CUDA graph capturing
-of the trigger code described below::
+To allow the capture of the trigger code described below in a CUDA graph (see :doc:`accelerator`),
+a class overrides *can_accelerate()*::
 
-    def setup(self):
-        super().setup()
-        self.build_stream()
+    def can_accelerate(self):
+        return True
 
 
 Trigger
@@ -175,40 +250,63 @@ Trigger
 Trigger order
 *************
 
-The order in which instances will be triggered is automatically inferred from the input/output connections. The algorithm is:
+The order in which instances are triggered is computed once, before the simulation starts,
+from the input/output connections in the configuration file. The algorithm is:
 
-#. First, all instances without inputs are triggered
-#. Then, all instances for which the objects in the previous step were the sole input
-#. Then, all instances for which all inputs have been fullfilled in the previous step
+#. Find all objects without inputs (leaves) and assign them to the current group
+#. Remove these objects, and all the connections to their outputs, from the dependency graph.
+   Objects whose inputs were all connected to the removed objects become leaves
+#. Repeat from step 1 with the next group, until no objects are left
 
-The last step is repeated until no new inputs have been set. Therefore, it is possible for some instances not to be triggered
-if an object in a previous step has not produced an output. This is expected behaviour: it allows to have part of the simulation
-to run at a slower rate than the rest. For example, a object simulating a CCD might integrate data for many loop iterations
-before producing its output, in order to simulate a long integration time. All objects depending on this output will automatically
-be triggered at the slower rate.
+A closed loop is a cycle in the connections, and a cycle has no valid trigger order.
+The cycle is broken by a delayed connection (for example ``'dm.out_layer:-1'``), which refers to the output
+of the previous iteration and is ignored when looking for leaves. With at least one delayed connection
+in each loop, the dependency graph becomes acyclic and the trigger order can be computed.
+If a cycle without delayed connections is present, its objects (and all the objects depending on them)
+never become leaves: they are never triggered, and only a warning listing them is logged.
+An exception is raised instead when the remaining leaves all produce outputs that are read with a delay
+by each other (for example, two objects each reading the other's output with ``:-1``),
+because no order satisfies all the delays.
 
-Readyness check
+The one-step delay is obtained from the trigger order, not from a copy of the data: the input refers to the same
+data object as the output. The object producing a delayed output is therefore placed after all the objects that
+read it, so that they read the value of the previous iteration before it is overwritten.
+As a consequence, only one-step delays are supported: delays other than ``0`` and ``-1`` (e.g. ``:-2``) raise an error.
+Longer delays must be implemented inside the processing objects (for example with the *delay* parameter of the filters).
+
+Objects in the same group can be triggered at the same time.
+
+Readiness check
 ***************
 
-Before triggering each object, its inputs are checked. The object is triggered only if at least one input
-has been refreshed since the last trigger, or if the object has no inputs.
+The trigger order is fixed, but at each iteration an object is actually triggered only if it is ready.
+The readiness check is implemented in the *check_ready()* method of the base class, and there is usually
+no need to override it. An object is ready if:
 
-The readiness check is implemented in the *check_ready()* of the base class, and there is usually
-no need to override it.
+* it has no inputs, or
+* all its inputs are optional and none of them has been connected, or
+* at least one input has been refreshed in the current iteration,
+  that is its *generation_time* is equal to the current time.
+
+This allows part of the simulation to run at a slower rate than the rest. For example, an object
+simulating a CCD might integrate data for many loop iterations before producing its output, in order
+to simulate a long integration time. All objects depending on this output will automatically
+be triggered at the slower rate.
+
+If the object is ready, *check_ready()* also calls *prepare_trigger()*.
 
 Trigger process
 ***************
 
-The trigger order algorithm identifies groups of object that can be triggered at the same time. For each group:
+For each group identified by the trigger order algorithm:
 
-#. Call *prepare_trigger()* for all objects
-#. Call *trigger_code()* for all objects
-#. Call *post_trigger()* for all objects
+#. Call *check_ready()* for all objects, which in turn calls *prepare_trigger()* for the ready ones
+#. Call *trigger()* for all ready objects, which executes *trigger_code()* directly, or launches its CUDA graph if one was captured
+#. Call *post_trigger()* for all ready objects
 
 The general idea is to have a GPU-friendly algorithm in *trigger_code()*, that operates on statically-allocated
-arrays. This algorithm can be captured in a CUDA graph and executed on a private CUDA stream, which is both
-be more efficient than a series of Python/CuPY operations and also allows multiple objects to be run in parallel
-on the same or different GPUs. *prepare_trigger()* and *post_trigger()* take care of operations
+arrays. This algorithm can be captured in a CUDA graph, which is more efficient than a series of
+Python/CuPy operations; objects on different GPUs run in parallel. *prepare_trigger()* and *post_trigger()* take care of operations
 that cannot be captured in CUDA graph, in particular:
 
 * *prepare_trigger()*: perform any needed setup, for example CPU-only numpy calculations
@@ -226,16 +324,10 @@ the current simulated time *t*. The base class method must be called as well, ex
     def post_trigger(self):
         super().post_trigger()
 
-By default, all streams in an object group are executed in parallel. If an object wishes to turn off parallelization,
-it can call *build_stream()* setting the optional *allow_parallel* parameter to False::
+The GPU work of the objects of a device runs in trigger order on its default stream. Object
+instances can run in parallel on multiple GPUs, by setting their *target_device_idx*.
 
-    def setup(self):
-        super().setup()
-        self.build_stream(allow_parallel=False)
-
-In this case, the trigger graph will be run on a default stream that serializes all such graphs. It is still
-possible to parallelize object instances across multiple GPUs, by explicitly setting their *target_device_idx*
-to a specific GPU in their initialization.
+.. _prepare_trigger:
 
 prepare_trigger():
 ++++++++++++++++++
@@ -255,7 +347,7 @@ they can be copied into pre-allocated static arrays::
 trigger_code()
 ++++++++++++++
 
-This method has no base class implementation.
+The base class implementation does nothing, and there is no need to call it.
 
 Any code implemented by derived classes must:
 
@@ -284,7 +376,7 @@ If the trigger code is known to be non-parallelizable, or numpy-only code is use
 it is possible to avoid the previous complexity and:
 
 * Put all code into *trigger_code()*
-* Avoid calling *build_stream()* during setup
+* Do not override *can_accelerate()*
 
 This way, no CUDA graph will be generated and *trigger_code()* will be executed
 as ordinary Python code.

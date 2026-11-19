@@ -10,8 +10,6 @@ from specula.base_value import BaseValue
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.pixels import Pixels
 from specula.data_objects.slopes import Slopes
-from specula.data_objects.ifunc import IFunc
-from specula.data_objects.m2c import M2C
 from specula import cpuArray, np
 
 import matplotlib.pyplot as plt
@@ -55,6 +53,7 @@ class SprintPyr(BaseSprintEstimator):
                  apply_absolute_slopes=False,
                  integration_gain=0.5,
                  forgetting_factor=1.0,
+                 param_tolerance=0.01,
                  target_device_idx=None,
                  precision=None):
         """
@@ -83,6 +82,7 @@ class SprintPyr(BaseSprintEstimator):
             apply_absolute_slopes=apply_absolute_slopes,
             integration_gain=integration_gain,
             forgetting_factor=forgetting_factor,
+            param_tolerance=param_tolerance,
             target_device_idx=target_device_idx,
             precision=precision
         )
@@ -95,7 +95,6 @@ class SprintPyr(BaseSprintEstimator):
         self.internal_dm = None
         self.internal_pixels = None
         self.internal_slopec = None
-        self.internal_ef = None
         self.push_amp = push_amp
         self.pupilstop = pupil_mask
 
@@ -121,34 +120,18 @@ class SprintPyr(BaseSprintEstimator):
         """Initialize with Pyramid-specific parameters and build internal pipeline"""
         super().setup()
 
-        # Build independent copies of DM data for internal pipeline
-        ifunc_obj = IFunc(
-            ifunc=self.dm.ifunc_obj.influence_function.copy(),
-            mask=self.dm.ifunc_obj.mask_inf_func.copy(),
-            type_str=self.dm.ifunc_obj.type_str,
-            target_device_idx=self.target_device_idx,
-            precision=self.precision
-        )
-
-        m2c_obj = None
-        if self.dm.m2c is not None:
-            m2c_obj = M2C(
-                m2c=self.dm.m2c.copy(),
-                target_device_idx=self.target_device_idx,
-                precision=self.precision
-            )
-
-        # 1. Build Internal DM (sharing IFuncs with the main DM)
+        # 1. Build Internal DM on the basis of the main DM input command
+        # (an independent copy), so that the two DMs have the same input
         self.internal_dm = DM(
             simul_params=self.simul_params,
             height=getattr(self.dm, 'height', 0.0),
-            ifunc=ifunc_obj,
-            m2c=m2c_obj,
+            ifunc=self.dm.modal_ifunc(target_device_idx=self.target_device_idx,
+                                       precision=self.precision),
             pupilstop=self.pupilstop,
             target_device_idx=self.target_device_idx,
             precision=self.precision
         )
-        self.internal_command = BaseValue(self.xp.zeros(self.dm.nmodes, dtype=self.dtype),
+        self.internal_command = BaseValue(value=self.xp.zeros(self.dm.nmodes, dtype=self.dtype),
                                           target_device_idx=self.target_device_idx)
         self.internal_dm.inputs['in_command'].set(self.internal_command)
         self.internal_dm.setup()
@@ -223,7 +206,7 @@ class SprintPyr(BaseSprintEstimator):
         """Compute nominal IM using a push-pull sequence on the internal pipeline."""
 
         # 1. Update mis-registration parameters on the interpolator
-        self.internal_wfs.ef_interpolator.update_parameters(
+        self.internal_wfs.update_interpolator_parameters(
                             xShiftPhInPixel=float(self.misreg_params[0]),
                             yShiftPhInPixel=float(self.misreg_params[1]),
                             rotAnglePhInDeg=float(self.misreg_params[2]),
@@ -278,54 +261,21 @@ class SprintPyr(BaseSprintEstimator):
     def _im_2d_map(self, im_mode): # pragma: no cover
         """Convert interaction matrix to 2D map for visualization (Pyramid)."""
 
-        # Create a temporary Slopes object for the IM mode
+        # Temporary Slopes object for the IM mode, with the same layout as the slopes of the internal slope computer
         sl = Slopes(length=im_mode.shape[0],
+                    layout=self.internal_slopec.slopes.layout,
+                    interleave=self.internal_slopec.slopes.interleave,
                     target_device_idx=self.target_device_idx,
                     precision=self.precision)
         sl.set_value(im_mode)
 
-        pupdata = self.internal_slopec.pupdata
-
-        if self.internal_slopec.slopes_from_intensity:
-            sl.single_mask = pupdata.complete_mask()
-            sl.display_map = pupdata.display_map
+        # A single 2D array for slopes from intensity, X and Y frames
+        # (shape (2, ny, nx)) for standard slopes, shown one above the other
+        frames2d = cpuArray(sl.get2d())
+        if frames2d.ndim == 3:
+            frames2d = [np.vstack([frames2d[0], frames2d[1]])]
         else:
-            # For Pyramid, we need to reconstruct the single_mask for the full frame based
-            # on the pupil data.
-            # The original single_mask from pupdata is cropped to the valid subapertures,
-            # which is not suitable for visualizing the full 2D map of the IM mode.
-            full_mask = self.xp.zeros(pupdata.framesize, dtype=self.dtype)
-
-            # Extract the valid subaperture indices for each of the 4 pupils and mark
-            # them on the full mask
-            idx0 = pupdata.pupil_idx(0)
-            idx0_valid = idx0[idx0 >= 0]
-
-            # Write 1s in the full mask at the positions corresponding to the valid
-            # subapertures of pupil 0
-            self.xp.put(full_mask, idx0_valid, 1)
-
-            sl.single_mask = full_mask
-            sl.display_map = idx0_valid
-
-        # get2d() handles the reshaping based on the lengths of mask/display_map.
-        # It returns a single 2D array if slopes_from_intensity=True,
-        # or a list of two 2D arrays [frame_x, frame_y] for standard slopes.
-        frames2d = sl.get2d()
-
-        # Handle both single frame and separate x/y frames cases.
-        if isinstance(frames2d, list):
-            frames2d = [cpuArray(frame) for frame in frames2d]
-        else:
-            frames2d = cpuArray(frames2d)
-            if frames2d.ndim == 3 and frames2d.shape[0] == 2:
-                n = frames2d.shape[2]
-                combined = np.zeros((n,n//2))
-                combined[:n//2,:] = frames2d[0][:n//2, :n//2]
-                combined[n//2:,:] = frames2d[1][:n//2, :n//2]
-                frames2d = [combined]
-            else:
-                frames2d = [frames2d]
+            frames2d = [frames2d]
 
         return frames2d
 

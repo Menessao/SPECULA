@@ -1,11 +1,18 @@
+import warnings
+
 from specula.processing_objects.base_modalrec import BaseModalrec
 from specula.data_objects.recmat import Recmat
+from specula.lib.graph_matmul import matmul
 
 
 class Modalrec(BaseModalrec):
     """
     Standard modal reconstructor processing object.
     Performs pure matrix-vector multiplication: modes = recmat @ slopes.
+    The *nmodes* parameter is deprecated and ignored: the number of modes is
+    set by the recmat (use *ncutmodes* to discard the last modes).
+    The recmat can be replaced during a run by assigning *recmat*: *ncutmodes*
+    is applied to it, and it must give the same number of modes.
     """
 
     def __init__(self,
@@ -16,13 +23,39 @@ class Modalrec(BaseModalrec):
                  precision: int = None):
         super().__init__(target_device_idx=target_device_idx, precision=precision)
 
-        if ncutmodes:
-            recmat.reduce_size(ncutmodes)
-
+        if nmodes is not None:
+            warnings.warn('Modalrec: nmodes is deprecated and ignored, the number of modes '
+                          'is set by the recmat (use ncutmodes to discard the last modes)',
+                          FutureWarning, stacklevel=2)
+        self.ncutmodes = ncutmodes
         self.recmat = recmat
-        nmodes = self.recmat.nmodes
-        self.modes.value = self.xp.zeros(nmodes, dtype=self.dtype)
+        self.modes.value = self.xp.zeros(self.recmat.nmodes, dtype=self.dtype)
+
+    @property
+    def recmat(self):
+        return self._recmat_obj
+
+    @recmat.setter
+    def recmat(self, recmat):
+        if self.ncutmodes:
+            recmat.reduce_size(self.ncutmodes)
+        # The output keeps its size: a new array would fail the check of the arrays
+        # of an accelerated reader
+        if self.modes.value is not None and recmat.nmodes != len(self.modes.value):
+            raise ValueError(f'Modalrec: the new recmat gives {recmat.nmodes} modes, '
+                             f'{len(self.modes.value)} are expected')
+        self._recmat_obj = recmat
+        # In the dtype of this object, like the slopes: inside a CUDA graph capture the
+        # product needs equal dtypes. A copy only if the dtype differs: later in-place
+        # changes to recmat.recmat are then not seen, assign a new recmat instead
+        self._recmat = self.to_xp(recmat.recmat, dtype=self.dtype)
+        # The array used by trigger_code() is new: capture the graph again
+        self.invalidate_graph()
+
+    def can_accelerate(self):
+        # The product uses graph_matmul.matmul(), which can be captured
+        return True
 
     def trigger_code(self):
-        self.modes.value[:] = self.recmat.recmat @ self.slopes
+        self.modes.value[:] = matmul(self._recmat, self.slopes, self.xp)
         self.modes.generation_time = self.current_time

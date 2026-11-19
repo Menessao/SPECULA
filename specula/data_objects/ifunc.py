@@ -1,10 +1,11 @@
-from specula import cpuArray
 from specula.base_data_obj import BaseDataObj
 from specula.data_objects.ifunc_inv import IFuncInv, cut_modes
 from astropy.io import fits
 
 from specula.lib.compute_zonal_ifunc import compute_zonal_ifunc
 from specula.lib.compute_zern_ifunc import compute_zern_ifunc
+from specula.lib.fast_pinv import fast_pinv
+from iteras.lib import storage
 
 
 def compute_kl_ifunc(*args, **kwargs):
@@ -44,7 +45,6 @@ class IFunc(BaseDataObj):
                 ):
         super().__init__(precision=precision, target_device_idx=target_device_idx)
         self.type_str = type_str
-        self._doZeroPad = False
 
         if ifunc is None:
             if type_str is None:
@@ -97,21 +97,6 @@ class IFunc(BaseDataObj):
 
     @influence_function.setter
     def influence_function(self, ifunc):
-        if self._doZeroPad:
-            raise NotImplementedError("zeroPad is not implemented")
-            if self._mask_inf_func is None:
-                raise ValueError("if doZeroPad is set, mask_inf_func must be set before setting ifunc.")
-            sIfunc = ifunc.shape
-
-            if sIfunc[0] < sIfunc[1]:
-                ifuncPad = self.xp.zeros((sIfunc[0], len(self._mask_inf_func)), dtype=ifunc.dtype)
-                ifuncPad[:, self._idx_inf_func] = ifunc
-            else:
-                ifuncPad = self.xp.zeros((len(self._mask_inf_func), sIfunc[1]), dtype=ifunc.dtype)
-                ifuncPad[self._idx_inf_func, :] = ifunc
-
-            ifunc = ifuncPad
-
         self._influence_function = self.to_xp(ifunc, dtype=self.dtype)
 
     @property
@@ -184,7 +169,7 @@ class IFunc(BaseDataObj):
         if remove_piston:
             ifunc = ifunc - self.xp.mean(ifunc, axis=1, keepdims=True)
 
-        inv = self.xp.linalg.pinv(ifunc)
+        inv = fast_pinv(ifunc, self.xp)
         return IFuncInv(inv, mask=self._mask_inf_func, precision=self.precision,
                         target_device_idx=self.target_device_idx)
 
@@ -198,17 +183,16 @@ class IFunc(BaseDataObj):
         return hdr
 
     def save(self, filename, overwrite=False):
-        hdr = self.get_fits_header()
-        hdu = fits.PrimaryHDU(header=hdr)
-        hdul = fits.HDUList([hdu])
-        hdul.append(fits.ImageHDU(data=cpuArray(self._influence_function.T), name='INFLUENCE_FUNCTION'))
-        hdul.append(fits.ImageHDU(data=cpuArray(self._mask_inf_func), name='MASK_INF_FUNC'))
-        hdul.writeto(filename, overwrite=overwrite)
-        hdul.close()  # Force close for Windows
+        storage.write_object(filename, self.get_fits_header(),
+                             {'influence_function': self._influence_function.T, 'mask_inf_func': self._mask_inf_func},
+                             overwrite=overwrite)
 
     @staticmethod
     def restore(filename, target_device_idx=None, exten=1):
-        with fits.open(filename) as hdul:
-            ifunc = hdul[exten].data.T
-            mask = hdul[exten+1].data
+        # In FITS files, *exten* is the index of the HDU of the influence function,
+        # followed by the mask: the arrays are looked up by name only with the default value
+        with storage.read_object(filename) as f:
+            mask = f.read('mask_inf_func' if exten == 1 else None, exten + 1)
+            ifunc = f.load('influence_function' if exten == 1 else None, exten,
+                           target_device_idx=target_device_idx, transpose=True)
         return IFunc(ifunc, mask=mask, target_device_idx=target_device_idx)
