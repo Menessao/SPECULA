@@ -153,3 +153,11 @@ ConvolutionKernel*
 
 # Nsys profiler repots
 *.nsys-rep
+
+# Local AOEB work: docs, caches, figure data and results
+config/aoeb/doc/
+config/aoeb/opt_iir/*.npz
+config/aoeb/opt_iir/*.pkl
+config/aoeb/opt_iir/aoeb_order_cache_*.json
+config/figures/
+config/results/
