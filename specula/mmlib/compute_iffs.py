@@ -82,6 +82,7 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         pupil_mask = hdu[1].data
     else:
         pupil_mask = make_mask(np_size=pupil_pixels, diaratio=diaratio, obsratio=obsratio)
+        os.makedirs(os.path.join(root_dir, 'pupilstop'), exist_ok=True)
         fits.writeto(os.path.join(root_dir,'pupilstop/'+tag+f'_{pupil_pixels:1.0f}pixels.fits'),pupil_mask,overwrite=True)
     # save_pupil(pupil_mask,destination_dir=root_dir+'/pupilstop/',fname=tag+f'_{pupil_pixels:1.0f}pixels',Npix=Npix,D=D)
     # print(f'Saved pupil mask as {root_dir}/pupilstop/{tag}_{pupil_pixels:1.0f}pixels.fits')
@@ -109,6 +110,8 @@ def compute_and_save_influence_functions(root_dir:str, tag:str, pupil_pixels:int
         dtype=dtype,
         shrink=shrink_coords,
         margin=margin,
+        return_master_ids=True,
+        flip_y=True,
     )
 
     if doSlaving:
@@ -341,13 +344,13 @@ if __name__ == "__main__":
     # compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24,
     #                                       geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=2)
 
-    Npix = 220
+    Npix = 120
     # compute_and_save_influence_functions(vlt_dir,tag=f'dm1200_{Npix}pix', pupil_pixels=Npix, n_acts=42, pupil_mask_tag='vlt_pupil',
     #                                         geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.2, margin=0)
     # compute_and_save_influence_functions(wfsw_dir, tag=f'bmc2k_vlt', pupil_pixels=Npix, n_acts=50, pupil_mask_tag='vlt_pupil',
     #                                         geom='alpao', r0=10e-2, obsratio=0.11, diaratio=1.0, D=8.2, margin=0)
-    compute_and_save_influence_functions(chaos_dir, tag=f'dm820', pupil_pixels=Npix, n_acts=32,
-                                            geom='alpao', r0=10e-2, obsratio=0.0, diaratio=1.0, D=8.0, margin=0)
+    compute_and_save_influence_functions(fsoc_dir, tag=f'dm820_1m', pupil_pixels=Npix, n_acts=32,
+                                            geom='alpao', r0=5e-2, obsratio=0.0, diaratio=1.0, D=1.0, margin=0)
     
     
     # Npix = 420

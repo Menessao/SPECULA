@@ -70,7 +70,7 @@ def save_kalman_data(tag, root_dir, a1, a2, q, sensors, n_modes=None, q_is='driv
                         (e.g. get_noise_propagation(..., sigma_e=0, flux)**2);
                         the rest of noise_var is the read-out part
           'reference_flux' flux at which noise_var was computed, as PyrSlopec
-                        'out_flux' reports it: total pupil flux per frame of
+                        'out_total_counts' reports it: total pupil flux per frame of
                         that sensor [e-]. With photon_noise_var, the filter
                         rescales the noise with the measured flux
     n_modes : int, optional
@@ -252,7 +252,7 @@ if __name__ == '__main__':
     dt = 0.0005              # [s] loop time step (main.time_step)
     wind_speed = 15.0        # [m/s]
     n_subaps, n_modes = 48, 1300
-    # total pupil flux per frame of each sensor [e-], as PyrSlopec 'out_flux' reports it;
+    # total pupil flux per frame of each sensor [e-], as PyrSlopec 'out_total_counts' reports it;
     # convert if your noise function uses another flux definition (per sub-aperture, ...)
     flux_vis = 1.0e5         # photo-electrons per 2 ms VIS frame
     flux_nir = 2.5e4         # photo-electrons per 0.5 ms NIR frame

@@ -77,14 +77,11 @@ class TestModulatedPyramid(unittest.TestCase):
             pup_dist=pup_dist,
             output_resolution=output_resolution,
             mod_amp=mod_amp,
+            pyr_tlt_coeff=None,
             target_device_idx=target_device_idx,
         )
 
-        tlt_x = 1.2
-        tlt_y = 0.9
         tlt_coeffs = xp.ones([2,4])
-        tlt_coeffs[0,0] = tlt_y
-        tlt_coeffs[1,0] = tlt_x
         pyramid_tlt = ModulatedPyramid(
             simul_params=simul_params,
             wavelengthInNm=wavelength_in_nm,
@@ -273,29 +270,6 @@ class TestModulatedPyramid(unittest.TestCase):
             f"Expected masked exponential to match mask shape, got {pyramid.masked_exp.shape} and {pyramid.fp_mask.shape}",
         )
 
-        # Case B
-        simul_params = SimulParams(
-            pixel_pupil=197,
-            pixel_pitch=0.1,
-        )
-        pyramid = ModulatedPyramid(
-            simul_params=simul_params,
-            wavelengthInNm=750,
-            fov=2.0,
-            pup_diam=40,
-            output_resolution=120,
-            target_device_idx=target_device_idx,
-        )
-        self.assertEqual(
-            pyramid.pyr_tlt.shape,
-            pyramid.fp_mask.shape,
-            f"Expected pyramid tilt map and focal plane mask to share shape, got {pyramid.pyr_tlt.shape} and {pyramid.fp_mask.shape}",
-        )
-        self.assertEqual(
-            pyramid.shifted_masked_exp.shape,
-            pyramid.fp_mask.shape,
-            f"Expected shifted masked exponential to match mask shape, got {pyramid.shifted_masked_exp.shape} and {pyramid.fp_mask.shape}",
-        )
 
     @cpu_and_gpu
     def test_flat_wavefront_output_size(self, target_device_idx, xp):

@@ -149,7 +149,7 @@ pyr_slopes_vis:
   # sn_object:            'pyr3.0_48x48_sn'
   inputs:
     in_pixels:        'cred_vis.out_pixels'
-  outputs:           ['out_slopes', 'out_flux']
+  outputs:           ['out_slopes', 'out_total_counts']
 
 pyr_modes_vis:
   class:             'Modalrec'
@@ -195,7 +195,7 @@ pyr_slopes_nir:
   # sn_object:            'pyr3.0_48x48_sn'
   inputs:
     in_pixels:        'cred_nir.out_pixels'
-  outputs:           ['out_slopes', 'out_flux']
+  outputs:           ['out_slopes', 'out_total_counts']
 
 pyr_modes_nir:
   class:             'Modalrec'
@@ -279,7 +279,7 @@ kalman:
   inputs:
     in_measurements_list: ['pyr_modes_vis.out_modes', 'pyr_modes_nir.out_modes']   # order of the data file
     in_command:      'kpred.out_comm:-1'     # DM command seen by the WFSs at this step
-    in_flux_list:    ['pyr_slopes_vis.out_flux', 'pyr_slopes_nir.out_flux']        # same order
+    in_flux_list:    ['pyr_slopes_vis.out_total_counts', 'pyr_slopes_nir.out_total_counts']        # same order
   outputs:           ['out_projected_state', 'out_state', 'out_bias']
 
 # Plant inverse (beta = 0.99) with fractional delay 0.5: total plant delay 1 + 0.5 = 1.5 steps

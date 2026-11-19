@@ -84,7 +84,7 @@ class DessenneGainOptimizer(BaseProcessingObj):
         return {
             'wfs_meas': InputDesc(BaseValue, 'Residual WFS measurements vector'),
             'dm_commands': InputDesc(BaseValue, 'DM commands vector'),
-            'optical_gains': InputDesc(BaseValue, 'Optional Optical Gain correction vector', optional=True)
+            'optical_gains': InputDesc(BaseValue, 'Optional Optical Gain correction vector')
         }
 
     @classmethod

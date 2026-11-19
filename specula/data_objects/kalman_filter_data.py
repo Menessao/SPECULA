@@ -28,7 +28,7 @@ class KalmanFilterData(BaseDataObj):
     - Optional projection C: the filter outputs C x (e.g. the command to send).
     - Optional flux scaling of the measurement noise: with the photon- and
       read-out-noise parts of R_i at a reference flux F_ref, the filter rescales
-      R_i with the measured flux F (PyrSlopec 'out_flux', global normalisation):
+      R_i with the measured flux F (PyrSlopec 'out_total_counts', global normalisation):
       photon part x F_ref / F, read-out part x (F_ref / F)^2, rest unchanged.
       TODO: full spatial model from the per-pixel pupil intensities.
 

@@ -1550,12 +1550,13 @@ class TestFluxScaledNoise(unittest.TestCase):
                              readout_noise_var=[readout, None], reference_flux=[0.0, None])
         self.assertNotIn('in_flux_list', KalmanFilter(A, [H, H], Q, r, target_device_idx=-1).inputs)
 
-    def test_pyr_slopec_out_flux(self):
-        """PyrSlopec 'out_flux' is the total pupil flux of the frame, refreshed with the slopes."""
+    def test_pyr_slopec_out_total_counts(self):
+        """PyrSlopec 'out_total_counts' is the total pupil flux of the frame, refreshed with the slopes."""
         rng = np.random.default_rng(64)
         S, frame = 50, (16, 16)
         idx = rng.permutation(frame[0] * frame[1])[:4 * S].reshape(S, 4)
-        slopec = PyrSlopec(PupData(ind_pup=idx, framesize=list(frame)), target_device_idx=-1)
+        slopec = PyrSlopec(PupData(ind_pup=idx, framesize=list(frame), target_device_idx=-1),
+                           target_device_idx=-1)
         pixels = Pixels(*frame, target_device_idx=-1)
         pixels.pixels[:] = rng.poisson(10.0, frame)
         pixels.generation_time = 3
@@ -1565,8 +1566,8 @@ class TestFluxScaledNoise(unittest.TestCase):
         slopec.trigger()
         slopec.post_trigger()
         expected = cpuArray(pixels.pixels).reshape(-1)[idx].sum()
-        np.testing.assert_allclose(cpuArray(slopec.outputs['out_flux'].value)[0], expected)
-        self.assertEqual(slopec.outputs['out_flux'].generation_time, 3)
+        np.testing.assert_allclose(cpuArray(slopec.outputs['out_total_counts'].value)[0], expected)
+        self.assertEqual(slopec.outputs['out_total_counts'].generation_time, 3)
 
 
 # ----------------------------------------------------------------------

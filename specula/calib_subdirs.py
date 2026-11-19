@@ -68,4 +68,5 @@ CALIB_SUBDIRS = {
     'vibrations': 'vibrations/',
     'Layer': 'layers/',
     'projection': 'popt/',
+    'KalmanFilterData': 'filter/',
 }

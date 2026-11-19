@@ -16,7 +16,8 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
                         do_slaving=False, slaving_thr=0.1, linear_slaving=False,
                         edge_constraint_weight=0.0, search_radius_steps=2.5,
                         obsratio=0.0, diaratio=1.0, mask=None, shrink:float = 1.0,
-                        margin:int=0):
+                        margin:int=0, return_master_ids:bool=False,
+                        flip_y:bool=False):
     """
     Computes the ifs_cube matrix with Influence Functions using Thin Plate Splines
     
@@ -69,6 +70,18 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
         mask is None.
     mask : array or None
         Optional pre-computed pupil mask. If None, it will be generated using obsratio and diaratio.
+    shrink : float
+        Scale factor of the actuator coordinates about the grid center (1 = no change).
+    margin : int
+        Pixels left free on each side of the 'alpao' actuator grid.
+    return_master_ids : bool
+        If True, also return the master actuator indices (None without slaving) as a 5th value.
+    flip_y : bool
+        If True, flip the actuator grid vertically about its center.
+
+    Returns
+    -------
+    ifs_2d, mask, coords, slave_mat[, master_ids]
     """
 
     if mask is None:
@@ -123,10 +136,9 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
         y = pol_coords[1] * xp.sin(xp.radians(pol_coords[0])) + y_c
 
     elif geom == 'alpao':
-        print(margin,dim)
         x, y = xp.meshgrid(xp.linspace(margin, dim - 1 - margin, n_act), xp.linspace(margin, dim - 1 - margin, n_act))
         x, y = x.ravel(), y.ravel()
-        x_c, y_c = (dim - 1 - margin) / 2.0, (dim - 1 - margin) / 2.0 # center
+        x_c, y_c = (dim - 1) / 2.0, (dim - 1) / 2.0 # center (the margin is symmetric)
         rho = xp.sqrt((x-x_c)**2+(y-y_c)**2)
         rho_max = ((dim - 1 - 2*margin)*(9/8-n_act/(24*16)))/2 # slightly larger than (dim-1)/2, depends on n_act
         x = x[rho<=rho_max]
@@ -183,13 +195,14 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
     else:
         raise ValueError("Unrecognized geometry type! Avaliable types are: 'circular', 'alpao', 'hexagonal', 'square'")
 
-    x_c = (max(x)-min(x))/2
-    y_c = (max(y)-min(y))/2
-    print(f'Pupil pixel centers: {x_c},{y_c}')
+    x_c = (max(x)+min(x))/2
+    y_c = (max(y)+min(y))/2
+    logger.debug(f'Actuator grid center: {x_c},{y_c}')
     x = (x-x_c)*shrink + x_c
     y = (y-y_c)*shrink + y_c
-    sort_ids = np.argsort(y*dim+x)
-    y = y[sort_ids[::-1]]
+    if flip_y:
+        # Vertical flip of the actuator grid (same as reversing y on a symmetric raster grid)
+        y = 2*y_c - y
     coordinates = xp.vstack((x, y))
     grid_x, grid_y = xp.meshgrid(xp.arange(dim), xp.arange(dim))
 
@@ -295,7 +308,9 @@ def compute_zonal_ifunc(dim, n_act, xp=np, dtype=np.float32, circ_geom:bool=Fals
 
     logger.info("Computation completed.")
 
-    return ifs_2d, mask, coords, slave_mat, master_ids
+    if return_master_ids:
+        return ifs_2d, mask, coords, slave_mat, master_ids
+    return ifs_2d, mask, coords, slave_mat
 
 
 # ==============================================================================
@@ -420,7 +435,7 @@ def apply_slaving(ifs_cube, coordinates, idx, step, slaving_thr=0.1,
     slave_mat = xp.zeros((n_act_tot, n_act_tot), dtype=dtype)
 
     if len(idx_slave) == 0:
-        return ifs_cube[idx_master], coordinates[:, idx_master], len(idx_master), slave_mat
+        return ifs_cube[idx_master], coordinates[:, idx_master], idx_master, slave_mat
 
     # --- 2. WEIGHT COMPUTATION (Routing to Standard or Linear logic) ---
     if linear:

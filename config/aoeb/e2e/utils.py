@@ -120,7 +120,7 @@ def _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes=None):
 def get_noise_propagation(rMod, nSubaps, nModes, wvl, sigma_e, flux, nCorrModes=None, pupil_flux=False):
     """Per-mode noise std, in reconstructor units (rec computed at wvl [nm]).
     flux: total frame flux [e-], or, with pupil_flux=True, the flux on the four pupils only
-    (what PyrSlopec 'out_flux' reports)."""
+    (what PyrSlopec 'out_total_counts' reports)."""
     frame, pup, rec = _load_calib(rMod, nSubaps, nModes, wvl, nCorrModes)
     if pupil_flux:   # convert to total frame flux, the convention of noise_sensitivities
         pix = pup[pup >= 0]

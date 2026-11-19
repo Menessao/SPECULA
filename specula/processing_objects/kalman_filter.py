@@ -27,7 +27,7 @@ class KalmanFilter(BaseProcessingObj):
 
     Flux scaling of the noise: for the sensors whose model has photon- and
     read-out-noise variances at a reference flux F_ref, the filter receives the
-    PyrSlopec 'out_flux' of that sensor (``in_flux_list``), keeps a running
+    PyrSlopec 'out_total_counts' of that sensor (``in_flux_list``), keeps a running
     average F of it over ``flux_averaging_frames`` frames and, every
     ``flux_update_period`` frames of that sensor, sets
 
@@ -86,7 +86,7 @@ class KalmanFilter(BaseProcessingObj):
     in_command : BaseValue
         Known command u (only if the model has B or D). Held between refreshes.
     in_flux_list : list of BaseValue
-        Only if the model has flux scaling: the PyrSlopec 'out_flux' of each
+        Only if the model has flux scaling: the PyrSlopec 'out_total_counts' of each
         sensor with flux scaling, in sensor order.
 
     Outputs
@@ -221,7 +221,7 @@ class KalmanFilter(BaseProcessingObj):
                 BaseValue, 'Known command, required only if the model has a command '
                            'or command observation matrix (optional)'),
             'in_flux_list': InputDesc(
-                BaseValue, 'PyrSlopec out_flux of each sensor with flux scaling, required '
+                BaseValue, 'PyrSlopec out_total_counts of each sensor with flux scaling, required '
                            'only if the model has flux scaling (optional)'),
         }
 
