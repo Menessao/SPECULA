@@ -37,7 +37,7 @@ wavelengths:
 loop:
   fs: {min: 100, max: 4000, n: 25}      # or an explicit list [250, 500, 1000]
   latency_s: 0.00025                     # end of the exposure -> command applied (any real value)
-  controllers: [int]                    # int | leaky | iir (per-mode IIR filters of iir_file, only their global gain is optimised)
+  controllers: [int]                    # int | leaky | wiener | iir (per-mode IIR filters of iir_file, only their global gain is optimised); 'optimal' only in budget_fused / budget_dual
   iir_file: null                        # file saved by SPECULA's IirFilterData.save (num / den per mode, lowest order first)
   iir_optimize_gain: true               # false: evaluate the filters exactly as given
   scenarios: [standard, multistage]

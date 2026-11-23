@@ -208,3 +208,155 @@ def machine_bounds(machine, inputs, latency_s, modes, fs_cmd=None, weights=None,
     if 'weights' in res[0]:
         out['weights'] = np.array([r['weights'] for r in res])
     return out
+
+
+# ----------------------------------------------------------------------------- batched optimal fusion (budget_fused controller='optimal')
+def _wilson_batch(S, tol=1e-12, maxit=60):
+    """wilson() on a batch: S (B, M, K, K) -> G (B, M, K, K)."""
+    B, M, K, _ = S.shape
+    h = np.linalg.cholesky(np.real(np.fft.ifft(S, axis=1)[:, 0]))
+    G = np.broadcast_to(h[:, None].astype(complex), S.shape).copy()
+    I = np.eye(K)
+    for _ in range(maxit):
+        Gi = np.linalg.inv(G)
+        beta = np.fft.ifft(Gi @ S @ _H(Gi) + I, axis=1)
+        beta[:, 0] = np.triu(0.5 * beta[:, 0])
+        beta[:, M // 2 + 1:] = 0.0
+        new = G @ np.fft.fft(beta, axis=1)
+        d = float((np.abs(new - G).max(axis=(1, 2, 3)) / np.abs(new).max(axis=(1, 2, 3))).max())
+        G = new
+        if d < tol:
+            break
+    return G
+
+
+def _causal_batch(X):
+    x = np.fft.ifft(X, axis=1)
+    x[:, X.shape[1] // 2:] = 0.0
+    return np.fft.fft(x, axis=1)
+
+
+def bound_batch(spec, target, channels, C_alias, noise, C_shear=None, n_iter=3):
+    """bound() for a batch of B modes sharing the spectra of `spec` (same radial order), with the error split into its terms.
+    C_alias, C_shear (B, S, S) between sensors, noise (B, S) per-sample variances (turbulence variance = 1). The shear is an error of
+    sensor i with the temporal shape of the turbulence (frozen flow of the displaced beam), uncorrelated with it.
+    Returns dict of (B,) arrays: total, lag (incl. hold), alias, shear, hold, and noise_s (B, S) the noise of each sensor in the result,
+    dc (B, S) the DC gain of the optimal filter on each sensor's channels (static-equivalent weights)."""
+    B, S = noise.shape
+    hs = spec.h(*target)
+    hc = [spec.h(L, e) for _, L, e in channels]
+    sidx = np.array([s for s, _, _ in channels])
+    K, M = len(channels), spec.M
+    X = np.empty((M, K, K), complex)
+    A = np.zeros((M, K, K), complex)
+    Psy = np.empty((M, 1, K), complex)
+    for c in range(K):
+        Psy[:, 0, c] = spec.cross(spec.Sx, hs, hc[c])
+        for d in range(c, K):
+            X[:, c, d] = spec.cross(spec.Sx, hc[c], hc[d])
+            X[:, d, c] = np.conj(X[:, c, d])
+            if spec.Sa is not None:
+                A[:, c, d] = spec.cross(spec.Sa, hc[c], hc[d])
+                A[:, d, c] = np.conj(A[:, c, d])
+    sub = lambda C: np.asarray(C, float)[:, sidx][:, :, sidx]
+    Pa = sub(C_alias)[:, None] * A[None]
+    Psh = sub(C_shear)[:, None] * X[None] if C_shear is not None else np.zeros_like(Pa)
+    nz = np.asarray(noise, float)[:, sidx]                                         # (B, K)
+    Pyy = X[None] + Pa + Psh + np.einsum('bk,kl->bkl', nz, np.eye(K))[:, None]
+    Pss = np.real(spec.cross(spec.Sx, hs, hs))
+    Dn = np.sqrt(np.real(np.einsum('bmii->bi', Pyy) / M))
+    G = _wilson_batch(Pyy / Dn[:, None, :, None] / Dn[:, None, None, :]) * Dn[:, None, :, None]
+    Gi = np.linalg.inv(G)
+    Psy_b = np.broadcast_to(Psy[None], (B, M, 1, K))
+    q = lambda F, P: np.real((F @ P @ _H(F))[..., 0, 0]).mean(axis=1)
+    hold = float((spec.Sx.sum(1) / spec.P).mean() - Pss.mean())
+
+    def terms(F):
+        lag = Pss.mean() - 2 * np.real((Psy_b @ _H(F))[..., 0, 0]).mean(axis=1) + q(F, X[None]) + hold
+        f2 = (np.abs(F[:, :, 0, :]) ** 2).mean(axis=1) * nz                          # (B, K) noise of each channel
+        noise_s = np.stack([f2[:, sidx == s].sum(1) for s in range(S)], 1)
+        al, sh = q(F, Pa), q(F, Psh)
+        return dict(total=lag + al + sh + noise_s.sum(1), lag=lag, alias=al, shear=sh, noise_s=noise_s)
+
+    z1 = np.exp(-2j * np.pi * spec.nu * spec.P)
+    best, F_best = None, None
+    for a in (None, 0.5, 0.9, 0.99, 0.999):                   # warm starts as bound()
+        F = (np.zeros((B, M, 1, K), complex) if a is None else
+             np.broadcast_to(((1 - a) / (1 - a * z1) / K)[None, :, None, None], (B, M, 1, K)).astype(complex))
+        for _ in range(1 if a is None else n_iter):
+            F = F + _causal_batch((Psy_b - F @ Pyy) @ _H(Gi)) @ Gi
+            t = terms(F)
+            if best is None:
+                best, F_best = t, F.copy()
+                continue
+            better = t['total'] < best['total']
+            for k in best:
+                best[k] = np.where(better[:, None] if best[k].ndim == 2 else better, t[k], best[k])
+            F_best[better] = F[better]
+    dc = np.real(F_best[:, 0, 0, :])
+    best['dc'] = np.stack([dc[:, sidx == s].sum(1) for s in range(S)], 1)
+    best['hold'] = np.full(B, hold)
+    return best
+
+
+def _grid(n):
+    """FFT grid of radial order n: long-memory low orders need a fine one (tilt: 2^13), 2^10 is within 0.1 % above order 10."""
+    return 2 ** 13 if n <= 2 else 2 ** 12 if n <= 5 else 2 ** 11 if n <= 10 else 2 ** 10
+
+
+def _order_task(args):
+    n, sel, noise, C_alias, C_shear, fss, latency_s, fs_cmd, wind, D, alias, n_iter = args
+    Sx = lambda f: _psd(f, n, wind, D)
+    Sa = (lambda f: alias.unit_psd(f, n)) if alias is not None else None
+    Tc, P = 1.0 / fs_cmd, 1.0 / min(fss)
+    spec = BoxSpectra(Sx, Sa, P, _grid(n))
+    S = len(fss)
+    if all(abs(fs - fss[0]) < 1e-9 for fs in fss):
+        T = 1.0 / fss[0]
+        return sel, bound_batch(spec, (T, latency_s + T), [(i, T, 0.0) for i in range(S)], C_alias, noise, C_shear, n_iter)
+    ratios = [round(fs / min(fss)) for fs in fss]
+    out = None
+    r_cmd = round(P * fs_cmd)
+    for p in range(r_cmd):                                   # lifted: one problem per command phase (mode_bounds)
+        t_last = p * Tc
+        chans = []
+        for i, (fs, r) in enumerate(zip(fss, ratios)):
+            T = 1.0 / fs
+            ends = T * np.floor((t_last + Tc) / T + 1e-9) - Tc
+            chans += [(i, T, ends - q * T - t_last - latency_s) for q in range(r)]
+        b = bound_batch(spec, (Tc, Tc), chans, C_alias, noise, C_shear, n_iter)
+        out = b if out is None else {k: out[k] + b[k] for k in b}
+    return sel, {k: v / r_cmd for k, v in out.items()}
+
+
+def fused_optimal(orders, noise, C_alias, fss, latency_s, wind, D, alias=None, C_shear=None, fs_cmd=None, jobs=1, n_iter=3):
+    """Optimal causal fusion of K sensors for every mode (the multi-channel Wiener filter = steady-state Kalman filter, POL, known optical
+    gains): frequency-dependent weights and optimal temporal filter in one, sensors at any integer-ratio rates, commands at fs_cmd (default
+    the fastest sensor). orders (N,) radial orders; noise (N, K) per-frame variances at each sensor's own rate, C_alias / C_shear (N, K, K),
+    all in units of each mode's turbulence variance; alias: the aliasing spectrum (unit_psd(f, n)). Modes of one radial order share their
+    spectra and are solved as a batch. Returns dict of (N,) arrays in units of the mode's turbulence variance: total, lag (temporal error
+    incl. the hold), alias, shear, hold, noise_s (N, K) and dc (N, K) the static-equivalent weights (DC gain per sensor)."""
+    orders = np.asarray(orders)
+    fss = [float(f) for f in fss]
+    fs_cmd = float(fs_cmd or max(fss))
+    ratios = [fs / min(fss) for fs in fss]
+    if any(abs(r - round(r)) > 1e-6 for r in ratios) or abs(fs_cmd - max(fss)) > 1e-6:
+        raise ValueError('fused_optimal: sensor rates must be integer multiples of the slowest, commands at the fastest')
+    N, K = noise.shape
+    Csh = np.zeros((N, K, K)) if C_shear is None else C_shear
+    args = [(int(n), np.flatnonzero(orders == n), noise[orders == n], C_alias[orders == n], Csh[orders == n], fss, latency_s, fs_cmd,
+             wind, D, alias, n_iter) for n in np.unique(orders)]
+    if jobs > 1:
+        import concurrent.futures as cf
+        import multiprocessing as mp
+        with cf.ProcessPoolExecutor(jobs, mp_context=mp.get_context('fork')) as ex:
+            res = list(ex.map(_order_task, sorted(args, key=lambda a: -len(a[1]) * _grid(a[0]))))
+    else:
+        res = [_order_task(a) for a in args]
+    out = {}
+    for sel, b in res:
+        for k, v in b.items():
+            if k not in out:
+                out[k] = np.zeros((N,) + v.shape[1:])
+            out[k][sel] = v
+    return out

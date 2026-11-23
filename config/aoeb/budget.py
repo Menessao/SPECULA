@@ -3,6 +3,7 @@
 Per KL mode (command units): turbulence variance V, slope-noise variance, aliasing variance, optical gain. The
 integrator / leaky integrator of every mode is optimised (filter_optimizers.py); residuals are returned in nm^2 of OPD.
 """
+import os
 import os.path as op
 import warnings
 from dataclasses import replace as _replace
@@ -24,6 +25,7 @@ from .reconstructors import compute_reconstructor, read_rec, save_rec
 DEFAULT_MODES_PER_SUBAP = {12: 50, 16: 150, 24: 300, 48: 1200}
 FUSION_WEIGHTS, ALIAS_CORRELATIONS = ('gls', 'loop', 'noise'), ('measured', 'full', 'none')
 SCENARIOS, CONTROLLERS = ('standard', 'multistage'), ('int', 'leaky', 'wiener')      # (an IirControllers is also accepted)
+FUSED_CONTROLLERS = CONTROLLERS + ('optimal',)      # budget_fused / budget_dual: 'optimal' = multi-channel causal Wiener bound (A40)
 STEPS = dict(pupdata='ErrorBudgetGenerator.calibrate_pupdata (step 1)', im_dl='calibrate_im_dl (step 3)', slopes='calibrate_alias_sn_thrp (step 2)',
              avgframe='calibrate_alias_sn_thrp (step 2)', rec='compute_recs (step 4)', alias='compute_aliases (step 5)',
              im_pc='calibrate_im_pc (step 6)', vec='calibrate_im_pc_levels (step 6b: save_correction_vector)',
@@ -188,6 +190,7 @@ class ErrorBudgetMachine:
         self.skipped = []
         self._tables, self._tables_cache = OrderedDict(), tables_cache
         self._rho, self._mode_kern, self._warned = {}, None, set()
+        self.bound_jobs = min(32, os.cpu_count() or 1)   # controller='optimal': processes of fusion_bound.fused_optimal
 
     # ---- modes per sensor
     def mode_list(self, n_subap):
@@ -765,7 +768,15 @@ class ErrorBudgetMachine:
         optimistic for a slower sensor); 'N_rec' the modes of its reconstructor (>= N, the first N are fused); 'N_corr' the corrected modes
         of its products (default N_rec; n_modes_ho for a 'multistage' LO sensor).
         weight_shift (two sensors only): d added to the weight of the first sensor and taken from the second after the weights are chosen
-        (scalar or one per mode), a manual override; with weights='gls' and `chromatic` the shear is already in the weights."""
+        (scalar or one per mode), a manual override; with weights='gls' and `chromatic` the shear is already in the weights.
+        controller='optimal' (ASSUMPTIONS A40): instead of static weights + a loop, the optimal causal fusion of the sensors' frames, i.e.
+            frequency-dependent weights and the optimal temporal filter in one (multi-channel causal Wiener filter = steady-state Kalman
+            filter; POL, optical gains known; fusion_bound.fused_optimal). Sensors at their own rates (integer ratios), each with its
+            exposure and delay, commands at the fastest rate; noise, aliasing (measured correlation) and shear (temporal shape of the
+            turbulence) all in the filter; the terms are those of the optimal filter (lag includes the hold error). `weights` is ignored
+            (result.weights: the DC gains of the filter per sensor, normalised); no crosstalk, no weight_shift. Cost: ~70 s of CPU for
+            1300 modes and two sensors (machine.bound_jobs processes, default 32: ~5 s) vs ~1 s for GLS + leaky; within ~0.1 nm of GLS +
+            controller='wiener' when the sensors are synchronous."""
         if chromatic is not None and chromatic.multiplicative:
             raise NotImplementedError('budget_fused: the multiplicative chromatic term is not supported')
         if alias_correlation not in ALIAS_CORRELATIONS:
@@ -840,8 +851,10 @@ class ErrorBudgetMachine:
 
     def _budget_fused_at(self, sensors, seeing, fs, N, latency_s, controller, n_fold, ff_grid, rec, crosstalk, chromatic,
                          alias_correlation, weight_shift=0.0, weights='gls'):
-        if controller not in CONTROLLERS:
-            raise ValueError(f'budget_fused: controller must be one of {CONTROLLERS}')
+        if controller not in FUSED_CONTROLLERS:
+            raise ValueError(f'budget_fused: controller must be one of {FUSED_CONTROLLERS}')
+        if controller == 'optimal' and (crosstalk or np.any(weight_shift)):
+            raise NotImplementedError("controller='optimal': no crosstalk, no weight_shift")
         turb_cmd, rms, r0 = self.turbulence(seeing, N)
         if N not in self._orders:
             self._orders[N] = utils.radial_order(np.arange(N))
@@ -860,9 +873,11 @@ class ErrorBudgetMachine:
                    else np.zeros((N, K, K)))
         ff = tuple(ff_grid if ff_grid is not None else (DEFAULT_FF_GRID if controller == 'leaky' else (1.0,)))
         w_main = int(np.argmax(np.sum(1.0 / noise_k, axis=0)))
+        one = np.ones(N)
+        if controller == 'optimal':
+            return self._budget_optimal(sensors, seeing, N, latency_s, chromatic, inp, C_shear, w_main, turb_cmd, rms2, r0, orders)
         tables = self._loop_tables(fs, latency_s * fs, orders, self.alias_spectrum(wls[w_main], N, sensors[w_main].get('rMod')), ff, n_fold,
                                    wiener=controller == 'wiener')
-        one = np.ones(N)
         lam = (0.0 * one, 0.0 * one) if weights == 'noise' else (one, one)
 
         def evaluate(w):
@@ -895,28 +910,59 @@ class ErrorBudgetMachine:
                     break
                 w, photon, readout, alias_cmd, shear, opt = evaluate(w_new)
         noise_cmd = photon + readout
+        return self._fused_result(opt, sensors, seeing, fs, N, w, shear * rms2, photon / np.maximum(noise_cmd, 1e-300), chromatic, turb_cmd,
+                                  rms2, r0, dict(controller=controller, crosstalk=bool(crosstalk), alias_correlation=corr_used,
+                                                 weights=weights, weight_iterations=n_iter), rho)
+
+    def _fused_result(self, opt, sensors, seeing, fs, N, w, shear_modes, photon_fraction, chromatic, turb_cmd, rms2, r0, info, rho):
+        """BudgetResult of a fusion (static weights or controller='optimal'): w (N, K) per-mode weights, shear_modes [nm^2]."""
+        wls = [float(s['wavelength_nm']) for s in sensors]
         wbar = (w * (turb_cmd * rms2)[:, None]).sum(0) / np.sum(turb_cmd * rms2)          # turbulence-weighted weight of each sensor
         wl_eff = float(np.sum(wbar * np.asarray(wls)))
-        extra, bands, shear_modes = {}, None, None
+        extra, bands = {}, None
         if chromatic is not None:
             n_eff = float(np.sum(wbar * np.array([float(chromatic.n_minus_1(x)) for x in wls])))
             cm = _replace(chromatic, delta_n=n_eff - float(chromatic.n_minus_1(chromatic.science_nm)))
             k_cut = utils.fitting_cutoff(N, self.D)
             extra.update(cm.variances(r0, self.L0, k_cut, wl_eff, self._k_nyquist()))
-            shear_modes = shear * rms2
             extra['chrom_shear'] = float(shear_modes.sum())
             bands = [(cm, 0.0, k_cut, wl_eff)]
+        else:
+            shear_modes = None
         desc = ' + '.join(f"{s['n_subap']}x{s['n_subap']} rMod {s['rMod']:g} {s['wavelength_nm']:.0f}nm"
                           + (f" {float(s['fs']):.0f}Hz" if abs(s['fs'] - fs) > 1e-9 else '') for s in sensors)
-        params = dict(scenario='fused', controller=controller, rMod=np.nan, seeing=seeing, Nsubaps=min(s['n_subap'] for s in sensors),
-                      Nmodes=N, freqInHz=fs, photPerMs=sum(s['flux'] for s in sensors) / 1e3, wavelength_nm=wl_eff,
-                      crosstalk=bool(crosstalk), sensors=desc, alias_correlation=corr_used, weights=weights, weight_iterations=n_iter,
+        params = dict(scenario='fused', rMod=np.nan, seeing=seeing, Nsubaps=min(s['n_subap'] for s in sensors), Nmodes=N, freqInHz=fs,
+                      photPerMs=sum(s['flux'] for s in sensors) / 1e3, wavelength_nm=wl_eff, sensors=desc, **info,
                       **{f'weight_{i}': float(x) for i, x in enumerate(wbar)})
-        res = self._result(opt, params, one, rms2, photon / np.maximum(noise_cmd, 1e-300), self._fitting(r0, N), extra,
-                           None, None, 1)
+        res = self._result(opt, params, np.ones(N), rms2, photon_fraction, self._fitting(r0, N), extra, None, None, 1)
         res.chrom_bands, res.weights, res.chrom_shear_modes = bands, w.T.copy(), shear_modes
         res.alias_rho = rho
         return res
+
+    def _budget_optimal(self, sensors, seeing, N, latency_s, chromatic, inp, C_shear, w_main, turb_cmd, rms2, r0, orders):
+        """budget_fused with controller='optimal' (fusion_bound.fused_optimal); inputs as prepared by _budget_fused_at."""
+        from types import SimpleNamespace
+        from . import fusion_bound as fb
+        fss = [float(s['fs']) for s in sensors]
+        fs_cmd = max(fss)
+        t = np.maximum(turb_cmd, 1e-300)
+        phot, ron, a = inp['photon'], inp['readout'], inp['alias']           # per frame at each sensor's own rate
+        noise = np.maximum(phot + ron, 1e-300)
+        C_alias = inp['rho'] * a[:, :, None] * a[:, None, :]
+        o = fb.fused_optimal(orders, noise / t[:, None], C_alias / t[:, None, None], fss, latency_s, self.temporal or self.wind, self.D,
+                             self.alias_spectrum(float(sensors[w_main]['wavelength_nm']), N, sensors[w_main].get('rMod')),
+                             C_shear=C_shear / t[:, None, None], fs_cmd=fs_cmd, jobs=self.bound_jobs)
+        noise_s = o['noise_s'] * t[:, None]
+        photon = (noise_s * phot / noise).sum(1)
+        nan = np.full(N, np.nan)
+        opt = SimpleNamespace(gain=nan, ff=nan, turb=o['lag'] * t, noise=noise_s.sum(1), alias=o['alias'] * t, xtalk=np.zeros(N))
+        dc = o['dc']
+        tot = dc.sum(1, keepdims=True)
+        w = np.where(np.abs(tot) > 1e-9, dc / np.where(np.abs(tot) > 1e-9, tot, 1.0), 1.0 / dc.shape[1])
+        return self._fused_result(opt, sensors, seeing, fs_cmd, N, w, o['shear'] * t * rms2, photon / np.maximum(opt.noise, 1e-300),
+                                  chromatic, turb_cmd, rms2, r0, dict(controller='optimal', crosstalk=False,
+                                                                      alias_correlation=inp['alias_correlation'], weights='optimal',
+                                                                      weight_iterations=0), inp['rho'])
 
     def budget_multistage(self, lo, ho, seeing, latency_s=500e-6, controller='int', crosstalk=False, chromatic=None,
                           optimize_freq=None, optimize_modes=False, warn=True, **kw):
@@ -946,16 +992,22 @@ class ErrorBudgetMachine:
         budget if already computed. Returns the spliced BudgetResult (.stages = (fused LO-mode result, HO result), .weights of the LO modes).
         Chromatic shear: modal, w^T C_shear w on the LO modes (in the weights with 'gls' / 'loop') and the HO sensor's own on the others;
         the other chromatic terms of the LO band use the effective refractivity of the fused beam.
-        weight_shift: see budget_fused (+d to the LO sensor, -d to the HO one, on the LO modes)."""
+        weight_shift: see budget_fused (+d to the LO sensor, -d to the HO one, on the LO modes).
+        controller='optimal': the LO modes from the optimal causal fusion of both sensors at their own rates, commanded at the FASTER rate
+        (no equal-noise-PSD approximation), the other modes from the optimal single-sensor bound of the HO sensor (budget_fused)."""
         n_ho, n_lo = self.n_modes_ho, int(lo['N'])
         kw = dict(latency_s=latency_s, controller=controller, crosstalk=crosstalk, rec=rec)
-        if r_ho is None:
+        if r_ho is None and controller == 'optimal':
+            r_ho = self._budget_fused_at([{**ho, 'fs': float(ho['fs'])}], seeing, float(ho['fs']), n_ho, n_fold=3, ff_grid=None,
+                                         chromatic=None, alias_correlation='full', **kw)
+            r_ho.params['freqUsedInHz'] = float(ho['fs'])
+        elif r_ho is None:
             r_ho = self.budget(ho['rMod'], ho['n_subap'], seeing, ho['flux'], ho['fs'], N=n_ho, wavelength_nm=ho['wavelength_nm'],
                                optimize_freq=False, optimize_modes=False, warn=False, **kw)
         sensors = [{**lo, 'N_rec': n_lo, 'N_corr': n_ho, 'fs': lo['fs']}, {**ho, 'N_rec': n_ho, 'N_corr': n_ho}]
         r_low = self._budget_fused_at(sensors, seeing, float(lo['fs']), n_lo, n_fold=3, ff_grid=None, chromatic=chromatic,
                                       alias_correlation=alias_correlation, weight_shift=weight_shift, weights=weights, **kw)
-        r_low.params['freqUsedInHz'] = float(lo['fs'])
+        r_low.params['freqUsedInHz'] = float(r_low.params['freqInHz'])      # lo['fs'], or the faster rate with controller='optimal'
         cm_lo = None
         if chromatic is not None:
             n_eff = sum(r_low.params[f'weight_{i}'] * chromatic.n_minus_1(s['wavelength_nm']) for i, s in enumerate(sensors))

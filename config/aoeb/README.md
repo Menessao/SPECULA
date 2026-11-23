@@ -205,7 +205,12 @@ loop on the per-mode weighted sum of the sensors' measurements; `m.budget_dual(l
 others to the HO sensor. The weights are GLS on noise, aliasing and (with `chromatic`) shear: the aliasing correlation is measured per mode
 from the paired aliasing runs (`m.alias_correlation`), the shear covariance comes from the layer shifts (`m.shear_covariance`). `weights='loop'`
 also weights aliasing and shear by their loop transfer; `'noise'` (and `alias_correlation='full'`) gives the inverse-variance weights used
-before 2026-11-23. `m.fusion_inputs(...)` returns the per-mode inputs. Bounds per mode (POL Wiener, any rates, `aoeb/fusion_bound.py`):
+before 2026-11-23. `m.fusion_inputs(...)` returns the per-mode inputs. `controller='optimal'` (budget_fused and budget_dual) replaces static
+weights + loop by the optimal causal fusion (multi-channel Wiener = steady-state Kalman, A40): frequency-dependent weights and filter in one,
+sensors at their own rates (integer ratios), commands at the fastest, terms split as usual (lag includes the hold). ~70 s of CPU for 1300 modes
+and two sensors (`m.bound_jobs` processes, default 32: ~5 s), vs ~1 s for GLS + leaky and ~10 s for GLS + 'wiener', which it beats by ~0.1 nm
+when the sensors are synchronous; in budget_dual it commands the fused LO modes at the fast rate (C2 mag 5: 3.9 vs 7.9 nm). Per-mode bounds
+(`aoeb/fusion_bound.py`; `fb.fused_optimal` is the batched solver behind 'optimal'):
 ```python
 from aoeb import fusion_bound as fb
 inp = fb.machine_inputs(m, sensors, seeing, N)          # sensors with their 'fs'
