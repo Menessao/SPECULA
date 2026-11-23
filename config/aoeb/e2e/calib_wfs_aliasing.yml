@@ -22,8 +22,8 @@
 main_override:
   total_time:        1.0
 
-# remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes']
-remove: ['kalman', 'kdelay', 'dm_modes', 'atmo_modes', 'wind_speed', 'wind_direction', 'atmo', 'prop', 'coro_psf_vis', 'coro_psf_nir',
+# remove: ['kalman', 'kpred', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes']
+remove: ['kalman', 'kpred', 'dm_modes', 'atmo_modes', 'wind_speed', 'wind_direction', 'atmo', 'prop', 'coro_psf_vis', 'coro_psf_nir',
          'science_vis', 'science_nir', 'res_modes', 'pyr_modes_vis', 'pyr_modes_nir']
 
 atmo_modes:
@@ -97,6 +97,7 @@ data_store_override:
                 #  'meas_vis-pyr_modes_vis.out_modes',
                 #  'meas_nir-pyr_modes_nir.out_modes',
                  'nir_frames-cred_nir.out_pixels', 
-                 'vis_frames-cred_vis.out_pixels',  
+                 'vis_frames-cred_vis.out_pixels',
+                 'turb_modes-atmo_modes.out_modes',            # aoeb `turbmodes` product (modal variance check)
                 #  'res_ef-ef_prop_vis.out_ef',  
                  ] 

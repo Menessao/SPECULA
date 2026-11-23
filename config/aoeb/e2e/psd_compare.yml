@@ -1,0 +1,232 @@
+# Temporal PSD comparison (psd_compare.py): multi-layer turbulence vs pyramid aliasing / measurement vs correction residual, per mode.
+#
+#   specula ristretto_main.yml psd_compare.yml overrides.yml        (psd_compare.py writes the overrides and runs it)
+#
+# Frozen-flow 10-layer ristretto atmosphere (atmo/prop of ristretto_main.yml, pupil only). The DM is driven, in the same step (no lag), by
+# the exact modal projection of the turbulence on the first N KL modes times a per-mode correction vector c (BaseValue in <root>/data):
+# c = 1 perfect correction; c_i = 1 - sqrt(res_i / turb_i) a residual at the level res_i (e.g. the aoeb Wiener bound). The residual of
+# mode i is then (1 - c_i) times the turbulence mode: its variance is the target level, its temporal shape the turbulence one.
+# Both pyramids (VIS 900 nm, NIR 1300 nm, rMod set by the runner) look at turbulence + DM with noiseless cameras at every 0.5 ms step.
+# Stored per step:
+#   turb_modes : all the KL modes (1835) of the turbulence                 (true turbulence modes)
+#   res_modes  : all the KL modes of turbulence + DM                       (true residual modes; modes > N = the turbulence itself)
+#   turb_rms, res_rms : pupil phase std (includes what the KL basis does not represent)
+#   meas_vis / meas_nir : R @ slopes, the modal measurements of the pyramids (N modes)
+#   slopes_vis / slopes_nir : the slopes (no slope null)
+#   true_alias_vis / true_alias_nir : TRUE ALIASING, R @ slopes of twin pyramids seeing the same turbulence with modes <= N exactly
+#                                     removed (twin chain below); slopes_pc_vis / slopes_pc_nir their slopes
+# With perfect correction (c = 1) the twin sees the same wavefront as the main pyramids (meas = true_alias).
+# The runner sets: pyramid geometry / rMod / wavelengths, recs, N, the correction vector, seeing, seed, total_time, the pyramid FoV,
+# identically for the main and the twin chain.
+
+remove: ['kalman', 'kpred', 'dm_modes', 'atmo_modes', 'coro_psf_vis', 'coro_psf_nir', 'science_vis', 'science_nir', 'res_modes']
+
+# Turbulence only (pupil, no DM): the WFSs get turbulence + DM through ef_prop_* below
+prop_override:
+  source_dict_ref:   ['source_vis', 'source_nir']
+  inputs:
+    atmo_layer_list: ['atmo.layer_list']
+    common_layer_list: ['pupilstop']
+  outputs:           ['out_source_vis_ef', 'out_source_nir_ef']
+
+# Exact projection of the turbulence on the first N modes, scaled by the correction vector (scale_cmd) to drive the DM
+atmo_modes:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  nmodes:            1300                    # N, overridden
+  inputs:
+    in_ef:           ['prop.out_source_vis_ef']
+  outputs:           ['out_modes']
+
+scale_cmd:
+  class:             'BaseOperation'
+  constant_mul_data: 'correction_vector_1300modes_c1.00-1.00'   # overridden: stem of the correction vector in <root>/data
+  inputs:
+    in_value1:       'atmo_modes.out_modes'
+  outputs:           ['out_value']
+
+dm_override:
+  nmodes:            1300                    # N, overridden
+  inputs:
+    in_command:      'scale_cmd.out_value'
+
+# Full modal content of the turbulence (all the KL modes) and of the corrected wavefront
+turb_modes:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  dorms:             true
+  inputs:
+    in_ef:           ['prop.out_source_vis_ef']
+  outputs:           ['out_modes', 'rms']
+
+ef_prop_vis:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_vis_ef'
+    in_ef2: 'dm.out_layer'                   # same step: no lag
+  outputs: ['out_ef']
+
+ef_prop_nir:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_nir_ef'
+    in_ef2: 'dm.out_layer'
+  outputs: ['out_ef']
+
+res_modes:
+  class:             'ModalAnalysis'
+  ifunc_inv_object:  'bmc2k_vlt_kl_inv'
+  dorms:             true
+  inputs:
+    in_ef:           ['ef_prop_vis.out_ef']
+  outputs:           ['out_modes', 'rms']
+
+pyr_vis_override:
+  inputs:
+    in_ef:            'ef_prop_vis.out_ef'
+
+pyr_nir_override:
+  inputs:
+    in_ef:            'ef_prop_nir.out_ef'
+
+cred_vis_override:
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+
+cred_nir_override:
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+
+########################### Twin chain: TRUE ALIASING ###########################
+# Same turbulence, same instant, modes <= N removed EXACTLY (unscaled projection, c = 1) by a second DM: the twin pyramids (copies of
+# pyr_vis / pyr_nir, the runner sets them identically) see only what the DM cannot correct, so their modal measurement is the true
+# aliasing. meas - true_alias = response of the pyramid to the residual of modes <= N (with the nonlinear cross-terms).
+dm_pc:
+  class:             'DM'
+  simul_params_ref:  'main'
+  ifunc_object:      'bmc2k_vlt_ifunc'
+  m2c_object:        'bmc2k_vlt_m2c'
+  nmodes:            1300                    # N, overridden
+  height:            0
+  inputs:
+    in_command:      'atmo_modes.out_modes'
+  outputs:           ['out_layer']
+
+ef_pc_vis:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_vis_ef'
+    in_ef2: 'dm_pc.out_layer'
+  outputs: ['out_ef']
+
+ef_pc_nir:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'prop.out_source_nir_ef'
+    in_ef2: 'dm_pc.out_layer'
+  outputs: ['out_ef']
+
+pyr_pc_vis:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          48.                     # overridden as pyr_vis
+  pup_dist:          60.
+  fov:               2.0
+  fov_errsup:        12
+  mod_amp:           0.0
+  output_resolution: 120
+  wavelengthInNm:    900
+  inputs:
+    in_ef: 'ef_pc_vis.out_ef'
+
+pyr_pc_nir:
+  class:             'ModulatedPyramid'
+  simul_params_ref:  'main'
+  pup_diam:          48.                     # overridden as pyr_nir
+  pup_dist:          60.
+  fov:               2.0
+  fov_errsup:        12
+  mod_amp:           0.0
+  output_resolution: 120
+  wavelengthInNm:    1300
+  inputs:
+    in_ef: 'ef_pc_nir.out_ef'
+
+cred_pc_vis:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]
+  dt:                0.0005
+  bandw:             400
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+  readout_level:     0.5
+  emccd_gain:        1
+  quantum_eff:       0.2
+  inputs:
+    in_i:            'pyr_pc_vis.out_i'
+  outputs:           ['out_pixels']
+
+cred_pc_nir:
+  class:             'CCD'
+  simul_params_ref:  'main'
+  size:              [120,120]
+  dt:                0.0005
+  bandw:             400
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+  readout_level:     0.5
+  emccd_gain:        1
+  quantum_eff:       0.2
+  inputs:
+    in_i:            'pyr_pc_nir.out_i'
+  outputs:           ['out_pixels']
+
+pyr_slopes_pc_vis:
+  class:             'PyrSlopec'
+  pupdata_object:    'pyr_pupdata_48x48'     # overridden as pyr_slopes_vis
+  inputs:
+    in_pixels:       'cred_pc_vis.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_slopes_pc_nir:
+  class:             'PyrSlopec'
+  pupdata_object:    'pyr_pupdata_48x48'
+  inputs:
+    in_pixels:       'cred_pc_nir.out_pixels'
+  outputs:           ['out_slopes']
+
+pyr_modes_pc_vis:
+  class:             'Modalrec'
+  recmat_object:     'pyr0.0_48x48_wvl900_1300modes_rec'    # overridden as pyr_modes_vis
+  inputs:
+    in_slopes:       'pyr_slopes_pc_vis.out_slopes'
+  outputs:           ['out_modes']
+
+pyr_modes_pc_nir:
+  class:             'Modalrec'
+  recmat_object:     'pyr0.0_48x48_wvl1300_1300modes_rec'
+  inputs:
+    in_slopes:       'pyr_slopes_pc_nir.out_slopes'
+  outputs:           ['out_modes']
+
+data_store_override:
+  create_tn: false
+  inputs:
+    input_list: ['turb_modes-turb_modes.out_modes',
+                 'turb_rms-turb_modes.rms',
+                 'res_modes-res_modes.out_modes',
+                 'res_rms-res_modes.rms',
+                 'meas_vis-pyr_modes_vis.out_modes',
+                 'meas_nir-pyr_modes_nir.out_modes',
+                 'slopes_vis-pyr_slopes_vis.out_slopes',
+                 'slopes_nir-pyr_slopes_nir.out_slopes',
+                 'true_alias_vis-pyr_modes_pc_vis.out_modes',
+                 'true_alias_nir-pyr_modes_pc_nir.out_modes',
+                 'slopes_pc_vis-pyr_slopes_pc_vis.out_slopes',
+                 'slopes_pc_nir-pyr_slopes_pc_nir.out_slopes',
+                 ]

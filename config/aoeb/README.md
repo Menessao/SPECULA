@@ -7,6 +7,7 @@ Two main pieces: `generation.ErrorBudgetGenerator` runs the SPECULA calibrations
 ```
 aoeb/
   generation.py         ErrorBudgetGenerator           SPECULA runs + post-processing
+  fusion_bound.py       per-mode causal bounds of multi-sensor fusion (any rates, lifted Wiener)
   budget.py             ErrorBudgetMachine             fast per-mode budget, scans (numpy / scipy / pandas / astropy only; does not import psf.py)
   filter_optimizers.py  LoopTables (integrator / leaky), IirControllers + IirTables (IIR, global gain), evaluate_controllers
   noise.py              Detector, PupilGeometry, slope noise coefficients
@@ -65,7 +66,8 @@ signal std(R slopes) -> IM with N modes perfectly corrected -> (optional) IMs wi
 * **Wavelengths.** The pyramid and its source must have the same wavelength: `wavelengths_nm` (sensing, required) sets
   `pyr.wavelengthInNm` and `source_ngs.wavelengthInNm` together in every run. The science source (`science_nm`) is propagated like the NGS
   (same screens, same DM) in the aliasing run. The pupil data are made once (first wavelength), the other products carry `_wvl{nm}`
-  (`pyr3.0_48x48_wvl1650_s0.9_1200modes_im_pc.fits`).
+  (`pyr3.0_48x48_wvl1650_s0.9_1200modes_im_pc.fits`) and `WVL_NM` in their header. One calibrated wavelength is enough: the budget derives
+  the others (section 2, "Wavelengths that were not calibrated").
 * **DM objects.** One tag, `dm_tag` (`bmc2k_vlt`), names them: `{dm_tag}_ifunc`, `{dm_tag}_m2c`, `{dm_tag}_kl_inv`, in SPECULA (overrides)
   and in the budget machine alike.
 * **Correction vectors** (`generation.save_correction_vector`, as your reference script): `<root>/data/correction_vector_{N}modes_c{max}-{min}.fits`
@@ -133,6 +135,8 @@ the nearest one of the same radial order (3–6x faster): one budget takes from 
 (or a narrow frame-rate range) in scans. A warning is given when a filter's peak rejection exceeds `loop.max_sensitivity` (the design
 itself has no robustness constraint). The integrator / leaky optimisation is unchanged (`controller='int'` / `'leaky'`).
 
+**Aliasing spectra.** By default the aliasing has one empirical temporal shape for every mode (A10). `alias_psd={N: [npz files]}` or `{rMod: {N: [npz files]}}` (the shape depends on the modulation: use the runs of the sensor's own rMod) (machine argument; `options.alias_psd`) uses instead the MEASURED shape of each radial order for the N listed (A10b, `MeasuredAliasSpectrum`, built in a few seconds from the aliasing PSD study's mode time series); other N keep A10, with a warning.
+
 **Temporal spectra.** By default the temporal PSD of each radial order is Conan's (1995) asymptotic model with one effective wind;
 `atmosphere.temporal: zernike` (or `ErrorBudgetMachine(temporal=ZernikePSD(D, L0=L0, layers=[(cn2, speed), ...]))`, `aoeb/temporal.py`)
 uses the exact multi-layer frozen-flow von Kármán spectra of the radial orders instead, for every controller. Against TipTop's frozen-flow
@@ -141,7 +145,15 @@ servo-lag it agrees to 2–4 % at all orders, where Conan is up to 10 % low beyo
 
 **Fitting.** `ErrorBudgetMachine(..., asm=True)` (default; `options.asm` in a configuration file) uses the LBT-ASM law 0.2778 N^−0.9
 (D/r0)^5/3 rad²; `asm=False` uses TipTop's fitting: the von Kármán PSD outside the square of corrected frequencies |kx|, |ky| ≤ k_c,
-k_c = √(N/π)/D (a DM with N actuators in the pupil), for the variance and for the PSD / PSF (the azimuthal average of the square mask).
+k_c = √(N/π)/D (a DM with N actuators in the pupil), for the variance (and for the PSD / PSF with `fitting='stationary'`: the azimuthal average of the square mask).
+
+**Fitting PSD (contrast).** By default (`PsfEngine.psd_terms(result, fitting='kl')`) the fitting spectrum is the **fitting bound of the
+defined modes**: the turbulence inside the pupil with its projection on the N controlled modes of the KL basis in use removed perfectly,
+computed exactly in expectation (windowed von Kármán PSD, cross spectra of the modes with the turbulence and the full mode covariance; no
+Monte Carlo; ASSUMPTIONS A15). It leaves a little light inside the control radius and has a soft edge. Cost: about a minute for the cross
+kernels of 1300 modes and 20 s per N, cached in `<root>/data` (`kl_fitting_cross_*`, `kl_fitting_psd_*`). The PSD is the bound itself (default;
+the scalar budget keeps the LBT law, ×1/0.88 of it at N = 1200), `fitting_scale='lbt'` rescales it to the budget's fitting variance.
+`fitting='stationary'` gives the previous model (von Kármán tail cut sharply at k_c), about 2x the coronagraphic fitting halo inside the dark hole.
 
 **Units.** Every error the tables and `totals()` report is in **nm rms**: the scan tables (`totals` and the `_totals.csv` file: lag, noise,
 noise_photon, noise_ron, alias, xtalk, fitting, the chromatic terms, total) and the per-mode table (`modes` / `_modes.csv`: residual, lag,
@@ -149,12 +161,22 @@ noise, noise_photon, noise_ron, alias, xtalk, chrom_mult). The terms add in quad
 noise_ron²); a term whose variance is negative (the signed cross term `chrom_mult`) is shown as −sqrt|v|. `variances()` gives the nm² values;
 the arrays of a `BudgetResult` (`r.lag`, `r.residual`, ...) stay variances.
 
-**Seeings that were not simulated.** The products of the seeing rounded to 0.1" are used when that seeing was simulated (the aliasing
+**Seeings that were not simulated.** The products of the seeing rounded to 0.05" are used when that seeing was simulated (the aliasing
 is rescaled to the exact seeing, variance ∝ seeing^(5/3)). Otherwise the calibration is estimated from the simulated seeings, with a warning
 (once per configuration; it also says when the seeing is outside the simulated range, i.e. extrapolated): optical gains (perfect and
 partial correction) and noise coefficients by a quadratic least-squares fit against the simulated seeings (linear with two, constant with
 one), aliasing and crosstalk from the nearest simulated seeing (aliasing rescaled as above). The turbulence and fitting terms are always
 analytic at the exact seeing.
+
+**Wavelengths that were not calibrated** (ASSUMPTIONS A37). `wavelength_nm` may be any value. Without perfect-correction IMs at that
+wavelength, the products of the calibrated wavelength nearest in log λ are used, with a warning: IMs × λ₀/λ, reconstructors recomputed from
+the scaled IM and saved under the requested wavelength (`machine.ensure_rec`, header `SRC_WVL`), everything measured in turbulence at the
+equivalent seeing s·(λ₀/λ)^(6/5), aliasing std(R_λ @ slopes). The seeing grid must reach that equivalent seeing, or the regression
+extrapolates. `calibration(...).source_wavelength` tells which wavelength was used.
+
+**Frame rate and aliasing.** The calibrated aliasing is a snapshot variance, independent of the rate of the run, so the products have no
+rate tag. The budget applies the rate through an empirical temporal spectrum, `AliasSpectrum` (fitted at 0.9", N >= 100): `aliasing_frame_fraction(fs, alias)`
+is the variance kept in one frame, and the loop filter comes on top (ASSUMPTIONS A10; 6.7 % worst case at 50 Hz, 2.5 % at 100 Hz).
 
 * `flux`: photons/s at the detector (before QE). `latency_s`: latency from the end of the exposure to the command applied, any
   real value (fractional frames allowed); the frame of exposure window + DM hold is part of the model, never add it.
@@ -177,6 +199,18 @@ analytic at the exact seeing.
   multistage case, A16).
 * `chromatic=ChromaticModel(...)`: adds the shear term and the enabled optional terms (the multiplicative one makes the gains
   optimal for the science residual), see below.
+
+**Several sensors (fusion, ASSUMPTIONS A39–A40).** `m.budget_fused(sensors, seeing, fs, weights='gls', alias_correlation='measured')` runs one
+loop on the per-mode weighted sum of the sensors' measurements; `m.budget_dual(lo, ho, ...)` fuses the first lo['N'] modes and leaves the
+others to the HO sensor. The weights are GLS on noise, aliasing and (with `chromatic`) shear: the aliasing correlation is measured per mode
+from the paired aliasing runs (`m.alias_correlation`), the shear covariance comes from the layer shifts (`m.shear_covariance`). `weights='loop'`
+also weights aliasing and shear by their loop transfer; `'noise'` (and `alias_correlation='full'`) gives the inverse-variance weights used
+before 2026-11-23. `m.fusion_inputs(...)` returns the per-mode inputs. Bounds per mode (POL Wiener, any rates, `aoeb/fusion_bound.py`):
+```python
+from aoeb import fusion_bound as fb
+inp = fb.machine_inputs(m, sensors, seeing, N)          # sensors with their 'fs'
+b = fb.machine_bounds(m, inp, latency_s, modes=range(100))   # nm^2 per mode: single_i, static (GLS + optimal filter), optimal
+```
 
 ## 3. PSD and PSF of the residual
 

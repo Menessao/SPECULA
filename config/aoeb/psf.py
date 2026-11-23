@@ -1,11 +1,14 @@
 """Radial PSD of the residual terms [nm^2 m^2, k in cycles/m, separation = k D in lambda/D] and long-exposure PSFs.
 Modal terms use pupil-windowed kernels, stationary terms analytic PSDs; the PSF is OTF_tel exp(-[C(0) - C(r)]). ASSUMPTIONS.md A28."""
+import os
 import os.path as op
 from collections import OrderedDict
 from dataclasses import dataclass, field
 
 import numpy as np
 import scipy.fft as sfft
+from astropy.io import fits
+from scipy.special import gamma, kv
 
 from . import utils
 
@@ -93,6 +96,148 @@ def fitting_psd(k, r0, L0, N, D, variance_nm2=None, square=False):
     return psd, dict(k_cut=k_cut, scale=scale, variance_inf=v_inf * scale, n_across=np.sqrt(4.0 * N / np.pi))
 
 
+# ----------------------------------------------------------------------------- KL fitting PSD (modes removed from the turbulence)
+def von_karman_covariance(r, r0, L0):
+    """Phase covariance [nm^2] of von Karman turbulence at separation r [m] (r0 at 500 nm): the Matern form
+    C(r) = C(0) 2^(1/6)/Gamma(5/6) x^(5/6) K_5/6(x), x = 2 pi r / L0, C(0) = (6 pi / 5) 0.0229 (L0/r0)^(5/3)."""
+    c0 = utils.VK_COEFF * (6 * np.pi / 5) * (L0 / r0) ** (5 / 3) * utils.RAD2_TO_NM2
+    x = 2 * np.pi * np.maximum(np.asarray(r, float), 1e-12) / L0
+    return c0 * 2 ** (1 / 6) / gamma(5 / 6) * x ** (5 / 6) * kv(5 / 6, x)
+
+
+def _radial_bins(M, dx):
+    """Annulus index of every point of the full M x M FFT grid (corners beyond the Nyquist circle -> bin nb, dropped) and the counts."""
+    f = np.fft.fftfreq(M, d=dx)
+    nb = M // 2 + 1
+    b = np.minimum(np.rint(np.hypot(f[:, None], f[None, :]) * (M * dx)).astype(int), nb).ravel()
+    return b, np.maximum(np.bincount(b, minlength=nb + 1), 1), nb
+
+
+def _radial_mean(p2d, bins):
+    b, cnt, nb = bins
+    return (np.bincount(b, weights=np.asarray(p2d).ravel(), minlength=nb + 1) / cnt)[:nb]
+
+
+def _lag_covariance_ft(M, dx, r0, L0, band_limit=True):
+    """FFT of the von Karman covariance sampled at the signed lags of the M x M grid (no wrap for lags < M dx / 2). Sampling folds the
+    power above the pixel Nyquist frequency into the grid; band_limit=True removes it (the FFT of the sampled covariance is the folded PSD
+    / dx^2: the images at k + (p, q)/dx, |p|, |q| <= 4, are subtracted), i.e. the covariance of the field band-limited to the pixel
+    Nyquist square, as a phase screen sampled on the pupil grid."""
+    lag = np.fft.fftfreq(M, d=1.0 / M) * dx
+    Ck = sfft.fft2(von_karman_covariance(np.hypot(lag[:, None], lag[None, :]), r0, L0))
+    if band_limit:
+        f, ks = np.fft.fftfreq(M, d=dx), 1.0 / dx
+        for p in range(-4, 5):
+            for q in range(-4, 5):
+                if p or q:
+                    Ck = Ck - utils.von_karman_psd(np.hypot(f[:, None] + p * ks, f[None, :] + q * ks), r0, L0) / dx ** 2
+    return Ck
+
+
+def windowed_turbulence_psd(pupil, D, pad, r0, L0, band_limit=True):
+    """Radial PSD [nm^2 m^2] of the piston-removed turbulence INSIDE the pupil, E|FT(P (phi - <phi>))|^2 / A, on the grid and with the
+    normalisation of modal_psd_kernels. Exact for the pixel-sampled field: analytic covariance, pupil pair counts and piston cross terms,
+    all by FFT on the padded grid. band_limit (see _lag_covariance_ft): the field below the pixel Nyquist frequency only, so that
+    von_karman_variance_above(k_max) is the rest (far field)."""
+    pupil = np.asarray(pupil) > 0
+    n = pupil.shape[0]
+    dx, M = D / n, n * pad
+    Pz = np.zeros((M, M))
+    Pz[:n, :n] = pupil
+    npix = Pz.sum()
+    Pk = sfft.fft2(Pz)
+    ac = sfft.ifft2(np.abs(Pk) ** 2).real                                # pupil pair counts per lag
+    Ck = _lag_covariance_ft(M, dx, r0, L0, band_limit)
+    conv = sfft.ifft2(Pk * Ck).real                                      # sum_x' C(x - x') P(x')
+    full = sfft.fft2(ac * sfft.ifft2(Ck).real).real                      # E|FT(P phi)|^2 (pixel units)
+    cross = sfft.fft2(Pz * conv)                                         # E[<phi> FT(P phi)] * npix
+    pist = float((Pz * conv).sum()) / npix ** 2                          # E[<phi>^2]
+    p2d = (full - 2 * np.real(np.conj(Pk) * cross) / npix + pist * np.abs(Pk) ** 2) * dx ** 4 / (npix * dx * dx)
+    return _radial_mean(p2d, _radial_bins(M, dx))
+
+
+def kl_fitting_cross(modes, pupil, D, pad, L0, workers=-1):
+    """Ingredients of the exact KL fitting PSD at r0 = 1 m, with a_i = <m_i psi> the projection of the piston-removed turbulence psi on the
+    unit-rms mode m_i (modes orthonormal on the pupil) and g_i(x) = E[a_i psi(x)] = (C * m_i)(x) / npix, piston removed:
+      W (nb,)          windowed_turbulence_psd (band limited)
+      X (n_modes, nb)  annulus mean of Re[conj(FT m_i) FT(g_i)] dx^4 / A: cross spectrum of each mode with the turbulence
+      G (n_modes, n_modes)  E[a_i a_j] = <m_j g_i> (a DM KL basis is not exactly diagonal: low orders correlate up to ~0.3 when its
+                            statistics differ from those used here, e.g. L0)."""
+    pupil = np.asarray(pupil) > 0
+    modes = np.asarray(modes, float)
+    n = pupil.shape[0]
+    rows, cols = np.nonzero(pupil)
+    dx, M = D / n, n * pad
+    npix = len(rows)
+    mu = modes / np.sqrt(np.mean(modes ** 2, axis=1))[:, None]
+    mu = mu - mu.mean(axis=1, keepdims=True)
+    gram = mu @ mu.T / npix
+    if np.max(np.abs(gram - np.eye(len(mu)))) > 1e-3:
+        raise ValueError('kl_fitting_cross: the modes are not orthonormal on the pupil (max |<m_i m_j> - delta_ij| '
+                         f'= {np.max(np.abs(gram - np.eye(len(mu)))):.2g}); the projection formula needs them orthonormal')
+    bins = _radial_bins(M, dx)
+    Ck = _lag_covariance_ft(M, dx, 1.0, L0, band_limit=True)
+    norm = dx ** 4 / (npix * dx * dx)
+    X = np.empty((len(mu), bins[2]))
+    G = np.empty((len(mu), len(mu)))
+    chunk = max(1, int(1e9 / (M * M * 16 * 4)))
+    for s in range(0, len(mu), chunk):
+        e = min(s + chunk, len(mu))
+        buf = np.zeros((e - s, M, M))
+        buf[:, rows, cols] = mu[s:e]
+        Fm = sfft.fft2(buf, workers=workers)
+        g = sfft.ifft2(Fm * Ck[None], workers=workers).real[:, rows, cols] / npix
+        g -= g.mean(axis=1, keepdims=True)
+        G[s:e] = g @ mu.T / npix
+        buf[:] = 0.0
+        buf[:, rows, cols] = g
+        cs = (np.conj(Fm) * sfft.fft2(buf, workers=workers)).real
+        for j in range(e - s):
+            X[s + j] = _radial_mean(cs[j], bins) * norm
+    return dict(W=windowed_turbulence_psd(pupil, D, pad, 1.0, L0), X=X, G=0.5 * (G + G.T))
+
+
+def kl_fitting_psd(modes, pupil, D, pad, cross, N, workers=-1):
+    """Fitting PSD [nm^2 m^2, r0 = 1 m] of the turbulence inside the pupil with its projection on the first N KL modes removed, EXACT in
+    expectation (no Monte Carlo): E|FT(psi - sum_{i<N} a_i m_i)|^2 / A = W - 2 sum_{i<N} X_i + sum_{i,j<N} G_ij FT(m_i) conj FT(m_j) / A.
+    The last term is computed on the eigenvectors of G[:N, :N] (N FFTs). Checked against 480 von Karman phase screens: 1 % per band
+    from 0.5 k_c to 4 k_c, 0.2 % on the variance (220-px VLT pupil, 300 and 1200 modes)."""
+    pupil = np.asarray(pupil) > 0
+    n = pupil.shape[0]
+    rows, cols = np.nonzero(pupil)
+    dx, M = D / n, n * pad
+    npix = len(rows)
+    if N > len(cross['G']):
+        raise ValueError(f'{N} modes requested but the KL basis has {len(cross["G"])}')
+    mu = np.asarray(modes, float)[:N]
+    mu = mu / np.sqrt(np.mean(mu ** 2, axis=1))[:, None]
+    mu = mu - mu.mean(axis=1, keepdims=True)
+    lam, U = np.linalg.eigh(cross['G'][:N, :N])
+    rot, lam = U.T @ mu, np.maximum(lam, 0.0)
+    bins = _radial_bins(M, dx)
+    quad = np.zeros((M, M))
+    chunk = max(1, int(1e9 / (M * M * 16 * 2)))
+    for s in range(0, N, chunk):
+        e = min(s + chunk, N)
+        buf = np.zeros((e - s, M, M))
+        buf[:, rows, cols] = rot[s:e]
+        F = sfft.fft2(buf, workers=workers)
+        quad += np.einsum('i,ijk->jk', lam[s:e], F.real ** 2 + F.imag ** 2)
+    quad = _radial_mean(quad, bins) * dx ** 4 / (npix * dx * dx)
+    return np.maximum(cross['W'] - 2.0 * cross['X'][:N].sum(axis=0) + quad, 0.0)
+
+
+def save_fitting_cross(path, cross):
+    os.makedirs(op.dirname(op.abspath(path)), exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU(cross['W']), fits.ImageHDU(cross['X'], name='X'), fits.ImageHDU(cross['G'], name='G')]).writeto(
+        path, overwrite=True)
+
+
+def load_fitting_cross(path):
+    with fits.open(path) as h:
+        return dict(W=np.asarray(h[0].data, float), X=np.asarray(h['X'].data, float), G=np.asarray(h['G'].data, float))
+
+
 # ----------------------------------------------------------------------------- PSD set
 @dataclass
 class PsdTerm:
@@ -121,8 +266,9 @@ class PsdSet:
 
 
 def residual_psd_terms(kern, result, r0, L0, N, fitting_scale='lbt', extra_psd=None, chromatic=None,
-                       sensing_nm=None, include_open_loop=True, split_noise=True, square=False):
-    """PSD of every term of a BudgetResult."""
+                       sensing_nm=None, include_open_loop=True, split_noise=True, square=False, fitting_kl=None, extra_modal=None):
+    """PSD of every term of a BudgetResult. fitting_kl: the KL fitting PSD on the kernel grid (kl_fitting_psd, at the seeing), used instead
+    of the stationary tail; it is band limited, the power above the grid is von_karman_variance_above(k_max) (far field)."""
     k = kern.k
     terms = OrderedDict()
     names = ('lag', 'noise_photon', 'noise_ron', 'alias', 'xtalk') if split_noise else ('lag', 'noise', 'alias', 'xtalk')
@@ -135,9 +281,17 @@ def residual_psd_terms(kern, result, r0, L0, N, fitting_scale='lbt', extra_psd=N
     if cm is not None and np.any(cm):                       # signed modal term: the kernels are linear
         terms['chrom_mult'] = PsdTerm('chrom_mult', kern.psd(np.asarray(cm)[:N]), True)
     fit_psd, info = fitting_psd(k, r0, L0, N, kern.D, result.fitting if fitting_scale == 'lbt' else None, square)
-    terms['fitting'] = PsdTerm('fitting', fit_psd, False)
+    if fitting_kl is None:
+        terms['fitting'] = PsdTerm('fitting', fit_psd, False)                      # stationary von Karman tail, sharp cut at k_c
+    else:                                                                          # KL modes removed (pupil windowed)
+        far = von_karman_variance_above(float(k[-1]), r0, L0)
+        s = result.fitting / (kern.variance(fitting_kl) + far) if fitting_scale == 'lbt' else 1.0
+        terms['fitting'] = PsdTerm('fitting', np.asarray(fitting_kl, float) * s, True)
+        info = dict(info, scale=s, variance_inf=(kern.variance(fitting_kl) + far) * s)
     for name, p in (extra_psd or {}).items():
         terms[name] = PsdTerm(name, np.asarray(p, float), False)
+    for name, v in (extra_modal or {}).items():                  # per-mode variances [nm^2] (e.g. the fused chromatic shear)
+        terms[name] = PsdTerm(name, kern.psd(np.asarray(v, float)), True)
     if chromatic is not None:
         if sensing_nm is None:
             raise ValueError('chromatic PSDs need the sensing wavelength (sensing_nm)')
@@ -283,7 +437,8 @@ class PsfEngine:
 
     def __init__(self, machine, pad=4):
         self.m, self.pad = machine, pad
-        self._kern = self._model = None
+        self._kern = self._model = self._cross = None
+        self._fit = {}
 
     def kernels(self):
         if self._kern is None:
@@ -295,13 +450,56 @@ class PsfEngine:
                 save_kernels(path, self._kern)
         return self._kern
 
-    def psd_terms(self, result, fitting_scale='lbt', include_open_loop=True, extra_psd=None, split_noise=True):
-        """PsdSet of a BudgetResult (fitting_scale 'lbt': PSD scaled to the budget's fitting variance, 'psd': pure tail; with
-        machine.asm=False the fitting PSD lies outside TipTop's square corrected area)."""
+    def fitting_kl(self, r0, N):
+        """Fitting PSD [nm^2 m^2] with the first N KL modes removed exactly from the turbulence inside the pupil (kl_fitting_psd); the
+        cross kernels (~1 min for 1300 modes) and each N (~15 s) are cached on disk; scales as r0^-5/3."""
+        N = int(N)
+        if N not in self._fit:
+            path = self.m.paths.kl_fitting_psd(self.m.L0, self.m.D, self.pad, N)
+            if op.exists(path):
+                self._fit[N] = np.asarray(utils.read_fits(path), float)
+            else:
+                if self._cross is None:
+                    cpath = self.m.paths.kl_fitting_cross(self.m.L0, self.m.D, self.pad)
+                    if op.exists(cpath):
+                        self._cross = load_fitting_cross(cpath)
+                    else:
+                        self._cross = kl_fitting_cross(self.m.modes(), self.m.pupil(), self.m.D, self.pad, self.m.L0)
+                        save_fitting_cross(cpath, self._cross)
+                self._fit[N] = kl_fitting_psd(self.m.modes(), self.m.pupil(), self.m.D, self.pad, self._cross, N)
+                utils.write_fits(path, self._fit[N])
+        return self._fit[N] * r0 ** (-5 / 3)
+
+    def psd_terms(self, result, fitting_scale=None, include_open_loop=True, extra_psd=None, split_noise=True, fitting='kl'):
+        """PsdSet of a BudgetResult. fitting: 'kl' (default) the N controlled KL modes removed exactly from the turbulence inside the
+        pupil (the expectation of removing them from phase screens, fitting_kl), 'stationary' the von Karman tail cut sharply at k_c
+        (outside TipTop's square with machine.asm=False). fitting_scale 'lbt': PSD scaled to the budget's fitting variance (LBT law, or
+        TipTop with asm=False: only the variance, the shape stays the KL one with 'kl'), 'psd': unscaled (with 'kl': the bound of
+        perfectly correcting the N defined modes). None (default): 'psd' with fitting='kl', 'lbt' with 'stationary'."""
+        if fitting not in ('kl', 'stationary'):
+            raise ValueError(f"fitting must be 'kl' or 'stationary', got {fitting!r}")
+        if fitting_scale is None:
+            fitting_scale = 'psd' if fitting == 'kl' else 'lbt'
+        if fitting_scale not in ('lbt', 'psd'):
+            raise ValueError(f"fitting_scale must be 'lbt' or 'psd', got {fitting_scale!r}")
         wl = result.params['wavelength_nm']
-        return residual_psd_terms(self.kernels(), result, float(utils.r0_from_seeing(result.params['seeing'])), self.m.L0,
-                                  int(result.params.get('NmodesUsed', result.params['Nmodes'])), fitting_scale, extra_psd, result.chromatic,
-                                  None if np.isnan(wl) else wl, include_open_loop, split_noise, square=not getattr(self.m, 'asm', True))
+        r0, chromatic = float(utils.r0_from_seeing(result.params['seeing'])), result.chromatic
+        N = int(result.params.get('NmodesUsed', result.params['Nmodes']))
+        bands = getattr(result, 'chrom_bands', None)
+        if bands:                                   # fused / multi-stage results: chromatic PSD by spatial-frequency band
+            k, extra_psd, chromatic = self.kernels().k, dict(extra_psd or {}), None
+            for cm, k_lo, k_hi, sensing_nm in bands:
+                hi = cm.psds(k, r0, self.m.L0, k_hi, sensing_nm)
+                lo = cm.psds(k, r0, self.m.L0, k_lo, sensing_nm) if k_lo > 0 else {}
+                for name, p in hi.items():
+                    extra_psd[name] = extra_psd.get(name, 0.0) + p - lo.get(name, 0.0)
+        modal = None
+        if getattr(result, 'chrom_shear_modes', None) is not None:      # fused results: modal shear (w^T C_shear w per mode)
+            extra_psd = {k_: v for k_, v in (extra_psd or {}).items() if k_ != 'chrom_shear'}
+            modal = {'chrom_shear': result.chrom_shear_modes}
+        return residual_psd_terms(self.kernels(), result, r0, self.m.L0, N, fitting_scale, extra_psd, chromatic,
+                                  None if np.isnan(wl) else wl, include_open_loop, split_noise, square=not getattr(self.m, 'asm', True),
+                                  fitting_kl=self.fitting_kl(r0, N) if fitting == 'kl' else None, extra_modal=modal)
 
     def psf_terms(self, result, wavelength_nm, names=None, **kw):
         """Long-exposure PSFs of every PSD term at the SCIENCE wavelength (peak of the diffraction-limited PSF = 1)."""

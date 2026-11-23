@@ -97,17 +97,24 @@ def slope_noise_coefficients(rec, frame, geom, slopes_from_intensity=False):
     return SlopeNoise(a, b, 4, geom.n_norm, thrp)
 
 
-def slope_variance_diag(frame, geom, n_det, detector, slopes_from_intensity=False):
-    """Variance of each slope (diagonal; the sx-sy photon covariance is neglected): the noise weights of the ML / MAP reconstructors."""
+def slope_noise_cov(frame, geom, n_det, detector, slopes_from_intensity=False):
+    """Slope noise covariance, the weights of the ML / MAP reconstructors: (var, cov_xy).
+    Quad-cell: var (2 n_valid,) = [var sx, var sy] and cov_xy (n_valid,) = cov(sx_j, sy_j) = F2 n_det (fB + fD - fA - fC) / fm^2, the
+    photon covariance of the two slopes of a subaperture (the readout part cancels: A, B, C, D enter sx sy with signs -, +, -, +); slopes
+    of different subapertures are independent. Intensity mode (slopes_from_intensity): each slope is one pixel, var (4 n_valid,) and
+    cov_xy None (exact for independent pixels; the common normalisation by the total flux is neglected, as in the quad-cell case)."""
     (fa, fb, fc, fd), thrp = pixel_fractions(frame, geom)
     fm = n_det * thrp / geom.n_norm
     ron2 = detector.ron_e ** 2
     if slopes_from_intensity:
-        v = detector.f2 * n_det * np.concatenate([fa, fb, fc, fd]) + ron2
-    else:
-        v4 = detector.f2 * n_det * (fa + fb + fc + fd) + 4 * ron2
-        v = np.concatenate([v4, v4])
-    return v / fm ** 2
+        return (detector.f2 * n_det * np.concatenate([fa, fb, fc, fd]) + ron2) / fm ** 2, None
+    v4 = detector.f2 * n_det * (fa + fb + fc + fd) + 4 * ron2
+    return np.concatenate([v4, v4]) / fm ** 2, detector.f2 * n_det * (fb + fd - fa - fc) / fm ** 2
+
+
+def slope_variance_diag(frame, geom, n_det, detector, slopes_from_intensity=False):
+    """Variance of each slope (the diagonal of slope_noise_cov)."""
+    return slope_noise_cov(frame, geom, n_det, detector, slopes_from_intensity)[0]
 
 
 def measure_slope_norm(frame, sn, geom, slopes_from_intensity=False):
