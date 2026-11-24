@@ -1,0 +1,83 @@
+# Interaction Matrix and Reconstructor Calibration
+# ================================================
+
+# Push-pull command generator
+pushpull:
+  class:        'PushPullGenerator'
+  nmodes:       775                        # Number of modes (= DM nmodes)
+  amp:          10
+  outputs:   ['output']
+
+# Interaction matrix calibrator
+pyr_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    775                         # Number of modes to calibrate
+  im_tag:    'pyr3.0_dm820_40x40_im'            # Output IM filename
+  overwrite: true                         # Overwrite existing files
+  inputs:
+    in_slopes:   'pyr_slopes.out_slopes'      # WFS slopes input
+    in_commands: 'pushpull.output'        # Push-pull commands
+  outputs:   ['out_intmat']
+
+pyr_rec_calibrator:
+  class:     'RecCalibrator'
+  nmodes:    775
+  rec_tag:   'pyr3.0_40x40_775modes_rec'  # = pyr_modes recmat_object in fsoc_main
+  overwrite: true
+  inputs:
+    in_intmat: 'pyr_im_calibrator.out_intmat'
+
+sh_im_calibrator:
+  class:     'ImCalibrator'
+  nmodes:    775
+  im_tag:    'sh_dm820_40x40_im'
+  overwrite: true
+  inputs:
+    in_slopes:   'sh_slopes.out_slopes'
+    in_commands: 'pushpull.output'
+  outputs:   ['out_intmat']
+
+sh_rec_calibrator:
+  class:     'RecCalibrator'
+  nmodes:    775
+  rec_tag:   'sh_40x40_775modes_rec'      # = sh_modes recmat_object in fsoc_main
+  overwrite: true
+  inputs:
+    in_intmat: 'sh_im_calibrator.out_intmat'
+
+# Override main simulation parameters
+main_override:
+  total_time: 0.775                # 775 modes × 2 (push+pull) × 0.0005s
+
+# Disable atmosphere for clean calibration
+prop_override:
+  inputs:
+    common_layer_list: ['pupilstop', 'dm.out_layer']  # Only pupil + DM
+
+# Override DM to use calibration commands
+dm_override:
+  sign: 1                                 # Use positive sign for calibration (default is -1)
+  inputs:
+    in_command: 'pushpull.output'         # Connect to push-pull generator
+
+source_override:
+  magnitude: 0.0                          # Bright source for calibration
+
+
+# Disable noise for clean measurements
+cred_override:
+  dt:             0.0005                  # one frame per push/pull step (operational: 0.002)
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+cred_sh_override:
+  dt:             0.0005 
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+
+# Remove unnecessary objects during calibration
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', 'data_store', 'pyr_modes', 'sh_modes',
+        'dm_modes','res_modes']

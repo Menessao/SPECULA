@@ -71,7 +71,7 @@ pyr:
   simul_params_ref:  'main'
   pup_diam:          40.                     # Pupil diameter in subaps.
   pup_dist:          48.                     # Separation between pupil centers in subaps.
-  fov:               4.0                     # Requested field-of-view [arcsec]
+  fov:               10.0                    # Requested field-of-view [arcsec]
   fov_errsup:        12
   mod_amp:           3.0                     # Modulation radius (in lambda/D units)
   output_resolution: 120                     # Output sampling [usually corresponding to CCD pixels]
@@ -98,6 +98,9 @@ cred:
 pyr_slopes:
   class:                  'PyrSlopec'
   pupdata_object:         'pyr_pupdata_40x40'
+  slopes_from_intensity:  true
+  clamp_negative:         false             # keep negative (noisy) pixels: linear noise
+  slopes_from_intensity:  true
   # sn_object:            'pyr3.0_40x40_sn'
   inputs:
     in_pixels:        'cred.out_pixels'
@@ -105,7 +108,7 @@ pyr_slopes:
 
 pyr_modes:
   class:             'Modalrec'
-  recmat_object:     'pyr3.0_40x40_820modes_rec'
+  recmat_object:     'pyr3.0_40x40_775modes_rec'
   inputs:
     in_slopes:       'pyr_slopes.out_slopes'
   outputs:           ['out_modes']
@@ -115,9 +118,9 @@ pyr_modes:
 sh:
   class:             'SH'
   subap_on_diameter: 40                    # 40x40 subapertures across pupil
-  subap_wanted_fov:  4.0                   # [arcsec] Subaperture field of view
-  sensor_pxscale:    0.6667                # [arcsec/pixel] Pixel scale
-  subap_npx:         6                     # 8x8 pixels per subaperture
+  subap_wanted_fov:  10.0                  # [arcsec] Subaperture field of view
+  sensor_pxscale:    1.6667                # [arcsec/pixel] Pixel scale
+  subap_npx:         6                     # 6x6 pixels per subaperture
   wavelengthInNm:    1550                   # [nm] R-band sensing
   inputs:
     in_ef:           'prop.out_source_ef'
@@ -140,177 +143,67 @@ cred_sh:
     in_i:            'sh.out_i'
   outputs:           ['out_pixels']
 
-pyr_slopes_nir:
-  class:                  'PyrSlopec'
-  pupdata_object:         'pyr_pupdata_48x48'
-  # sn_object:            'pyr3.0_48x48_sn'
+sh_slopes:
+  class:             'ShSlopec'
+  subapdata_object:  'sh_subapdata_40x40'
+  clamp_negative:    false                 # keep negative (noisy) pixels: linear noise
   inputs:
-    in_pixels:        'cred_nir.out_pixels'
-  outputs:           ['out_slopes', 'out_total_counts']
+    in_pixels:       'cred_sh.out_pixels'
+  outputs:           ['out_slopes']
 
-pyr_modes_nir:
+sh_modes:
   class:             'Modalrec'
-  recmat_object:     'pyr1.0_48x48_wvl1300_bmc2k_vlt_1300modes_rec'
+  recmat_object:     'sh_40x40_775modes_rec'
   inputs:
-    in_slopes:       'pyr_slopes_nir.out_slopes'
+    in_slopes:       'sh_slopes.out_slopes'
   outputs:           ['out_modes']
 
-############################ Optical Gain #########################################
-# dithering:
-#   class:             'WaveGenerator'
-#   wave_type:         'SIN'
-#   amp:               [5.0]
-#   freq:              [85.0]
-#   outputs: ['output']
-
-# dithered_mode:
-#   class: 'BaseInserter'
-#   indices: [[0],[100]]
-#   output_size: 1800
+# # Controller
+# integrator:
+#   class:             'Integrator'
+#   delay:             1                     # Additional controller delay [frames]. The loop itself already has a 1-step lag from dm.out_layer:-1.
+#   int_gain:          [0.30]
+#   n_modes:           [775]                 # Number of modes to control
 #   inputs:
-#     in_value: 'dithering.output'
-#   outputs: ['out_value']
-
-# dithered_command:
-#   class:             'BaseOperation'
-#   add:               true
-#   inputs:
-#     in_value1:       'kdelay.out_comm'
-#     in_value2:       'dithered_mode.out_value'
-#   outputs: ['out_value']
-
-# cmd_demodulator:
-#   class:                'Demodulator'
-#   simul_params_ref:     'main'
-#   mode_numbers:         [100]
-#   carrier_frequencies:  [85.0]
-#   demod_dt:             0.2
-#   inputs:
-#       in_data:         'dithered_command.out_value'
-#   outputs:             ['output']
-
-# meas_demodulator:
-#   class:             'Demodulator'
-#   simul_params_ref:  'main'
-#   mode_numbers:      [100]
-#   carrier_frequencies: [85.0]
-#   demod_dt:           0.2
-#   inputs:
-#       in_data:       'pyr_modes_nir.out_modes'
-#   outputs: ['output']
-
-# optical_gain_estimator:
-#   class:             'OpticalGainEstimator'
-#   gain:              0.3
-#   initial_optical_gain: 1.0
-#   inputs:
-#     in_demod_delta_command: 'cmd_demodulator.output'
-#     in_demod_command: 'meas_demodulator.output'
-#   outputs: ['output','optical_gain']
-
-############################ Control: Kalman filter ################################
-# Modal turbulence estimation with one AR(2) model per mode, fusing the two pyramids.
-#
-# Timing (SPECULA): the WFSs see at step k the DM shape d_k computed at step k-1 ('dm.out_layer:-1').
-# The filter receives the raw closed-loop modal measurements and, as command input, d_k itself
-# ('kpred.out_comm:-1'), whose recent history it keeps (last 4 steps), so that:
-#   NIR, unmodulated, every step:          y_k = phi_k - d_k + b + n_k   (b: offset, estimated)
-#   VIS, modulated reference, 500 Hz:      y_k = mean over the 4 integrated steps of (phi - d) + n_k
-# It outputs E[phi_{k+1} | k]. kpred inverts the plant: its fractional delay 0.5 plus the one-step DM
-# delay give d_{k+1} = 0.5 c_k + 0.5 c_{k-1}, and its IIR (1 + beta) z / (z + beta) makes d_{k+1} follow
-# the filter output. The noise of each WFS is rescaled with its measured flux. time_step must stay set.
-# If the plant delay, a frame rate or the AR(2) model changes, rebuild both data files (save_kalman_data).
-
-kalman:
-  class:             'KalmanFilter'
-  kalman_filter_data_object: 'kf_ar2_1300modes_vis_nir'   # built by save_kalman_data
-  time_step:         0.0005                  # [s] AR(2) sampling; only matters if a step has no fresh input
-  gain_period:       4                       # 500 Hz / 2 kHz schedule: gains frozen once converged
-  flux_update_period: 1000                   # frames of each WFS between noise rescalings
-  inputs:
-    in_measurements_list: ['pyr_modes_vis.out_modes', 'pyr_modes_nir.out_modes']   # order of the data file
-    in_command:      'kpred.out_comm:-1'     # DM command seen by the WFSs at this step
-    in_flux_list:    ['pyr_slopes_vis.out_total_counts', 'pyr_slopes_nir.out_total_counts']        # same order
-  outputs:           ['out_projected_state', 'out_state', 'out_bias']
-
-# Plant inverse (beta = 0.99) with fractional delay 0.5: total plant delay 1 + 0.5 = 1.5 steps
-# (the 1 is the 'dm.out_layer:-1' in prop)
-kpred:
-  class:             'IirFilter'
-  delay:             0.5
-  iir_filter_data_object: 'plant_inverse_1300modes'        # built by save_kalman_data (plant_inverse_tag)
-  inputs:
-    delta_comm:      'kalman.out_projected_state'
-  outputs:           ['out_comm']
+#     delta_comm:      'pyr_modes.out_modes'
+#   outputs:           ['out_comm']
 
 # DM data objects: aoeb names them {paths.dm_tag}_ifunc, _m2c, _kl_inv
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'bmc2k_vlt_ifunc'       # Our computed influence functions
-  m2c_object:        'bmc2k_vlt_m2c'         # Modal-to-command matrix
-  nmodes:            1800                    # Number of controlled modes
+  ifunc_object:      'dm820_1m_ifunc'       # Our computed influence functions
+  m2c_object:        'dm820_1m_m2c'         # Modal-to-command matrix
+  nmodes:            775                    # Number of controlled modes
   height:            0                       # Ground-conjugated DM
   inputs:
-    in_command:      'kpred.out_comm'       # plant-inverted Kalman prediction, after the plant delay
+    in_command:      'integrator.out_comm'
   outputs:           ['out_layer']
 
 
 ###########################################################
 ##################### POST-PROCESSING #####################
-# Coronagraphic and non-coronagraphic PSFs at the science wavelength
-coro_psf_vis:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    550                    # [nm] science wavelength
-  nd:                4                       # 4x padding for PSF
-  start_time:        0.5
-  verbose: true
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'prop.out_science_vis_ef'
 
-# psf_vis:
+# psf:
 #   class:             'PSF'
 #   simul_params_ref:  'main'
-#   wavelengthInNm:    550                    # [nm] science wavelength
+#   wavelengthInNm:    1550                    # [nm] science wavelength
 #   nd:                4
 #   start_time:        1.0
 #   inputs:
-#     in_ef:           'prop.out_science_vis_ef'
-#   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
-
-coro_psf_nir:
-  class:             'PsfCoronagraph'
-  simul_params_ref:  'main'
-  wavelengthInNm:    1650                    # [nm] science wavelength
-  nd:                4                       # 4x padding for PSF
-  start_time:        0.5
-  verbose: false
-  compute_profile_metrics: true
-  inputs:
-    in_ef:           'prop.out_science_nir_ef'
-
-# psf_nir:
-#   class:             'PSF'
-#   simul_params_ref:  'main'
-#   wavelengthInNm:    1650                    # [nm] science wavelength
-#   nd:                4
-#   start_time:        1.0
-#   inputs:
-#     in_ef:           'prop.out_science_nir_ef'
+#     in_ef:           'prop.out_source_ef'
 #   outputs:           ['out_psf', 'out_std_psf', 'out_sr']
 
 res_modes:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  ifunc_inv_object: 'dm820_1m_kl_inv'
   inputs:
-    in_ef: ['prop.out_science_vis_ef']
+    in_ef: ['prop.out_source_ef']
   outputs: ['out_modes']
 
 dm_modes:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'bmc2k_vlt_kl_inv'
+  ifunc_inv_object: 'dm820_1m_kl_inv'
   inputs:
     in_ef: ['dm.out_layer']
   outputs: ['out_modes']
@@ -326,18 +219,11 @@ atmo_modes:
 # Data store for results
 data_store:
   class:             'DataStore'
-  store_dir:         '/raid1/mmenessini/results/WFSW'      # Data result directory: 'store_dir'/TN/
+  store_dir:         '/raid1/mmenessini/results/FSOC'      # Data result directory: 'store_dir'/TN/
   inputs:
     input_list: [
-                  'sr_vis-coro_psf_vis.out_sr',
-                  'coro_psf_vis_int-coro_psf_vis.out_int_coronagraph_psf_profile',
-                  # 'coro_psf_vis_std-coro_psf_vis.out_std_coronagraph_psf_profile',
-                  'sr_nir-coro_psf_nir.out_sr',
-                  'coro_psf_nir_int-coro_psf_nir.out_int_coronagraph_psf_profile',
-                  # 'coro_psf_nir_std-coro_psf_nir.out_std_coronagraph_psf_profile',
                   'atmo_modes-atmo_modes.out_value',
                   'res_modes-res_modes.out_modes',
                   'dm_modes-dm_modes.out_modes',
-                  'kf_comm-kalman.out_projected_state',
-                  'kf_bias-kalman.out_bias',       # NIR offset w.r.t. the VIS reference
+                  'sh_modes-sh_modes.out_modes',
                   ]

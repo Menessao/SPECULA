@@ -1,0 +1,52 @@
+
+
+# Short calibration run
+main_override:
+  total_time: 0.001                       # 0ms (just measure pupil)
+
+
+# Subaperture calibrator
+sh_subaps:
+  class: 'ShSubapCalibrator'
+  subap_on_diameter: 40                   # 40×40 subapertures
+  output_tag:        'sh_subapdata_40x40'    # Output file tag
+  energy_th:         0.5                  # 50% energy threshold
+  overwrite:         true
+  inputs:
+    in_i: 'sh.out_i'                     # WFS intensity input
+
+pyr_pupdata:
+  class: 'PyrPupdataCalibrator'
+  thr1: 0.1
+  thr2: 0.15
+  display_debug: false
+  slopes_from_intensity: true
+  output_tag:        'pyr_pupdata_40x40'
+  overwrite: true
+  inputs:
+    in_i: 'pyr.out_i'
+
+pyr_override:
+  mod_amp:           10.0   # Modulation radius (in lambda/D units), inside the 10" FoV
+
+# No noise on either camera
+cred_override: 
+  dt:             0.0005 
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+
+cred_sh_override:
+  dt:             0.0005 
+  photon_noise:      false
+  readout_noise:     false
+  excess_noise:      false
+
+# Clean pupil measurement (no atmosphere)
+prop_override:
+  inputs:
+    common_layer_list: ['pupilstop']      # Only telescope pupil
+
+# Remove unnecessary components to avoid issues and speed up the calibration
+remove: ['atmo', 'seeing', 'wind_direction', 'wind_speed', 'dm', 'pyr_slopes',
+         'dm_modes',  'pyr_modes', 'atmo_modes', 'res_modes', 'sh_slopes', 'sh_modes', 'data_store']
