@@ -125,32 +125,13 @@ class Config:
         p, t, s, o = (self.d[k] for k in ('paths', 'telescope', 'sensors', 'options'))
         return ErrorBudgetMachine(self._root(), diameter=t['diameter'], L0=t['L0'], wind=self.wind(), detector=self.detector(),
                                   pupilstop_tag=p['pupilstop_tag'], dm_tag=p['dm_tag'], modes_per_subap=s['modes_per_subap'],
-                                  n_modes_ho=s['n_modes_ho'], kl_pad=o['kl_pad'], slopes_from_intensity=s['slopes_from_intensity'],
-                                  asm=o['asm'], max_sensitivity=self.d['loop']['max_sensitivity'], optimize_freq=o['optimize_freq'],
-                                  optimize_modes=o['optimize_modes'], freq_min=o['freq_min'],
-                                  wiener_order=self.d['loop']['wiener_order'], temporal=self.temporal(),
+                                  n_modes_ho=s['n_modes_ho'], optimize_freq=o['optimize_freq'], optimize_modes=o['optimize_modes'],
                                   alias_layers=list(zip(self.d['atmosphere']['cn2'], self.d['atmosphere']['wind_speed'])),
                                   alias_psd=o['alias_psd'], **kw)
 
-    def iir(self):
-        """IirControllers of loop.iir_file (a file saved by SPECULA's IirFilterData); loop.iir_optimize_gain: optimise the global gain."""
-        from .filter_optimizers import IirControllers
-        lp = self.d['loop']
-        if not lp['iir_file']:
-            raise ValueError("controller 'iir' needs loop.iir_file")
-        return IirControllers.from_fits(lp['iir_file'], optimize_gain=bool(lp['iir_optimize_gain']))
-
-    def temporal(self):
-        """atmosphere.temporal: 'conan' (None: one effective wind) or 'zernike' (multi-layer frozen flow, temporal.ZernikePSD)."""
-        a, t = self.d['atmosphere'], self.d['telescope']
-        if a['temporal'] == 'conan':
-            return None
-        from .temporal import ZernikePSD
-        return ZernikePSD(t['diameter'], L0=t['L0'], layers=list(zip(a['cn2'], a['wind_speed'])))
-
-    def psf_engine(self, machine=None, pad=4):
+    def psf_engine(self, machine=None):
         from .psf import PsfEngine
-        return PsfEngine(machine or self.machine(), pad)
+        return PsfEngine(machine or self.machine())
 
     def chromatic(self):
         c, a = self.d['chromatic'], self.d['atmosphere']
@@ -169,13 +150,11 @@ class Config:
                   L0=self.d['telescope']['L0'], **g)
         if p['specula_dir']:
             kw['config_dir'] = p['specula_dir']
-        kw['pc_corrections'] = tuple(tuple(x) for x in kw['pc_corrections'])
         return ErrorBudgetGenerator(GeneratorConfig(**kw))
 
     def budget_kwargs(self):
         lp, o = self.d['loop'], self.d['options']
-        return dict(latency_s=lp['latency_s'], n_fold=lp['n_fold'], crosstalk=o['crosstalk'], fixed_point=o['fixed_point'],
-                    chromatic=self.chromatic())
+        return dict(latency_s=lp['latency_s'], crosstalk=o['crosstalk'], chromatic=self.chromatic())
 
     def scan(self, machine=None, progress=True):
         """Full scan of the configuration -> (modes_df, totals_df)."""
@@ -183,5 +162,5 @@ class Config:
         s, lp = self.d['scan'], self.d['loop']
         k = s['store_modes']
         return m.scan(s['seeings'], self.d['sensors']['rMods'], self.d['sensors']['n_subaps'], self.fluxes(), self.freqs(),
-                      tuple(lp['scenarios']), tuple(self.iir() if c == 'iir' else c for c in lp['controllers']), store_modes=list(range(k)) if k else None,
-                      progress=progress, wavelengths=self.sensing(), **self.budget_kwargs())
+                      tuple(lp['controllers']), store_modes=list(range(k)) if k else None, progress=progress, wavelengths=self.sensing(),
+                      **self.budget_kwargs())

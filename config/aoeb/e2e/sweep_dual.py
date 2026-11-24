@@ -81,7 +81,7 @@ def ml_rec(n, N, wvl, nph):
     if not op.exists(path):
         m, P = machine(), paths(wvl)
         frame = fits.getdata(P.avgframe(RMOD_UNMOD, n, SEEING, N_CORR))
-        cn, cxy = slope_noise_cov(frame, m.slope_geometry(RMOD_UNMOD, n, SEEING, N_CORR, wvl, frame), nph, m.detector, m.slopes_from_intensity)
+        cn, cxy = slope_noise_cov(frame, m.slope_geometry(RMOD_UNMOD, n, SEEING, N_CORR, wvl, frame), nph, m.detector)
         rec = compute_reconstructor(fits.getdata(P.im_dl(RMOD_UNMOD, n)), N, 'ml', cn_diag=cn, cn_xy=cxy)
         atomic_write(path, lambda p: save_rec(p, np.pad(rec, ((0, N_CORR - N), (0, 0))), method='ml', n_phot=nph, seeing=SEEING, wvl_nm=wvl))
     return stem, np.asarray(fits.getdata(path))[:N]

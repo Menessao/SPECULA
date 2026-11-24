@@ -2,10 +2,10 @@
 
     python -m aoeb.scripts.generate --root /raid1/RISTRETTO                      # all steps, packaged ymls and defaults
     python -m aoeb.scripts.generate study.yml sensors.n_subaps=[48] --steps im_dl recs
-    aoeb-generate study.yml wavelengths.sensing_nm=[750,1650] generation.pc_corrections=[[0.99,0.2]]
+    aoeb-generate study.yml wavelengths.sensing_nm=[750,1650]
 
 The optional study file and the `section.key=value` overrides are those of the configuration (config/defaults.yml lists every key).
-Steps, always run in this order: pupdata, alias, im_dl, recs, aliases, pc, pc_levels (the last only with generation.pc_corrections).
+Steps, always run in this order: pupdata, alias, im_dl, recs, aliases, pc.
 Products that already exist are skipped unless --overwrite; every SPECULA run is logged."""
 import argparse
 import logging

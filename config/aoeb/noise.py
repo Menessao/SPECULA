@@ -61,7 +61,7 @@ def pixel_fractions(frame, geom):
 class SlopeNoise:
     a: np.ndarray        # (N,) photon coefficient
     b: np.ndarray        # (N,) readout coefficient
-    c_pix: int           # pixels per slope (4 quad-cell, 1 intensity)
+    c_pix: int           # pixels per slope (4: quad-cell)
     n_norm: float
     thrp: float
 
@@ -76,17 +76,11 @@ class SlopeNoise:
         return ph + ron
 
 
-def slope_noise_coefficients(rec, frame, geom, slopes_from_intensity=False):
+def slope_noise_coefficients(rec, frame, geom):
     """Coefficients (a_i, b_i) of the modal noise for reconstructor `rec` (N, n_slopes)."""
     (fa, fb, fc, fd), thrp = pixel_fractions(frame, geom)
     n = geom.n_valid
     rec = np.asarray(rec, float)
-    if slopes_from_intensity:
-        if rec.shape[1] != 4 * n:
-            raise ValueError(f'reconstructor has {rec.shape[1]} slopes, expected {4 * n} (intensity mode)')
-        r2 = rec ** 2
-        a = r2 @ np.concatenate([fa, fb, fc, fd])
-        return SlopeNoise(a, r2.sum(axis=1), 1, geom.n_norm, thrp)
     if rec.shape[1] != 2 * n:
         raise ValueError(f'reconstructor has {rec.shape[1]} slopes, expected {2 * n} (quad-cell)')
     rx, ry = rec[:, :n], rec[:, n:]
@@ -97,34 +91,31 @@ def slope_noise_coefficients(rec, frame, geom, slopes_from_intensity=False):
     return SlopeNoise(a, b, 4, geom.n_norm, thrp)
 
 
-def slope_noise_cov(frame, geom, n_det, detector, slopes_from_intensity=False):
+def slope_noise_cov(frame, geom, n_det, detector):
     """Slope noise covariance, the weights of the ML / MAP reconstructors: (var, cov_xy).
     Quad-cell: var (2 n_valid,) = [var sx, var sy] and cov_xy (n_valid,) = cov(sx_j, sy_j) = F2 n_det (fB + fD - fA - fC) / fm^2, the
     photon covariance of the two slopes of a subaperture (the readout part cancels: A, B, C, D enter sx sy with signs -, +, -, +); slopes
-    of different subapertures are independent. Intensity mode (slopes_from_intensity): each slope is one pixel, var (4 n_valid,) and
-    cov_xy None (exact for independent pixels; the common normalisation by the total flux is neglected, as in the quad-cell case)."""
+    of different subapertures are independent (the common normalisation by the total flux is neglected)."""
     (fa, fb, fc, fd), thrp = pixel_fractions(frame, geom)
     fm = n_det * thrp / geom.n_norm
     ron2 = detector.ron_e ** 2
-    if slopes_from_intensity:
-        return (detector.f2 * n_det * np.concatenate([fa, fb, fc, fd]) + ron2) / fm ** 2, None
     v4 = detector.f2 * n_det * (fa + fb + fc + fd) + 4 * ron2
     return np.concatenate([v4, v4]) / fm ** 2, detector.f2 * n_det * (fb + fd - fa - fc) / fm ** 2
 
 
-def slope_variance_diag(frame, geom, n_det, detector, slopes_from_intensity=False):
+def slope_variance_diag(frame, geom, n_det, detector):
     """Variance of each slope (the diagonal of slope_noise_cov)."""
-    return slope_noise_cov(frame, geom, n_det, detector, slopes_from_intensity)[0]
+    return slope_noise_cov(frame, geom, n_det, detector)[0]
 
 
-def measure_slope_norm(frame, sn, geom, slopes_from_intensity=False):
+def measure_slope_norm(frame, sn, geom):
     """(n_norm, correlation): the PyrSlopec divisor, fitted on mean slopes `sn` against the same normalised differences computed from the
-    mean frame of the same runs (sn = n_norm (A + B - C - D) / I, x then y; intensity mode: n_norm [A, B, C, D] / I). A low correlation
+    mean frame of the same runs (sn = n_norm (A + B - C - D) / I, x then y). A low correlation
     means the slopes are not built as assumed (ordering, definition)."""
     f = np.asarray(frame, float).ravel()
     a, b, c, d = (f[i] for i in geom.idx)
     total = float((a + b + c + d).sum())
-    pred = (np.concatenate([a, b, c, d]) if slopes_from_intensity else np.concatenate([a + b - c - d, b + c - a - d])) / total
+    pred = np.concatenate([a + b - c - d, b + c - a - d]) / total
     sn = np.asarray(sn, float).ravel()
     if len(sn) != len(pred) or not np.any(pred) or not np.any(sn):
         return float('nan'), float('nan')

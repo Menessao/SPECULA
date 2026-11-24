@@ -400,7 +400,7 @@ class WienerTables(_Designer):
                 for k, v in threads.items():
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
-    def optimize(self, turb_var, noise_var, alias_var, og, order, xtalk_var=None, eta=None):
+    def optimize(self, turb_var, noise_var, alias_var, og, order, xtalk_var=None):
         fo = self.fo
         turb, noise, alias, og = (np.atleast_1d(np.asarray(v, float)) for v in (turb_var, noise_var, alias_var, og))
         if not np.all(og > 0):
@@ -408,7 +408,6 @@ class WienerTables(_Designer):
         og = np.maximum(og, fo.OG_FLOOR)
         order = np.atleast_1d(order)
         xtalk = np.zeros_like(og) if xtalk_var is None else np.atleast_1d(np.asarray(xtalk_var, float))
-        e = 0.0 if eta is None or not np.any(eta) else np.broadcast_to(np.asarray(eta, float), og.shape)
         R = len(og)
         out = {k: np.zeros(R) for k in ('turb', 'noise', 'alias', 'xtalk', 'cross')}
         turb0 = turb * self.g['T0'][np.searchsorted(self.uo, order)]
@@ -421,8 +420,7 @@ class WienerTables(_Designer):
             out['turb'][i], out['cross'][i] = turb[i] * tt, turb[i] * tc
             out['noise'][i], out['xtalk'][i], out['alias'][i] = noise[i] * nw / og[i] ** 2, xtalk[i] * nw / og[i] ** 2, alias[i] * aw / og[i] ** 2
             filters.append((b, a))
-        total = out['turb'] + out['noise'] + out['alias'] + out['xtalk'] + 2.0 * e * out['cross']
-        none = total >= turb0 * (1.0 + 2.0 * e)                                         # exact "no control" candidate
+        none = out['turb'] + out['noise'] + out['alias'] + out['xtalk'] >= turb0                                         # exact "no control" candidate
         keep = lambda q, zero: np.where(none, zero, q)
         opt = fo.OptResult(np.full(R, np.nan), np.full(R, np.nan), np.full(R, np.nan), keep(out['turb'], turb0), keep(out['noise'], 0.0),
                            keep(out['alias'], 0.0), keep(out['xtalk'], 0.0), keep(out['cross'], turb0), turb0)

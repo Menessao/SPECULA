@@ -78,7 +78,6 @@ def levels(out, n_list=N_LIST):
     m = c.machine(cfg)
     m.modes_per_subap = dict(m.modes_per_subap)
     m.modes_per_subap[NSUB] = sorted(set(m.mode_list(NSUB)) | set(n_list))
-    m.max_sensitivity = None                                       # as og_levels / wfs_talk_figures
     ol.MAG = MAG
     flux = ol.vis_flux(m)
     os.makedirs(op.join(out, 'levels'), exist_ok=True)

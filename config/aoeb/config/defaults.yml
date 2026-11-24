@@ -18,15 +18,13 @@ atmosphere:                             # one profile for the effective wind and
   heights: [110, 238, 402, 728, 1381, 2686, 5296, 9066, 12836, 16136]       # [m] at zenith
   cn2: [0.59, 0.02, 0.04, 0.06, 0.01, 0.05, 0.09, 0.04, 0.05, 0.05]
   wind_speed: [6.6, 5.9, 5.1, 4.5, 5.1, 8.3, 16.3, 30.2, 34.3, 17.5]        # [m/s]
-  wind: null                            # effective wind [m/s]; null: Cn2-weighted 5/3 moment of wind_speed
-  temporal: conan                       # temporal spectra: conan (one effective wind) | zernike (multi-layer frozen flow, temporal.py)
+  wind: null                            # effective wind [m/s]; null: Cn2-weighted 5/3 moment of wind_speed (Conan temporal spectra)
 
 sensors:
   n_subaps: [10, 24, 36, 48]
   modes_per_subap: {10: 54, 24: 280, 36: 800, 48: 1200}
-  n_modes_ho: 1200                      # modes corrected by the high-order stage ('multistage')
+  n_modes_ho: 1200                      # modes corrected by the high-order stage (budget_dual: products of the LO sensor)
   rMods: [0.0, 0.5, 1.0, 2.0, 3.0]
-  slopes_from_intensity: false
 
 detector: {ron_e: 0.5, qe: 0.2, excess_noise: true, excess_delta: 1.0}
 
@@ -37,13 +35,7 @@ wavelengths:
 loop:
   fs: {min: 100, max: 4000, n: 25}      # or an explicit list [250, 500, 1000]
   latency_s: 0.00025                     # end of the exposure -> command applied (any real value)
-  controllers: [int]                    # int | leaky | wiener | iir (per-mode IIR filters of iir_file, only their global gain is optimised); 'optimal' only in budget_fused / budget_dual
-  iir_file: null                        # file saved by SPECULA's IirFilterData.save (num / den per mode, lowest order first)
-  iir_optimize_gain: true               # false: evaluate the filters exactly as given
-  scenarios: [standard, multistage]
-  n_fold: 3
-  max_sensitivity: 2.0                  # modulus margin: gains keep the peak rejection max|1/(1+L)| <= 2 (6 dB); null: up to 98 % of the stability limit
-  wiener_order: 2                       # controller wiener: order of the per-mode Wiener POL filters (wiener.py)
+  controllers: [int]                    # int | leaky | wiener (per-mode Wiener filters on pseudo-open-loop measurements, order 2)
 
 scan:
   seeings: [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
@@ -56,22 +48,12 @@ chromatic:                              # needs wavelengths.sensing_nm
   T_celsius: 11.5
   P_pa: 74300.0
   RH_pct: 10.0
-  multiplicative: false                 # optional terms, all off by default
-  compensation: 0.0
-  fresnel: false
-  scintillation: false
-  k_max: null                           # [c/m] optional extra upper limit of the scintillation (it always stops at k_c)
-  delta_n: null                         # override of n_sensing - n_science (skips the refractivity model)
-  heights_are_slant: false              # heights already include the airmass (TipTop's Hs)
+  scintillation: false                  # optional: log-amplitude at the science wavelength below k_c (the shear is always on)
 
 options:
-  crosstalk: false
-  fixed_point: false
-  kl_pad: 8
-  asm: true                             # fitting: true = LBT-ASM law; false = TipTop (von Karman outside the corrected square, k_c = sqrt(N/pi)/D)
-  optimize_freq: true                   # loop.fs values are MAXIMA: lower frame rates (grid freq_min * 2^(k/3)) are tried, the best is kept
+  crosstalk: false                      # leak of the residual of the other modes (R IM_PC off-diagonal)
+  optimize_freq: true                   # loop.fs values are MAXIMA: lower frame rates (grid 100 Hz * 2^(k/3)) are tried, the best is kept
   optimize_modes: true                  # sensors.modes_per_subap values are MAXIMA: the other calibrated counts below are tried too
-  freq_min: 100.0                       # [Hz] lowest frame rate tried
   alias_psd: null                       # measured aliasing temporal PSDs (A10b), per radial order: {N corrected: [npz files with modes_<wavelength>]}
                                         # (any rMod) and / or {rMod: {N corrected: [files]}} (used for that modulation first);
                                         # other N keep AliasSpectrum (A10). e.g. {1300: [.../alias_psd/modes/base_seed1.npz, ...]}
@@ -83,7 +65,6 @@ generation:                             # SPECULA calibration runs (generator); 
   alias_magnitude: 5.0
   n_screens_alias: 1                    # independent aliasing runs per case, pooled (frames per run: main_override.total_time of the yml)
   n_screens_pc: 70                      # independent PC-IM runs per case, averaged: ONE push-pull cycle (total_time = 2 N time_step) and one screen each
-  pc_corrections: []                    # e.g. [[0.99, 0.2], [0.9, 0.2]]: extra IMs with a partial correction, (max_corr, min_corr) of the correction vector
   seed0: 0
   discard_frames: 0                     # frames dropped from the start of the aliasing runs (leading all-zero frames are always dropped)
   n_modes_max: 1821

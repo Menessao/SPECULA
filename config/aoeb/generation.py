@@ -189,7 +189,6 @@ class GeneratorConfig:
     alias_magnitude: float = 5.0
     n_screens_alias: int = 1                       # independent aliasing runs (seeds seed0 + 1 ...), pooled
     n_screens_pc: int = 70                         # independent PC-IM runs (one push-pull cycle and one screen each), averaged
-    pc_corrections: tuple = ()                     # ((max_corr, min_corr), ...): extra partial-correction IMs (save_correction_vector)
     seed0: int = 0
     discard_frames: int = 0                        # frames dropped from the aliasing runs (leading all-zero frames always are)
     L0: float = 25.0                               # outer scale of the aliasing and PC runs (the budget's L0)
@@ -201,7 +200,7 @@ class GeneratorConfig:
 
 
 STEPS = {'pupdata': 'calibrate_pupdata', 'alias': 'calibrate_alias_sn_thrp', 'im_dl': 'calibrate_im_dl', 'recs': 'compute_recs',
-         'aliases': 'compute_aliases', 'pc': 'calibrate_im_pc', 'pc_levels': 'calibrate_im_pc_levels'}
+         'aliases': 'compute_aliases', 'pc': 'calibrate_im_pc'}
 
 
 class ErrorBudgetGenerator:
@@ -209,12 +208,6 @@ class ErrorBudgetGenerator:
         wls = tuple(cfg.wavelengths_nm) if cfg.wavelengths_nm is not None else ()
         if not wls or any(w is None for w in wls):
             raise ValueError('wavelengths_nm must list the sensing wavelengths [nm]: the pyramid and its source need one (and the same)')
-        levels = [(float(a), float(b)) for a, b in cfg.pc_corrections]
-        for a, b in levels:
-            if not 0.0 < b <= a <= 1.0:
-                raise ValueError(f'pc_corrections: need 0 < min_corr <= max_corr <= 1, got ({a}, {b})')
-        if len({f'{a:1.2f}-{b:1.2f}' for a, b in levels}) != len(levels):
-            raise ValueError('pc_corrections: two levels have the same name (resolution 0.01)')
         self.cfg = cfg
         self.paths = Paths(cfg.root_dir, cfg.pupilstop_tag, cfg.dm_tag)       # wavelength-independent files
         self.runs = []                                                        # {main, extra, overrides} of every SPECULA call
@@ -365,11 +358,11 @@ class ErrorBudgetGenerator:
                     save_rec(path, compute_reconstructor(utils.read_fits(P.im_dl(rMod, n)), N), wvl_nm=float(P.wavelength_nm),
                              src_wvl=float(P.wavelength_nm), dm_tag=P.dm_tag)
 
-    def compute_recs_weighted(self, method, flux, fs, detector, seeing, machine, slopes_from_intensity=None):
+    def compute_recs_weighted(self, method, flux, fs, detector, seeing, machine):
         """ML or MAP reconstructors matched to a flux, rate, detector and seeing (machine.ensure_rec: full sx-sy noise covariance; the
-        machine's detector and slopes_from_intensity are used, the arguments are checked against them)."""
-        if detector != machine.detector or (slopes_from_intensity is not None and slopes_from_intensity != machine.slopes_from_intensity):
-            raise ValueError('compute_recs_weighted: detector / slopes_from_intensity differ from those of the machine')
+        machine's detector is used, the argument is checked against it)."""
+        if detector != machine.detector:
+            raise ValueError('compute_recs_weighted: the detector differs from that of the machine')
         n_phot, seeing = detector.n_det(flux, fs), snap_seeing(seeing)
         for (P, n, rMod), N in ((s, N) for s in self._sensors() for N in self.mode_list(s[1])):
             machine.ensure_rec(rMod, n, N, (method, n_phot), seeing, P.wavelength_nm, overwrite=self.cfg.overwrite)
@@ -408,28 +401,12 @@ class ErrorBudgetGenerator:
                 log.info('[%d/%d] PC IM (perfect) %s', k, len(cases), op.basename(path))
                 self._pc_average(P, n, rMod, seeing, N, path, save_correction_vector(self.cfg.root_dir, 1.0, 1.0, N))
 
-    def calibrate_im_pc_levels(self):
-        """6b. IMs with a partial correction, one per (max_corr, min_corr) of `pc_corrections`: the correction vector decreases from
-        max_corr at the tip-tilt to min_corr at the highest order (save_correction_vector)."""
-        cases = list(self._cases())
-        levels = sorted({(float(a), float(b)) for a, b in self.cfg.pc_corrections if (a, b) != (1.0, 1.0)})
-        for k, (P, n, rMod, seeing, N) in enumerate(cases, 1):
-            for level in levels:
-                path = P.im_pc(rMod, n, seeing, N, level)
-                if self._needed(path):
-                    log.info('[%d/%d] PC IM c%1.2f-%1.2f %s', k, len(cases), level[0], level[1], op.basename(path))
-                    self._pc_average(P, n, rMod, seeing, N, path, save_correction_vector(self.cfg.root_dir, *level, N))
-
     def run(self, steps=None):
-        """The steps in their natural order (names in STEPS; None: all, `pc_levels` only if pc_corrections is not empty)."""
+        """The steps in their natural order (names in STEPS; None: all)."""
         names = list(STEPS) if steps is None else list(steps)
         unknown = [s for s in names if s not in STEPS]
         if unknown:
             raise ValueError(f'unknown steps {unknown}; choose from {list(STEPS)}')
-        if 'pc_levels' in names and not self.cfg.pc_corrections:
-            if steps is not None:
-                raise ValueError('step pc_levels needs generation.pc_corrections')
-            names.remove('pc_levels')
         self.check_inputs()
         for name in STEPS:
             if name in names:

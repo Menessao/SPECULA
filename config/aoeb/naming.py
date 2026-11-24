@@ -12,7 +12,6 @@ Shared by every sensing wavelength (no wavelength in the name):
 Per sensing wavelength: <base> = pyr{r}_{n}x{n}[_wvl{lambda_nm}]  (suffix only if a wavelength is given)
   im/       <base>_im_dl.fits                                 (diffraction-limited IM, all modes)
             <base>_s{seeing}_{N}modes_im_pc.fits              (IM, N modes perfectly corrected)
-            <base>_s{seeing}_{N}modes_im_pc_c{max}-{min}.fits  (partial correction, correction vector max_corr-min_corr)
   data/   correction_vector_{N}modes_c{max}-{min}.fits           (BaseValue read by SPECULA; max = min = 1: perfect correction)
   rec/      <base>_{N}modes_rec.fits                          (SVD); ..._rec_{ml|map}_{nph}ph_s{seeing}.fits
   aliasing/ <base>_s{seeing}_{N}modes_slopes.fits             (n_frames x n_slopes, N modes corrected)
@@ -106,11 +105,9 @@ class Paths:
     def im_dl(self, rMod, n_subap):
         return self._f('im', self.base(rMod, n_subap) + '_im_dl')
 
-    def im_pc(self, rMod, n_subap, seeing, N, level=None):
-        """IM measured with the N modes corrected by a correction vector: level = None (perfect correction, vector of ones) or
-        (max_corr, min_corr) of the partial correction (save_correction_vector)."""
-        suffix = '_im_pc' if level is None else f'_im_pc_c{level[0]:1.2f}-{level[1]:1.2f}'
-        return self._f('im', self.sim(rMod, n_subap, seeing, N) + suffix)
+    def im_pc(self, rMod, n_subap, seeing, N):
+        """IM measured with the N modes perfectly corrected (correction vector of ones)."""
+        return self._f('im', self.sim(rMod, n_subap, seeing, N) + '_im_pc')
 
     def simulated_seeings(self, rMod, n_subap, N):
         """Seeings [arcsec] with a perfect-correction IM on disk (N modes corrected), sorted."""
@@ -133,18 +130,6 @@ class Paths:
             if m:
                 out.add(float(m.group(1)))
         return sorted(out)
-
-    def pc_levels(self, rMod, n_subap, seeing, N):
-        """(max_corr, min_corr) of the partial-correction IMs on disk, sorted; (1.0, 1.0) stands for the perfect-correction IM."""
-        pat = self._f('im', self.sim(rMod, n_subap, seeing, N) + '_im_pc_c*-*')
-        levels = []
-        for p in glob.glob(pat):
-            m = re.search(r'_im_pc_c([0-9.]+)-([0-9.]+)\.fits$', p)
-            if m:
-                levels.append((float(m.group(1)), float(m.group(2))))
-        if op.exists(self.im_pc(rMod, n_subap, seeing, N)):
-            levels.append((1.0, 1.0))
-        return sorted(set(levels))
 
     def rec(self, rMod, n_subap, N, method='svd', n_phot=None, seeing=None):
         """SVD: flux independent. ML / MAP: depend on the photons per frame and on the seeing (noise weights, prior)."""

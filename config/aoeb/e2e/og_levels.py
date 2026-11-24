@@ -62,7 +62,6 @@ def machine():
     m = cal.machine(config())
     m.modes_per_subap = dict(m.modes_per_subap)
     m.modes_per_subap[NSUB] = sorted(set(m.mode_list(NSUB)) | {N})
-    m.max_sensitivity = None                                           # as wfs_talk_figures.ipynb
     return m
 
 
@@ -89,7 +88,7 @@ def scalar_gain_budget(m, flux, fs, gains=None):
     out = {}
     for g in gains:
         o = evaluate_controllers(fs, LATENCY_S * fs, np.full(N, g), np.ones(N), turb_cmd, photon + ron, alias_cmd, c.og, orders,
-                                 m.temporal or m.wind, m.D, m.alias_spectrum(900.0, N, RMOD))
+                                 m.wind, m.D, m.alias_spectrum(900.0, N, RMOD))
         out[g] = (o.turb * rms ** 2, o.noise * rms ** 2, o.alias * rms ** 2)
     return out, r0
 
