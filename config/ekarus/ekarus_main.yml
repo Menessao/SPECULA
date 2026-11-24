@@ -3,8 +3,8 @@
 main:
   class:             'SimulParams'
   root_dir:          '/raid1/mmenessini/calibration/ekarus/'       # CalibManager root directory (all the data are in subdirectories)
-  pixel_pupil:       120                   # Must match influence function computation
-  pixel_pitch:       0.015167              # [m] Pitch of the pupil phase array (1.82m/120pix)
+  pixel_pupil:       160                   # Must match influence function computation
+  pixel_pitch:       0.011375             # [m] Pitch of the pupil phase array (1.82m/160pix)
   total_time:        2.0                   # [s] Total simulation running time
   time_step:         0.001                 # [s] Simulation time step
   zenithAngleInDeg:  0.0                   # [deg] Zenith observation (0 means no airmass)
@@ -38,7 +38,7 @@ source_ngs:
 # Telescope pupil geometry
 pupilstop:
   class:             'Pupilstop'
-  tag:               'Copernico_pupil_120pixels'
+  tag:               'Copernico_pupil_160pixels'
 
 # Multi-layer atmospheric model
 atmo:
@@ -124,8 +124,8 @@ filter:
 dm:
   class:             'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'dm468_120pix_ifunc' #'DM468_ifunc'   #'DM468_ifunc' #    # Influence functions
-  m2c_object:        'dm468_120pix_m2c' #'M2C_KL_OOPAO_synthetic'  #'DM468_m2c'     #'DM468_m2c' #   # Modal-to-command matrix
+  ifunc_object:      'dm468_160pix_ifunc' #'DM468_ifunc'   #'DM468_ifunc' #    # Influence functions
+  m2c_object:        'dm468_160pix_m2c' #'M2C_KL_OOPAO_synthetic'  #'DM468_m2c'     #'DM468_m2c' #   # Modal-to-command matrix
   height:            0                # Ground-conjugated DM
   nmodes:            450
   inputs:
@@ -148,14 +148,14 @@ psf:
 
 true_res:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'dm468_120pix_kl_inv'
+  ifunc_inv_object: 'dm468_160pix_kl_inv'
   inputs:
     in_ef: ['prop.out_source_ngs_ef']
   outputs: ['out_modes']
 
 dm_modes:
   class:            'ModalAnalysis'
-  ifunc_inv_object: 'dm468_120pix_kl_inv'
+  ifunc_inv_object: 'dm468_160pix_kl_inv'
   inputs:
     in_ef: ['dm.out_layer:-1']
   outputs: ['out_modes']

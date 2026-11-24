@@ -3,7 +3,7 @@
 
 # Override main simulation parameters
 main_override:
-  total_time: 1.0
+  total_time: 3.0
 
 seeing_random:
   class:             'RandomGenerator'
@@ -27,7 +27,7 @@ atmo_random:
 # Modal decomposition of atmospheric phase
 modal_analysis_random:
   class: 'ModalAnalysis'
-  ifunc_inv_object: 'dm468_120pix_kl_inv'
+  ifunc_inv_object: 'dm468_160pix_kl_inv'
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']

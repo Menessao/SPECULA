@@ -341,9 +341,9 @@ if __name__ == "__main__":
     # save_m2c_as_recmat(root_dir=soul_dir, m2c_tag='asm_m2c', filename='dummy_asm_m2c')
 
     
-    Npix = 120
-    compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24, pupil_mask_tag='Copernico_pupil_120pixels',
-                                          geom='alpao', r0=5e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=0)
+    Npix = 160
+    compute_and_save_influence_functions(ekarus_dir,tag=f'dm468_{Npix}pix', pupil_pixels=Npix, n_acts=24, pupil_mask_tag=f'Copernico_pupil_{Npix}pixels',
+                                          geom='alpao', r0=3e-2, obsratio=0.0, diaratio=1.0, D=1.82, margin=0)
 
     # Npix = 120
     # # compute_and_save_influence_functions(vlt_dir,tag=f'dm1200_{Npix}pix', pupil_pixels=Npix, n_acts=42, pupil_mask_tag='vlt_pupil',

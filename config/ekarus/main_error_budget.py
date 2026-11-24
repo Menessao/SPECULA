@@ -15,7 +15,7 @@ from specula.mmlib.compute_rec import compute_and_save_rec
 
 rMods = np.array([0,3,4,5])
 n_subaps = np.array([10,20,40])
-n_modes = np.array([54,220,400])
+n_modes = np.array([54,220,375])
 seeings = np.array([1.0,1.5,2.0,2.5])
 
 max_pup_dist = 60
@@ -125,29 +125,29 @@ for i,n_subap in enumerate(n_subaps):
             if not os.path.exists(os.path.join(ogpath,tag+'_og_pl.fits')):
                 simpc_tag = tag+'_simpc_pl'
                 temp_im_tag = tag+'_pcim_temp'
-                pcim = None
-                for n in range(1,ncycles+1):
-                    overrides = ("{"
-                                f"atmo_random.seed: {n}, "
-                                f"pyr.pup_diam: {n_subap:.1f}, "
-                                f"pyr.pup_dist: {pup_dist:.1f}, "
-                                f"pyr.mod_amp: {rMod:.1f}, "
-                                f"pushpull.nmodes: {N:1.0f}, "
-                                f"pyr_im_calibrator.nmodes: {N:1.0f}, "
-                                f"dm_random.nmodes: {N:1.0f}, "
-                                f"dm.nmodes: {N:1.0f}, "
-                                f"main.total_time: {N*0.001*2}, "
-                                f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
-                                f"seeing_random.constant: {seeing:1.1f}, "
-                                f"pyr_im_calibrator.im_tag: '{temp_im_tag}', "
-                                "}")
-                    write_yaml_overrides(input_string=overrides)
-                    run_specula('calib_simpc.yml')
-                    if pcim is None:
-                        pcim = fits.getdata(os.path.join(root_dir,'im',temp_im_tag+'.fits'))
-                    else:
-                        pcim += fits.getdata(os.path.join(root_dir,'im',temp_im_tag+'.fits'))
-                simpc = pcim/ncycles
+                # One run: the full push-pull sequence is repeated ncycles times,
+                # with a new (frozen) phase screen for each repetition (2N steps)
+                overrides = ("{"
+                            f"atmo_random.seed: 1, "
+                            f"atmo_random.update_interval: {2*N:1.0f}, "
+                            f"pyr.pup_diam: {n_subap:.1f}, "
+                            f"pyr.pup_dist: {pup_dist:.1f}, "
+                            f"pyr.mod_amp: {rMod:.1f}, "
+                            f"pushpull.nmodes: {N:1.0f}, "
+                            f"pushpull.ncycles: {ncycles:1.0f}, "
+                            f"pushpull.repeat_full_sequence: true, "
+                            f"pyr_im_calibrator.nmodes: {N:1.0f}, "
+                            f"dm_random.nmodes: {N:1.0f}, "
+                            f"dm.nmodes: {N:1.0f}, "
+                            f"main.total_time: {N*0.001*2*ncycles}, "
+                            f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
+                            f"seeing_random.constant: {seeing:1.1f}, "
+                            f"pyr_im_calibrator.im_tag: '{temp_im_tag}', "
+                            "}")
+                write_yaml_overrides(input_string=overrides)
+                run_specula('calib_simpc.yml')
+                # ImCalibrator already averages over the ncycles repetitions
+                simpc = fits.getdata(os.path.join(root_dir,'im',temp_im_tag+'.fits'))
                 fits.writeto(os.path.join(pcimpath,simpc_tag+'.fits'),simpc,overwrite=True)
                 og = np.diag(simpc.T @ im)/im_norm
                 fits.writeto(os.path.join(ogpath,tag+'_og_pl.fits'),og,overwrite=True)

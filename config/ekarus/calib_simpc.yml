@@ -45,7 +45,7 @@ atmo_random:
 # Modal decomposition of atmospheric phase
 modal_analysis_random:
   class: 'ModalAnalysis'
-  ifunc_inv_object: 'dm468_120pix_kl_inv'
+  ifunc_inv_object: 'dm468_160pix_kl_inv'
   inputs:
     in_ef: 'atmo_random.out_source_ngs_ef'
   outputs: ['out_modes']
@@ -61,8 +61,8 @@ modal_analysis_random:
 dm_random:
   class: 'DM'
   simul_params_ref:  'main'
-  ifunc_object:      'dm468_120pix_ifunc'      # Our computed influence functions
-  m2c_object:        'dm468_120pix_m2c'        # Modal-to-command matrix
+  ifunc_object:      'dm468_160pix_ifunc'      # Our computed influence functions
+  m2c_object:        'dm468_160pix_m2c'        # Modal-to-command matrix
   height:            0.0                # Ground-conjugated DM
   inputs:
     in_command: 'modal_analysis_random.out_modes'

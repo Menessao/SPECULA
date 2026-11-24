@@ -56,7 +56,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         Npix = int(sys.argv[1])
     else:
-        Npix = 120
+        Npix = 160
     if len(sys.argv) > 2:
         obs = float(sys.argv[2])
     else:
