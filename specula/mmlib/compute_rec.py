@@ -99,8 +99,8 @@ if __name__ == "__main__":
     #     rec=compute_and_save_rec(root_dir=root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=Nmodes, overwrite=True)
 
     Nmodes = 400
-    root_dir = '/raid1/mmenessini/calibration/EKARUS'
-    tag = 'pyr5.0_dm468_40x40_obs' #'pyr5.0_onsky_measIF_dm468'
+    root_dir = '/raid1/mmenessini/calibration/ekarus'
+    tag = 'pyr5.0_dm468_40x40' #'pyr5.0_onsky_measIF_dm468'
     rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)
     # tag = 'pyr5.0_onbench_crop_measIF' #'pyr5.0_onsky_measIF_dm468'
     # rec=compute_and_save_rec(root_dir=root_dir, im_tag=tag+'_im', rec_tag=tag+f'_{Nmodes}modes', Nmodes=Nmodes, overwrite=True)

@@ -1,0 +1,80 @@
+# Synthetic interaction matrix in partial correction
+# ================================================
+
+# Override main simulation parameters
+main_override:
+  total_time: 1.0
+
+seeing_random:
+  class:             'RandomGenerator'
+  amp:               0.0                 # Variation amplitude [arcsec]
+  constant:          2.0                 # Mean seeing [arcsec]
+  distribution:      'UNIFORM'           # 
+  outputs: ['output']
+
+# Random atmospheric phase generator
+atmo_random:
+  class:                'AtmoRandomPhase'
+  simul_params_ref:     'main'
+  L0:                   25               # [m] Outer scale
+  seed:                 42
+  source_dict_ref:      ['source_ngs']
+  inputs:
+    seeing:             'seeing_random.output'
+    pupilstop:          'pupilstop'
+  outputs:              ['out_source_ngs_ef']
+
+# Modal decomposition of atmospheric phase
+modal_analysis_random:
+  class: 'ModalAnalysis'
+  ifunc_inv_object: 'dm468_120pix_kl_inv'
+  inputs:
+    in_ef: 'atmo_random.out_source_ngs_ef'
+  outputs: ['out_modes']
+
+# scale_random:
+#   class:  'BaseOperation'
+#   constant_mul_data: 'correction_vector_450modes_c0.99' 
+#   inputs:
+#     in_value1: 'modal_analysis_random.out_modes'
+#   outputs: ['out_value']
+
+# Override DM to use calibration commands
+dm_override:
+  sign: 1                                 # Use positive sign for calibration (default is -1)
+  nmodes: 450                            # Use all modes for calibration
+  inputs:
+    in_command: 'pushpull.output'         # Connect to push-pull generator
+  inputs:
+    in_command: 'modal_analysis_random.out_modes'
+  outputs: ['out_layer']
+
+atmo_pc:
+  class: 'ElectricFieldCombinator'
+  inputs:
+    in_ef1: 'atmo_random.out_source_ngs_ef'    # Turbulence
+    in_ef2: 'dm.out_layer'              # Partial correction
+  outputs: ['out_ef']
+
+pyr_override:
+  inputs: 
+    in_ef: 'atmo_pc.out_ef'
+
+# Disable noise for clean measurements
+ocam_override:
+  photon_noise:   false                   # No photon noise
+  readout_noise:  false                   # No read noise
+  excess_noise:   false                   # No excess noise
+
+data_store_override:
+  store_dir:         '/raid1/mmenessini/results/ekarus/scratch_aliasing'             # Data result directory: 'store_dir'/TN/
+  create_tn: false
+  inputs:
+    input_list: [
+                  'pyr_signals-pyr_slopes.out_slopes',
+                  'frames-ocam.out_pixels',
+                  ]
+
+# Remove unnecessary objects during calibration
+remove: ['atmo','seeing','wind_speed','wind_direction','atmo_modes', #'source_science',
+        'dm_modes','true_res','filter','psf', 'prop','pyr_modalrec'] #, 'bootstrap', 'concat_wfs_modes'

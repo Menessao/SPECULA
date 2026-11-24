@@ -56,7 +56,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         Npix = int(sys.argv[1])
     else:
-        Npix = 160
+        Npix = 120
     if len(sys.argv) > 2:
         obs = float(sys.argv[2])
     else:
@@ -73,10 +73,10 @@ if __name__ == "__main__":
     # save_pupil(pupil=mask,fname=tag,destination_dir=destination_dir,Npix=Npix,D=8.0)
 
     # diaratio = 36.5/38
-    # destination_dir = '/raid1/mmenessini/calibration/EKARUS/pupilstop'
-    # tag = f'Copernico_Pupil_{diaratio:1.2f}diaratio'
-    # save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, diaratio=diaratio, Npix=Npix, overwrite=True)
-    # aperture=save_pupil_to_size(destination_dir, destination_dir, tag, Npix, D=1.82)
+    destination_dir = '/raid1/mmenessini/calibration/ekarus/pupilstop'
+    tag = f'Copernico_pupil_{Npix}pixels'
+    pupil = save_copernico_pupil(destination_dir=destination_dir, tag=tag, obs=obs, angle=angle, diaratio=1.0, Npix=Npix, overwrite=True)
+    save_pupil(pupil,destination_dir, tag, Npix, D=1.82)
 
     data_dir = '/raid1/mmenessini/calibration/VLT'
     destination_dir = '/raid1/mmenessini/calibration/WFSW/pupilstop'
