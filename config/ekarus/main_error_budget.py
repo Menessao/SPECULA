@@ -1,4 +1,5 @@
 import os
+import subprocess
 import specula
 specula.init(0)
 
@@ -25,20 +26,24 @@ npix = 120
 main_config = 'ekarus_main.yml'
 root_dir='/raid1/mmenessini/calibration/ekarus'
 
+# The yml files and temp_overrides.yml are relative paths: run from this directory
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+def run_specula(calib_config):
+    """Run a specula simulation, raising CalledProcessError if it fails."""
+    subprocess.run(['specula', main_config, calib_config, 'temp_overrides.yml'], check=True)
 
 # 1. Calibrate pupdata vs n_subaps
 for n_subap in n_subaps:
     pup_dist = np.max((min_pup_dist,max_pup_dist/max(n_subaps)*n_subap))
-    try:
-        pup = fits.getdata(os.path.join(root_dir,'pupils',f'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}.fits'))
-    except FileNotFoundError:
+    if not os.path.exists(os.path.join(root_dir,'pupils',f'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}.fits')):
         overrides = ("{"
                     f"pyr.pup_diam: {n_subap:.1f}, "
                     f"pyr.pup_dist: {pup_dist:.1f}, "
                     f"pyr_pupdata.output_tag: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
                     "}")
         write_yaml_overrides(input_string=overrides)
-        os.system(f"specula {main_config} calib_pupdata.yml temp_overrides.yml")
+        run_specula('calib_pupdata.yml')
 
 # 2. Calibrate IM vs n_subaps, rMods
 for i,n_subap in enumerate(n_subaps):
@@ -46,9 +51,7 @@ for i,n_subap in enumerate(n_subaps):
     for rMod in rMods:
         tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
         im_tag = tag+'_im'
-        try:
-            im = fits.getdata(os.path.join(root_dir,'im',im_tag+'.fits'))
-        except FileNotFoundError:
+        if not os.path.exists(os.path.join(root_dir,'im',im_tag+'.fits')):
             overrides = ("{"
                         f"pyr.pup_diam: {n_subap:.1f}, "
                         f"pyr.pup_dist: {pup_dist:.1f}, "
@@ -57,7 +60,7 @@ for i,n_subap in enumerate(n_subaps):
                         f"pyr_im_calibrator.im_tag: 'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_im', "
                         "}")
             write_yaml_overrides(input_string=overrides)
-            os.system(f"specula {main_config} calib_im.yml temp_overrides.yml")
+            run_specula('calib_im.yml')
 
 for i,n_subap in enumerate(n_subaps):
     for rMod in rMods:
@@ -65,9 +68,7 @@ for i,n_subap in enumerate(n_subaps):
         im_tag = tag+'_im'
         for N in n_modes[:i+1]:
             rec_tag = tag+f'_{N:1.0f}modes'        
-            try:
-                rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
-            except FileNotFoundError:
+            if not os.path.exists(os.path.join(root_dir,'rec',rec_tag+'.fits')):
                 compute_and_save_rec(root_dir, im_tag=im_tag, rec_tag=rec_tag, Nmodes=N, overwrite=True)
 
 
@@ -81,10 +82,7 @@ for i,n_subap in enumerate(n_subaps):
         for seeing in seeings:
             tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}'
             rec_tag = tag+f'_{N:1.0f}modes'
-            rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
-            try:
-                aliasing = fits.getdata(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_aliasing.fits'))
-            except FileNotFoundError:
+            if not os.path.exists(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_aliasing.fits')):
                 overrides = ("{"
                             f"pyr.pup_diam: {n_subap:.1f}, "
                             f"pyr.pup_dist: {pup_dist:.1f}, "
@@ -93,16 +91,18 @@ for i,n_subap in enumerate(n_subaps):
                             f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
                             f"seeing_random.constant: {seeing:1.1f}, "
                             "}")
-                os.system(f"specula {main_config} calib_aliasing.yml temp_overrides.yml")
+                write_yaml_overrides(input_string=overrides)
+                run_specula('calib_aliasing.yml')
+                rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
                 signals = fits.getdata(os.path.join(root_dir,'scratch_aliasing','pyr_signals.fits'))
                 frame = np.mean(fits.getdata(os.path.join(root_dir,'scratch_aliasing','frames.fits')),axis=0)
 
                 modes = (rec @ signals.T).T
-                alias_var = np.std(modes,axis=0)
+                alias_rms = np.std(modes,axis=0)
 
-                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_raw_signals.fits'),signals)
-                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_frame_null.fits'),frame)
-                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_aliasing.fits'),alias_var)
+                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_raw_signals.fits'),signals,overwrite=True)
+                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_frame_null.fits'),frame,overwrite=True)
+                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_aliasing.fits'),alias_rms,overwrite=True)
 
 
 
@@ -122,9 +122,7 @@ for i,n_subap in enumerate(n_subaps):
         im_norm = np.diag(im.T @ im)
         for seeing in seeings:
             tag = f'pyr{rMod:1.1f}_{n_subap:.0f}x{n_subap:.0f}_s{seeing:1.1f}'
-            try:
-                og = fits.getdata(os.path.join(ogpath,tag+'_og_pl.fits'))
-            except FileNotFoundError:
+            if not os.path.exists(os.path.join(ogpath,tag+'_og_pl.fits')):
                 simpc_tag = tag+'_simpc_pl'
                 temp_im_tag = tag+'_pcim_temp'
                 pcim = None
@@ -138,20 +136,21 @@ for i,n_subap in enumerate(n_subaps):
                                 f"pyr_im_calibrator.nmodes: {N:1.0f}, "
                                 f"dm_random.nmodes: {N:1.0f}, "
                                 f"dm.nmodes: {N:1.0f}, "
-                                f"main.total_time: {N*0.001*2}"
+                                f"main.total_time: {N*0.001*2}, "
                                 f"pyr_slopes.pupdata_object: 'pyr_pupdata_{n_subap:.0f}x{n_subap:.0f}', "
                                 f"seeing_random.constant: {seeing:1.1f}, "
                                 f"pyr_im_calibrator.im_tag: '{temp_im_tag}', "
                                 "}")
-                    os.system(f"specula {main_config} calib_simpc.yml temp_overrides.yml")
+                    write_yaml_overrides(input_string=overrides)
+                    run_specula('calib_simpc.yml')
                     if pcim is None:
                         pcim = fits.getdata(os.path.join(root_dir,'im',temp_im_tag+'.fits'))
                     else:
                         pcim += fits.getdata(os.path.join(root_dir,'im',temp_im_tag+'.fits'))
                 simpc = pcim/ncycles
-                fits.writeto(os.path.join(os.path.join(root_dir,'pcim'),tag+'.fits'),simpc)
+                fits.writeto(os.path.join(pcimpath,simpc_tag+'.fits'),simpc,overwrite=True)
                 og = np.diag(simpc.T @ im)/im_norm
-                fits.writeto(os.path.join(ogpath,tag+'_og_pl.fits'),og)
+                fits.writeto(os.path.join(ogpath,tag+'_og_pl.fits'),og,overwrite=True)
                 print('Saved optical gains as: '+tag+'_og_pl')
                 # cog = np.sqrt(np.diag(simpc.T @ simpc)/im_norm - og**2)
                 # fits.writeto(os.path.join(ogpath,tag+'_compl_og_pl.fits'),cog)

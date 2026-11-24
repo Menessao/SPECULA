@@ -41,10 +41,7 @@ modal_analysis_random:
 
 # Override DM to use calibration commands
 dm_override:
-  sign: 1                                 # Use positive sign for calibration (default is -1)
   nmodes: 450                            # Use all modes for calibration
-  inputs:
-    in_command: 'pushpull.output'         # Connect to push-pull generator
   inputs:
     in_command: 'modal_analysis_random.out_modes'
   outputs: ['out_layer']
@@ -67,7 +64,7 @@ ocam_override:
   excess_noise:   false                   # No excess noise
 
 data_store_override:
-  store_dir:         '/raid1/mmenessini/results/ekarus/scratch_aliasing'             # Data result directory: 'store_dir'/TN/
+  store_dir:         '/raid1/mmenessini/calibration/ekarus/scratch_aliasing'             # Data result directory: 'store_dir'/TN/
   create_tn: false
   inputs:
     input_list: [
