@@ -95,13 +95,14 @@ for i,n_subap in enumerate(n_subaps):
                 run_specula('calib_aliasing.yml')
                 rec = fits.getdata(os.path.join(root_dir,'rec',rec_tag+'.fits'))
                 signals = fits.getdata(os.path.join(root_dir,'scratch_aliasing','pyr_signals.fits'))
+                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_raw_signals.fits'),signals,overwrite=True)
+                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_slopes_null.fits'),np.mean(signals,axis=0),overwrite=True)
+
                 frame = np.mean(fits.getdata(os.path.join(root_dir,'scratch_aliasing','frames.fits')),axis=0)
+                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_frame_null.fits'),frame,overwrite=True)
 
                 modes = (rec @ signals.T).T
                 alias_rms = np.std(modes,axis=0)
-
-                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_raw_signals.fits'),signals,overwrite=True)
-                fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_frame_null.fits'),frame,overwrite=True)
                 fits.writeto(os.path.join(aliaspath,tag+f'_s{seeing:1.1f}_aliasing.fits'),alias_rms,overwrite=True)
 
 
